@@ -62,6 +62,11 @@ Persisted message, tag, and session-snapshot shapes are normalized by the pure
 dependencies; the chat service keeps compatibility aliases while delegating
 these transformations to that module.
 
+Session naming is separated into `chat.title_rules`: title sanitization, slug
+generation, context fingerprints, prompt construction, and lifecycle scheduling
+are deterministic rules. Provider calls, asynchronous task coordination,
+persistence, and workspace/group renaming remain in the chat service.
+
 ### Agent Runtime
 
 Application code calls an `AgentRuntime` protocol with an `AgentRunRequest`.
