@@ -44,6 +44,7 @@ import { Sidebar } from "@/components/dashboard/sidebar";
 import { WorkspaceExplorerSidebar, type WorkspaceExplorerFileSelection } from "@/components/dashboard/workspace-explorer-sidebar";
 import { Button } from "@/components/ui/button";
 import { cn, decodeEscapedUnicode, decodeEscapedUnicodeDeep } from "@/lib/utils";
+import { buildAgUiChatStreamUrl, parseArisAgUiEvent } from "@/lib/ag-ui";
 import {
   SubmissionModal,
   type SubmissionDraftPayload,
@@ -658,6 +659,7 @@ export default function App() {
   const [cloneTurnId, setCloneTurnId] = useState<number | null>(null);
   const [cloneModalState, setCloneModalState] = useState<SubmissionModalState>({ status: "idle" });
   const [isCloneDraftLoading, setIsCloneDraftLoading] = useState(false);
+  const [isChatStateStreamReady, setIsChatStateStreamReady] = useState(false);
   const sendAbortControllerRef = useRef<AbortController | null>(null);
   const requestInFlightRef = useRef(false);
   const chatVersionRef = useRef(-1);
@@ -682,7 +684,7 @@ export default function App() {
     queryFn: getChatSessions,
     enabled: bootstrapQuery.isSuccess,
     refetchOnWindowFocus: false,
-    refetchInterval: isChatLoading ? 1_500 : 5_000,
+    refetchInterval: isChatStateStreamReady ? false : isChatLoading ? 1_500 : 5_000,
   });
 
   const chatSessions = chatSessionsQuery.data?.items ?? [];
@@ -733,7 +735,7 @@ export default function App() {
     queryKey: ["chat"],
     queryFn: getChatMessages,
     enabled: bootstrapQuery.isSuccess,
-    refetchInterval: isChatLoading ? CHAT_POLL_INTERVAL_MS : 900,
+    refetchInterval: isChatStateStreamReady ? false : isChatLoading ? CHAT_POLL_INTERVAL_MS : 900,
   });
 
   const defaultSelectedModel = bootstrapQuery.data?.selected_model ?? bootstrapQuery.data?.models?.[0] ?? "";
@@ -854,33 +856,91 @@ export default function App() {
       return;
     }
 
-    const source = new EventSource(CHAT_STREAM_URL);
-    const applySnapshot = (payload: string) => {
+    let source: EventSource | null = null;
+    let disposed = false;
+    let receivedAgUiState = false;
+    let usingLegacyFallback = false;
+    let fallbackTimer: number | null = null;
+
+    const closeSource = () => {
+      source?.close();
+      source = null;
+    };
+    const markStreamReady = () => {
+      setIsChatStateStreamReady(true);
+    };
+    const applyLegacyChatSnapshot = (payload: string) => {
       try {
         const parsed = JSON.parse(payload) as ChatSnapshot;
         applyChatSnapshot(parsed);
+        markStreamReady();
       } catch (error) {
         console.error("Failed to parse chat stream payload", error);
       }
     };
-
-    source.addEventListener("chat", (event) => {
-      applySnapshot((event as MessageEvent<string>).data);
-    });
-    source.addEventListener("sessions", (event) => {
+    const applyLegacySessionsSnapshot = (payload: string) => {
       try {
-        const parsed = JSON.parse((event as MessageEvent<string>).data) as ChatSessionsResponse;
+        const parsed = JSON.parse(payload) as ChatSessionsResponse;
         applyChatSessionsSnapshot(parsed);
+        markStreamReady();
       } catch (error) {
         console.error("Failed to parse chat sessions stream payload", error);
       }
-    });
-    source.onmessage = (event) => {
-      applySnapshot(event.data);
+    };
+    const startLegacyFallback = () => {
+      if (disposed || usingLegacyFallback) {
+        return;
+      }
+      usingLegacyFallback = true;
+      closeSource();
+      source = new EventSource(CHAT_STREAM_URL);
+      source.addEventListener("chat", (event) => {
+        applyLegacyChatSnapshot((event as MessageEvent<string>).data);
+      });
+      source.addEventListener("sessions", (event) => {
+        applyLegacySessionsSnapshot((event as MessageEvent<string>).data);
+      });
+      source.onmessage = (event) => {
+        applyLegacyChatSnapshot(event.data);
+      };
+      source.onerror = () => {
+        setIsChatStateStreamReady(false);
+      };
     };
 
+    source = new EventSource(buildAgUiChatStreamUrl(CHAT_STREAM_URL));
+    source.onmessage = (event) => {
+      const parsed = parseArisAgUiEvent(event.data);
+      if (parsed?.kind === "state") {
+        receivedAgUiState = true;
+        applyChatSnapshot(parsed.chat);
+        applyChatSessionsSnapshot(parsed.sessions);
+        markStreamReady();
+      } else if (parsed?.kind === "error") {
+        console.error("ARIS AG-UI state stream failed", {
+          code: parsed.code,
+          message: parsed.message,
+        });
+      }
+    };
+    source.onerror = () => {
+      setIsChatStateStreamReady(false);
+      if (!receivedAgUiState) {
+        startLegacyFallback();
+      }
+    };
+    fallbackTimer = window.setTimeout(() => {
+      if (!receivedAgUiState) {
+        startLegacyFallback();
+      }
+    }, 4_000);
+
     return () => {
-      source.close();
+      disposed = true;
+      if (fallbackTimer !== null) {
+        window.clearTimeout(fallbackTimer);
+      }
+      closeSource();
     };
   }, [applyChatSessionsSnapshot, applyChatSnapshot, bootstrapQuery.isSuccess]);
 

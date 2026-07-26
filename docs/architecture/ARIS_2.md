@@ -92,7 +92,11 @@ and payload bodies so the current frontend does not need a flag-day rewrite.
 Clients may opt into the AG-UI transport with
 `GET /api/aiida/frontend/chat/stream?protocol=ag-ui`. It publishes a
 `RUN_STARTED` lifecycle event followed by atomic `STATE_SNAPSHOT` events. The
-default remains `protocol=legacy` until the current UI subscriber migrates.
+ARIS frontend now requests this transport first and sends both snapshots through
+the same state application functions previously used by legacy SSE. If no valid
+AG-UI state arrives, it falls back to `protocol=legacy`; HTTP polling remains a
+last-resort recovery path. The endpoint default stays `protocol=legacy` for
+external clients that have not migrated.
 
 ## Submission approval
 
