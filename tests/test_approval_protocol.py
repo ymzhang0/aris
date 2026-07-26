@@ -72,14 +72,10 @@ def test_approval_schema_rejects_unrecognized_decision() -> None:
         )
 
 
-def test_legacy_submission_is_flagged_as_implicit_compatibility() -> None:
-    audit = resolve_submission_approval(
-        None,
-        {"inputs": {"structure_pk": 7}},
-        expected_scope="single",
-    )
-
-    assert audit.decision == "approved"
-    assert audit.actor_type == "compatibility"
-    assert audit.compatibility_implicit is True
-
+def test_submission_without_explicit_approval_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Explicit submission approval is required"):
+        resolve_submission_approval(
+            None,  # type: ignore[arg-type]
+            {"inputs": {"structure_pk": 7}},
+            expected_scope="single",
+        )

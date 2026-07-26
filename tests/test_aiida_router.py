@@ -1,5 +1,6 @@
 """Tests for AiiDA frontend process serialization and process-detail enrichment."""
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,24 @@ from src.aris_apps.aiida.router import (
     _extract_folder_preview,
     _serialize_processes,
 )
+from src.aris_core.schema.approval import ApprovalDecision, submission_resource_digest
+
+
+def _submission_request(
+    draft: dict[str, object] | list[dict[str, object]],
+) -> aiida_router.SubmissionDraftRequest:
+    scope = "batch" if isinstance(draft, list) else "single"
+    return aiida_router.SubmissionDraftRequest(
+        draft=draft,
+        approval=ApprovalDecision(
+            approval_id="approval-test",
+            decision="approved",
+            scope=scope,
+            actor_type="user",
+            decided_at=datetime.now(timezone.utc),
+            resource_digest=submission_resource_digest(draft),
+        ),
+    )
 
 
 def test_serialize_processes_passes_preview_without_modification() -> None:
@@ -376,7 +395,7 @@ async def test_submit_bridge_workchain_single_adds_submitted_pk(monkeypatch: pyt
 
     state = SimpleNamespace(memory=_DummyMemory())
     request = SimpleNamespace(app=SimpleNamespace(state=state))
-    payload = aiida_router.SubmissionDraftRequest(draft={"builder": {"structure_pk": 11}})
+    payload = _submission_request({"builder": {"structure_pk": 11}})
 
     response = await aiida_router.submit_bridge_workchain(request, payload)
 
@@ -420,25 +439,26 @@ async def test_submit_bridge_workchain_unwraps_direct_entry_point_payload(monkey
 
     state = SimpleNamespace(memory=_DummyMemory())
     request = SimpleNamespace(app=SimpleNamespace(state=state))
-    payload = aiida_router.SubmissionDraftRequest(
-        draft={
+    payload = _submission_request(
+        {
             "entry_point": "quantumespresso.pw.base",
             "inputs": {
                 "pw": {"code": "pw@localhost"},
                 "structure": {"pk": 6},
             },
-        }
+        },
     )
 
     response = await aiida_router.submit_bridge_workchain(request, payload)
 
-    assert captured_request["payload"] == {
-        "entry_point": "quantumespresso.pw.base",
-        "inputs": {
-            "pw": {"code": "pw@localhost"},
-            "structure": {"pk": 6},
-        },
+    captured_payload = captured_request["payload"]
+    assert isinstance(captured_payload, dict)
+    assert captured_payload["entry_point"] == "quantumespresso.pw.base"
+    assert captured_payload["inputs"] == {
+        "pw": {"code": "pw@localhost"},
+        "structure": {"pk": 6},
     }
+    assert captured_payload["metadata"]["aris_approval"]["approval_id"] == "approval-test"
     assert response["submitted_pks"] == [654]
     assert response["process_pks"] == [654]
     assert captured[aiida_router.PENDING_SUBMISSION_KEY] is None
@@ -674,23 +694,24 @@ async def test_submit_bridge_workchain_batch_collects_submitted_pks(monkeypatch:
 
     state = SimpleNamespace(memory=_DummyMemory())
     request = SimpleNamespace(app=SimpleNamespace(state=state))
-    payload = aiida_router.SubmissionDraftRequest(
-        draft=[
+    payload = _submission_request(
+        [
             {"builder": {"structure_pk": 11}},
             {"builder": {"structure_pk": 22}},
             {"builder": {"structure_pk": 33}},
-        ]
+        ],
     )
 
     response = await aiida_router.submit_bridge_workchain(request, payload)
 
-    assert captured_request["payload"] == {
-        "draft": [
-            {"builder": {"structure_pk": 11}},
-            {"builder": {"structure_pk": 22}},
-            {"builder": {"structure_pk": 33}},
-        ]
-    }
+    captured_payload = captured_request["payload"]
+    assert isinstance(captured_payload, dict)
+    assert captured_payload["draft"] == [
+        {"builder": {"structure_pk": 11}},
+        {"builder": {"structure_pk": 22}},
+        {"builder": {"structure_pk": 33}},
+    ]
+    assert captured_payload["metadata"]["aris_approval"]["approval_id"] == "approval-test"
     assert response["status"] == "SUBMITTED_BATCH"
     assert response["submitted_pks"] == submitted
     assert response["process_pks"] == submitted
@@ -702,7 +723,7 @@ async def test_submit_bridge_workchain_batch_collects_submitted_pks(monkeypatch:
 @pytest.mark.anyio
 async def test_submit_bridge_workchain_batch_alias_requires_list() -> None:
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
-    payload = aiida_router.SubmissionDraftRequest(draft={"builder": {"structure_pk": 11}})
+    payload = _submission_request({"builder": {"structure_pk": 11}})
 
     with pytest.raises(aiida_router.HTTPException) as exc_info:
         await aiida_router.submit_bridge_workchain_batch(request, payload)

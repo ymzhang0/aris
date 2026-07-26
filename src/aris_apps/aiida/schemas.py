@@ -97,11 +97,11 @@ class SubmissionDraftRequest(BaseModel):
     draft: dict[str, Any] | list[dict[str, Any]] = Field(default_factory=dict)
     interpreter_info: InterpreterInfoPayload | None = None
     metadata: dict[str, Any] | None = None
-    approval: ApprovalDecision | None = None
+    approval: ApprovalDecision
 
 
 class SubmissionApprovalCancelRequest(BaseModel):
-    approval: ApprovalDecision | None = None
+    approval: ApprovalDecision
 
 
 class EnvironmentInspectRequest(BaseModel):

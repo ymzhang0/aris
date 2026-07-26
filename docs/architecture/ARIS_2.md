@@ -106,27 +106,12 @@ adapter delegates to `AiiDAWorkerClient` over HTTP. A future MCP facade may
 expose agent-facing tools, resources, and prompts while deterministic UI routes
 continue to use HTTP.
 
-## Versioned UI events
+## UI events
 
-Internal event creation uses a typed `UIEventEnvelope` with:
-
-- `protocol_version`
-- `type`
-- `payload`
-- `event_id`
-- `created_at`
-- optional `correlation_id`
-
-During migration, the SSE compatibility adapter emits the existing event names
-and payload bodies so the current frontend does not need a flag-day rewrite.
-Clients may opt into the AG-UI transport with
-`GET /api/aiida/frontend/chat/stream?protocol=ag-ui`. It publishes a
-`RUN_STARTED` lifecycle event followed by atomic `STATE_SNAPSHOT` events. The
-ARIS frontend now requests this transport first and sends both snapshots through
-the same state application functions previously used by legacy SSE. If no valid
-AG-UI state arrives, it falls back to `protocol=legacy`; HTTP polling remains a
-last-resort recovery path. The endpoint default stays `protocol=legacy` for
-external clients that have not migrated.
+`GET /api/aiida/frontend/chat/stream` is an AG-UI-only state stream. It
+publishes a `RUN_STARTED` lifecycle event followed by atomic `STATE_SNAPSHOT`
+events containing both chat and session state. Stream failures use
+`RUN_ERROR`; there is no alternate event-name or payload protocol.
 
 ## Submission approval
 
@@ -137,9 +122,8 @@ decision to the actionable draft with a stable digest. The API rejects a
 mismatched scope, a rejected execution decision, or a draft modified after
 approval.
 
-Direct legacy API callers remain temporarily supported. Their implicit approval
-is marked as `compatibility_implicit` in the response and logs so it can be
-measured and removed in a later migration.
+Submission and pending-cancellation endpoints require an explicit
+`ApprovalDecision`. Missing decisions are rejected rather than inferred.
 
 ## Authorization policy
 
@@ -173,7 +157,7 @@ Sharing a repository does not imply sharing a Python virtual environment.
 
 ## Migration sequence
 
-1. Introduce typed protocols and compatibility adapters.
+1. Introduce typed protocols and remove superseded compatibility transports.
 2. Move provider-specific model invocation behind `AgentRuntime`.
 3. Extract pure submission rules from the chat service.
 4. Route application code through `AiiDACapability`.
@@ -186,7 +170,7 @@ Sharing a repository does not imply sharing a Python virtual environment.
 
 - Protocol changes update schema, parser/handler, and regression tests together.
 - New AI-driven UI branches require explicit structured fields or markers.
-- Adapters may preserve legacy payloads, but domain services must consume typed
-  values.
+- Domain services consume typed protocol values rather than compatibility
+  payloads.
 - Provider-specific errors and settings stay inside provider/runtime adapters.
 - A migration step must leave the application runnable and testable.

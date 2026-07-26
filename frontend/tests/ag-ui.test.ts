@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildAgUiChatStreamUrl, parseArisAgUiEvent } from "../src/lib/ag-ui.ts";
+import { parseArisAgUiEvent } from "../src/lib/ag-ui.ts";
 
 test("parses an atomic ARIS state snapshot", () => {
   const parsed = parseArisAgUiEvent(JSON.stringify({
@@ -48,17 +48,6 @@ test("parses lifecycle and error events", () => {
   assert.deepEqual(
     parseArisAgUiEvent(JSON.stringify({ type: "RUN_ERROR", message: "offline", code: "ARIS_OFFLINE" })),
     { kind: "error", message: "offline", code: "ARIS_OFFLINE" },
-  );
-});
-
-test("adds the AG-UI protocol query without discarding existing parameters", () => {
-  assert.equal(
-    buildAgUiChatStreamUrl("/api/aiida/frontend/chat/stream"),
-    "/api/aiida/frontend/chat/stream?protocol=ag-ui",
-  );
-  assert.equal(
-    buildAgUiChatStreamUrl("/api/aiida/frontend/chat/stream?token=1"),
-    "/api/aiida/frontend/chat/stream?token=1&protocol=ag-ui",
   );
 });
 

@@ -77,8 +77,3 @@ export function parseArisAgUiEvent(payload: string): ArisAgUiEvent | null {
   return null;
 }
 
-export function buildAgUiChatStreamUrl(legacyUrl: string): string {
-  const separator = legacyUrl.includes("?") ? "&" : "?";
-  return `${legacyUrl}${separator}protocol=ag-ui`;
-}
-

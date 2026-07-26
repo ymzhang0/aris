@@ -15,30 +15,9 @@ from src.aris_apps.aiida.domain.submissions import (
 )
 from src.aris_core.agent import AgentModelRejectedError, AgentRunRequest
 from src.aris_core.schema.ui_event import (
-    UIEventEnvelope,
     build_ag_ui_sse_event,
     build_ag_ui_state_snapshot,
-    build_legacy_sse_event,
 )
-
-
-def test_ui_event_envelope_preserves_legacy_sse_payload() -> None:
-    payload = {"version": 4, "messages": []}
-
-    event = UIEventEnvelope(type="chat.snapshot", payload=payload, event_id="event-1")
-    legacy = event.to_legacy_sse()
-
-    assert event.protocol_version == "1"
-    assert legacy["event"] == "chat"
-    assert legacy["id"] == "event-1"
-    assert json.loads(legacy["data"]) == payload
-
-
-def test_ui_event_factory_maps_sessions_protocol_name() -> None:
-    legacy = build_legacy_sse_event("sessions.snapshot", {"items": []})
-
-    assert legacy["event"] == "sessions"
-    assert json.loads(legacy["data"]) == {"items": []}
 
 
 def test_ag_ui_state_snapshot_contains_atomic_aris_state() -> None:

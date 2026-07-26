@@ -44,7 +44,7 @@ import { Sidebar } from "@/components/dashboard/sidebar";
 import { WorkspaceExplorerSidebar, type WorkspaceExplorerFileSelection } from "@/components/dashboard/workspace-explorer-sidebar";
 import { Button } from "@/components/ui/button";
 import { cn, decodeEscapedUnicode, decodeEscapedUnicodeDeep } from "@/lib/utils";
-import { buildAgUiChatStreamUrl, parseArisAgUiEvent } from "@/lib/ag-ui";
+import { parseArisAgUiEvent } from "@/lib/ag-ui";
 import {
   SubmissionModal,
   type SubmissionDraftPayload,
@@ -862,63 +862,13 @@ export default function App() {
       return;
     }
 
-    let source: EventSource | null = null;
-    let disposed = false;
-    let receivedAgUiState = false;
-    let usingLegacyFallback = false;
-    let fallbackTimer: number | null = null;
-
-    const closeSource = () => {
-      source?.close();
-      source = null;
-    };
+    const source = new EventSource(CHAT_STREAM_URL);
     const markStreamReady = () => {
       setIsChatStateStreamReady(true);
     };
-    const applyLegacyChatSnapshot = (payload: string) => {
-      try {
-        const parsed = JSON.parse(payload) as ChatSnapshot;
-        applyChatSnapshot(parsed);
-        markStreamReady();
-      } catch (error) {
-        console.error("Failed to parse chat stream payload", error);
-      }
-    };
-    const applyLegacySessionsSnapshot = (payload: string) => {
-      try {
-        const parsed = JSON.parse(payload) as ChatSessionsResponse;
-        applyChatSessionsSnapshot(parsed);
-        markStreamReady();
-      } catch (error) {
-        console.error("Failed to parse chat sessions stream payload", error);
-      }
-    };
-    const startLegacyFallback = () => {
-      if (disposed || usingLegacyFallback) {
-        return;
-      }
-      usingLegacyFallback = true;
-      closeSource();
-      source = new EventSource(CHAT_STREAM_URL);
-      source.addEventListener("chat", (event) => {
-        applyLegacyChatSnapshot((event as MessageEvent<string>).data);
-      });
-      source.addEventListener("sessions", (event) => {
-        applyLegacySessionsSnapshot((event as MessageEvent<string>).data);
-      });
-      source.onmessage = (event) => {
-        applyLegacyChatSnapshot(event.data);
-      };
-      source.onerror = () => {
-        setIsChatStateStreamReady(false);
-      };
-    };
-
-    source = new EventSource(buildAgUiChatStreamUrl(CHAT_STREAM_URL));
     source.onmessage = (event) => {
       const parsed = parseArisAgUiEvent(event.data);
       if (parsed?.kind === "state") {
-        receivedAgUiState = true;
         applyChatSnapshot(parsed.chat);
         applyChatSessionsSnapshot(parsed.sessions);
         markStreamReady();
@@ -931,22 +881,10 @@ export default function App() {
     };
     source.onerror = () => {
       setIsChatStateStreamReady(false);
-      if (!receivedAgUiState) {
-        startLegacyFallback();
-      }
     };
-    fallbackTimer = window.setTimeout(() => {
-      if (!receivedAgUiState) {
-        startLegacyFallback();
-      }
-    }, 4_000);
 
     return () => {
-      disposed = true;
-      if (fallbackTimer !== null) {
-        window.clearTimeout(fallbackTimer);
-      }
-      closeSource();
+      source.close();
     };
   }, [applyChatSessionsSnapshot, applyChatSnapshot, bootstrapQuery.isSuccess]);
 

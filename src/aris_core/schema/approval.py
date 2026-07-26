@@ -61,10 +61,9 @@ class ApprovalAudit(BaseModel):
     action: ApprovalAction = "submission.execute"
     decision: Literal["approved"] = "approved"
     scope: Literal["single", "batch"]
-    actor_type: Literal["user", "compatibility"] = "user"
+    actor_type: Literal["user"] = "user"
     decided_at: datetime
     resource_digest: str
-    compatibility_implicit: bool = False
 
 
 def build_submission_approval_request(
@@ -80,23 +79,16 @@ def build_submission_approval_request(
 
 
 def resolve_submission_approval(
-    decision: ApprovalDecision | None,
+    decision: ApprovalDecision,
     draft: Any,
     *,
     expected_scope: Literal["single", "batch"],
 ) -> ApprovalAudit:
-    """Validate an explicit decision, retaining a flagged legacy fallback."""
+    """Validate an explicit decision bound to the submitted draft."""
 
-    digest = submission_resource_digest(draft)
     if decision is None:
-        return ApprovalAudit(
-            approval_id=f"legacy-{uuid4().hex}",
-            scope=expected_scope,
-            actor_type="compatibility",
-            decided_at=datetime.now(timezone.utc),
-            resource_digest=digest,
-            compatibility_implicit=True,
-        )
+        raise ValueError("Explicit submission approval is required")
+    digest = submission_resource_digest(draft)
     if decision.decision != "approved":
         raise ValueError("Submission approval decision must be approved")
     if decision.scope != expected_scope:
@@ -123,4 +115,3 @@ __all__ = [
     "resolve_submission_approval",
     "submission_resource_digest",
 ]
-
