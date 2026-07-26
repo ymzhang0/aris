@@ -58,6 +58,7 @@ runtime/cache/*
 !runtime/cache/.gitkeep
 runtime/scripts/*
 !runtime/scripts/.gitkeep
+desktop/macos/build/
 
 # --- Node.js / Frontend ---
 node_modules/

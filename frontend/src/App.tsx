@@ -1816,9 +1816,9 @@ export default function App() {
   }, [cloneModalState.status]);
 
   return (
-    <main className="dashboard-shell h-screen overflow-hidden p-2">
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-[1600px] flex-col gap-2 xl:flex-row">
-        <section className="flex h-full min-h-0 w-full shrink-0 overflow-hidden rounded-[26px] border border-white/40 bg-white/72 shadow-glass backdrop-blur lg:w-[420px] dark:border-white/10 dark:bg-zinc-950/40">
+    <main className="dashboard-shell h-screen overflow-hidden">
+      <div className="flex h-full min-h-0 w-full flex-col xl:flex-row">
+        <section className="flex h-full min-h-0 w-full shrink-0 overflow-hidden border-r border-zinc-200/80 bg-white lg:w-[360px] dark:border-zinc-800 dark:bg-zinc-950">
           <div className="flex h-full w-12 flex-col items-center justify-between border-r border-zinc-200/70 bg-zinc-50/85 px-1.5 py-3 dark:border-zinc-800/70 dark:bg-zinc-900/60">
             <div className="flex flex-col items-center gap-2">
               <Button

@@ -23,7 +23,7 @@ export function MainWorkspace({
   terminalContent,
 }: MainWorkspaceProps) {
   return (
-    <section className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
+    <section className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {chatContent}
       {terminalContent}
 

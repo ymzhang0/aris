@@ -1652,7 +1652,7 @@ function buildEnvironmentOptions(payload: ActiveSpecializationsResponse | undefi
 }
 
 function formatEnvironmentModeLabel(useWorkerDefault: boolean): string {
-  return useWorkerDefault ? "Worker Environment (Global)" : "Project Environment (Isolated)";
+  return useWorkerDefault ? "Managed Compute Environment" : "Custom Project Runtime";
 }
 
 function basenamePath(value: string | null | undefined): string | null {
@@ -1740,6 +1740,7 @@ export function ChatPanel({
   >({});
   const [autoSavedScriptByTurn, setAutoSavedScriptByTurn] = useState<Record<number, AutoSavedScriptState>>({});
   const [isEnvironmentMenuOpen, setIsEnvironmentMenuOpen] = useState(false);
+  const [isAdvancedEnvironmentOpen, setIsAdvancedEnvironmentOpen] = useState(false);
   const [pythonPathDraft, setPythonPathDraft] = useState(environmentState.pythonPath ?? "");
   const [nodeHoverMetadataByPk, setNodeHoverMetadataByPk] = useState<Record<number, NodeHoverMetadataState>>({});
   const nodeHoverMetadataRef = useRef<Record<number, NodeHoverMetadataState>>({});
@@ -1903,8 +1904,8 @@ export function ChatPanel({
     : null;
   const environmentInterpreterLabel = basenamePath(activeInterpreterPath) || "No interpreter";
   const environmentHeaderCaption = environmentState.useWorkerDefault
-    ? "Global runtime"
-    : "Project runtime";
+    ? "Managed by ARIS"
+    : "Custom runtime";
   const environmentInventorySummary = `${environmentState.availablePlugins.length} plugins`;
   const slashQuery = useMemo(() => {
     const trimmed = draft.trimStart();
@@ -2694,39 +2695,53 @@ export function ChatPanel({
                       <RefreshCw className={cn("h-3.5 w-3.5", environmentState.inspectionStatus === "loading" && "animate-spin")} />
                     </button>
                   </div>
-                  <div className="mt-3 space-y-2">
-                    <div className="rounded-lg border border-zinc-200/80 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-950">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
-                        Current Interpreter
-                      </p>
-                      <p className="mt-1 break-all font-mono text-[11px] text-zinc-700 dark:text-zinc-200">
-                        {activeInterpreterPath || "Interpreter not resolved yet"}
-                      </p>
-                    </div>
-                    {inactiveProjectInterpreterPath ? (
-                      <div className="rounded-lg border border-zinc-200/80 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-950">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
-                          Project Interpreter (Inactive)
-                        </p>
-                        <p className="mt-1 break-all font-mono text-[11px] text-zinc-700 dark:text-zinc-200">
-                          {inactiveProjectInterpreterPath}
-                        </p>
-                      </div>
-                    ) : null}
+                  <div className="mt-3 rounded-lg border border-zinc-200/80 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-950">
+                    <p className="text-[11px] text-zinc-600 dark:text-zinc-300">
+                      {environmentState.useWorkerDefault
+                        ? "ARIS manages Python and AiiDA dependencies for this project."
+                        : "This project is using a custom Python runtime."}
+                    </p>
                   </div>
                   <div className="mt-3 space-y-2">
-                    <label className="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-900"
-                        checked={environmentState.useWorkerDefault}
-                        onChange={(event) => setUseWorkerDefault(event.target.checked)}
-                      />
-                      Use worker default environment
-                    </label>
+                    <button
+                      type="button"
+                      className="text-[11px] font-semibold text-zinc-500 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                      onClick={() => setIsAdvancedEnvironmentOpen((current) => !current)}
+                    >
+                      {isAdvancedEnvironmentOpen ? "Hide advanced runtime settings" : "Advanced runtime settings"}
+                    </button>
+                    {isAdvancedEnvironmentOpen ? (
+                      <div className="space-y-3 border-t border-zinc-200/80 pt-3 dark:border-zinc-800">
+                        <div className="rounded-lg border border-zinc-200/80 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-950">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
+                            Active Python Runtime
+                          </p>
+                          <p className="mt-1 break-all font-mono text-[11px] text-zinc-700 dark:text-zinc-200">
+                            {activeInterpreterPath || "Runtime not resolved yet"}
+                          </p>
+                        </div>
+                        {inactiveProjectInterpreterPath ? (
+                          <div className="rounded-lg border border-zinc-200/80 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-950">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
+                              Project Runtime (Inactive)
+                            </p>
+                            <p className="mt-1 break-all font-mono text-[11px] text-zinc-700 dark:text-zinc-200">
+                              {inactiveProjectInterpreterPath}
+                            </p>
+                          </div>
+                        ) : null}
+                        <label className="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-900"
+                            checked={!environmentState.useWorkerDefault}
+                            onChange={(event) => setUseWorkerDefault(!event.target.checked)}
+                          />
+                          Use a custom Python runtime for this project
+                        </label>
                     <div className="space-y-2">
                       <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
-                        Project Interpreter Override
+                        Custom Python Path
                       </label>
                       <input
                         value={pythonPathDraft}
@@ -2757,7 +2772,7 @@ export function ChatPanel({
                       </div>
                       {environmentState.useWorkerDefault ? (
                         <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                          Worker default is active. The project interpreter above is only a standby override.
+                          The managed compute environment is active. Enable the custom runtime option to use this path.
                         </p>
                       ) : null}
                     </div>
@@ -2769,6 +2784,8 @@ export function ChatPanel({
                     ) : null}
                     {environmentState.lastError ? (
                       <p className="text-[11px] text-rose-600 dark:text-rose-300">{environmentState.lastError}</p>
+                    ) : null}
+                      </div>
                     ) : null}
                   </div>
                 </div>

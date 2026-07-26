@@ -16,8 +16,6 @@ import { NewProfileDrawer } from "./new-profile-drawer";
 
 const STATUS_POLL_INTERVAL_MS = 10_000;
 const DETAILS_POLL_INTERVAL_MS = 5_000;
-const DEFAULT_BRIDGE_URL = "http://127.0.0.1:8001";
-
 type HoveredDetail = "computers" | "codes" | "plugins" | null;
 const RESOURCE_ATTACHMENT_DRAG_MIME = "application/x-aris-resource-attachment";
 
@@ -26,27 +24,6 @@ type HoveredResourceItem = {
   label: string;
   attachment: ResourceAttachment;
 };
-
-function resolvePortLabel(url: string): string {
-  try {
-    const parsed = new URL(url);
-    if (parsed.port) {
-      return `:${parsed.port}`;
-    }
-    if (parsed.protocol === "https:") {
-      return ":443";
-    }
-    if (parsed.protocol === "http:") {
-      return ":80";
-    }
-  } catch {
-    const match = url.match(/:(\d+)(?:\/|$)/);
-    if (match?.[1]) {
-      return `:${match[1]}`;
-    }
-  }
-  return ":8001";
-}
 
 function formatComputerDetail(item: { label: string; hostname: string }): string {
   return `${item.label} (${item.hostname})`;
@@ -189,7 +166,7 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
   });
 
   const status = statusQuery.data?.status ?? "offline";
-  const bridgeUrl = statusQuery.data?.url ?? DEFAULT_BRIDGE_URL;
+  const isConnecting = statusQuery.isPending && !statusQuery.data;
   const environmentInspection = environmentState.inspection;
   const environmentReady = environmentState.inspectionStatus === "ready" && environmentInspection !== null;
   const environmentProfileName = normalizeProfileName(environmentInspection?.profile);
@@ -221,7 +198,6 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
   const pluginCount = pluginNames.length || resourceCounts.workchains;
   const computerCount = computers.length || resourceCounts.computers;
   const codeCount = codes.length || resourceCounts.codes;
-  const portLabel = useMemo(() => resolvePortLabel(bridgeUrl), [bridgeUrl]);
   const activeProfileName = profileName === "unknown" ? "" : profileName;
   const profilePills = useMemo(() => {
     if (profileOptions.length === 0) {
@@ -308,10 +284,10 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
 
           <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-[0.17em] text-zinc-500 dark:text-zinc-400">
-              AiiDA Worker
+              Compute Environment
             </p>
             <div className="flex items-center gap-2 truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">
-              {portLabel}  {status === "online" ? "Online" : "Offline"}
+              {isConnecting ? "Connecting…" : status === "online" ? "Ready" : "Needs attention"}
               {isOnline && (
                 <button
                   onClick={onInfrastructureClick}
@@ -360,7 +336,7 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
           <button
             onClick={() => setIsNewProfileDrawerOpen(true)}
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-none border-0 text-zinc-500 transition-colors enabled:hover:bg-transparent enabled:hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400 dark:enabled:hover:bg-transparent dark:enabled:hover:text-zinc-200"
-            title={isProjectScopedProfile ? "Profile management is available only in Worker Environment (Global)" : "Create New Profile"}
+            title={isProjectScopedProfile ? "Profile management is available only in the managed compute environment" : "Create New Profile"}
             disabled={isProjectScopedProfile}
           >
             <Plus className="h-3.5 w-3.5" />
@@ -378,15 +354,15 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
         </div>
         {isProjectScopedProfile ? (
           <p className="px-1 text-[11px] text-zinc-500 dark:text-zinc-400">
-            Project environments expose the active profile as read-only. Switch to Worker Environment (Global) to manage profiles.
+            Custom project runtimes expose the active profile as read-only. Switch back to the managed compute environment to manage profiles.
           </p>
         ) : null}
 
       </div>
-      {!isOnline ? (
+      {!isOnline && !isConnecting ? (
         <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-rose-600 dark:text-rose-300">
           <AlertTriangle className="h-3.5 w-3.5" />
-          Check bridge at {portLabel}
+          ARIS is reconnecting to the local compute environment.
         </p>
       ) : null}
     </section>

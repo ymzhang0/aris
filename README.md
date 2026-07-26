@@ -83,6 +83,12 @@ Backlog and product ideas should go in `/Users/yimingzhang/Developer/aris-worksp
 
 ## Local Operations
 
+- ARIS can run as a standalone macOS application; VS Code is optional.
+- Use `./scripts/aris-local.sh start` to start the worker and API, which serves the production frontend without Vite.
+- Use `./scripts/aris-local.sh open-dev` while editing the React frontend; it starts Vite and opens a separate hot-reloading development window.
+- Use `./scripts/aris-local.sh status`, `doctor`, `restart`, `stop`, or `logs` for daily operations.
+- Run `./scripts/aris-local.sh install` once to build and install `~/Applications/ARIS.app`. Opening the app starts the local services and displays ARIS in a native WebKit window instead of a browser.
+- The desktop app stores the current repository path in its application bundle. Run `install` again after moving the repository.
 - PM2 process names use the ARIS convention: `aris-api`, `aris-web`, `aris-tunnel`.
 - The active PM2 ecosystem file now lives at `~/.aris/config/pm2/ecosystem.config.js`.
 - `/Users/yimingzhang/Developer/aris-workspace/aris/ecosystem.config.js` is treated as the bootstrap template and is copied into `~/.aris/config/pm2/` on first use.

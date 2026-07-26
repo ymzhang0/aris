@@ -33,20 +33,12 @@ body,
     letter-spacing: -0.01em;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background:
-      radial-gradient(circle at 12% 16%, rgba(56, 189, 248, 0.2), transparent 36%),
-      radial-gradient(circle at 85% 14%, rgba(16, 185, 129, 0.18), transparent 35%),
-      radial-gradient(circle at 72% 86%, rgba(59, 130, 246, 0.16), transparent 32%),
-      linear-gradient(145deg, #f4f6fb 0%, #ecf1f6 48%, #e6edf5 100%);
+    background: #f4f5f7;
   }
 
   .dark body {
     @apply text-zinc-100;
-    background:
-      radial-gradient(circle at 15% 15%, rgba(56, 189, 248, 0.16), transparent 35%),
-      radial-gradient(circle at 90% 15%, rgba(16, 185, 129, 0.12), transparent 36%),
-      radial-gradient(circle at 74% 85%, rgba(147, 197, 253, 0.11), transparent 34%),
-      linear-gradient(145deg, #0a0d12 0%, #0f141c 42%, #10131b 100%);
+    background: #09090b;
   }
 }
 

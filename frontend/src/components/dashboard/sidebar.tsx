@@ -1320,7 +1320,7 @@ export function Sidebar({
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center rounded-2xl bg-black/10 backdrop-blur-[2px] dark:bg-black/30">
             <Loader2 className="h-6 w-6 animate-spin text-zinc-700 dark:text-zinc-300 drop-shadow-sm" />
             <p className="mt-2 text-[10px] font-medium tracking-wider text-zinc-700 dark:text-zinc-300 drop-shadow-sm">
-              Switching AiiDA Environment...
+              Switching compute environment...
             </p>
           </div>
         )}
