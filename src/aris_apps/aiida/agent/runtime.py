@@ -166,6 +166,20 @@ def build_aiida_agent_runtime(agent: Any) -> PydanticAIGeminiRuntime:
     return PydanticAIGeminiRuntime(agent)
 
 
+# Temporary import compatibility for the legacy chat fallback. These names keep
+# provider-specific construction out of the application service while older
+# tests and states that expose only ``state.agent`` continue to work.
+_to_agent_model_name = _to_pydantic_model_name
+_build_agent_model = _build_gemini_model
+_build_model_settings = _build_gemini_model_settings
+_is_retryable_model_unavailable_error = _is_retryable_unavailable_error
+
+
+def _get_model_unavailable_retry_policy() -> tuple[int, float]:
+    policy = _build_retry_policy()
+    return policy.unavailable_retries, policy.base_backoff_seconds
+
+
 __all__ = [
     "PydanticAIGeminiRuntime",
     "build_aiida_agent_runtime",

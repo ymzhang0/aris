@@ -16,14 +16,41 @@ from typing import Any, Callable, Mapping
 from uuid import uuid4
 
 from loguru import logger
-from pydantic_ai.settings import ModelSettings
 
+from src.aris_apps.aiida.agent.runtime import (
+    _build_agent_model,
+    _build_model_settings,
+    _get_model_unavailable_retry_policy,
+    _is_retryable_model_unavailable_error,
+    _to_agent_model_name,
+)
 from src.aris_apps.aiida.client import (
     build_bridge_context_headers,
     reset_bridge_call_listener,
     reset_bridge_request_headers,
     set_bridge_call_listener,
     set_bridge_request_headers,
+)
+from src.aris_apps.aiida.chat.batch_progress import (
+    _batch_process_label,
+    _classify_batch_process_status,
+    _coerce_optional_int,
+    _is_batch_process_node,
+    _normalize_process_state_value,
+    _summarize_chat_session_batch_progress,
+)
+from src.aris_apps.aiida.chat.context import (
+    _build_user_message_payload,
+    _coerce_positive_int,
+    _looks_like_auto_environment_prompt_block,
+    _normalize_focus_context_nodes,
+    _normalize_session_parameters,
+    _strip_auto_environment_prompt,
+    normalize_context_node_ids,
+)
+from src.aris_apps.aiida.chat.message_payloads import (
+    _is_status_only_text,
+    _merge_message_payload,
 )
 from src.aris_apps.aiida.frontend_bridge import inspect_group, list_groups, rename_group
 from src.aris_apps.aiida.presenters.workflow_view import enrich_submission_draft_payload
@@ -90,65 +117,12 @@ _CRITICAL_ADVANCED_KEYS = {
     "protocol",
     *_KNOWN_PARALLEL_KEYS,
 }
-_BATCH_PROCESS_TYPES = {
-    "processnode",
-    "workflownode",
-    "workchainnode",
-    "calcjobnode",
-    "calcfunctionnode",
-}
-_BATCH_RUNNING_STATES = {"running"}
-_BATCH_QUEUED_STATES = {"created", "waiting"}
-_BATCH_FINISHED_STATES = {"finished", "completed", "success"}
-_BATCH_FAILED_STATES = {"failed", "excepted", "killed", "error"}
 _UNSET = object()
 _SESSION_SLUG_MAX_LENGTH = 48
-_AUTO_ENVIRONMENT_PROMPT_MARKERS = (
-    "current environment is",
-    "available aiida",
-    "submission draft generation is supported",
-    "standard project layout",
-    "codes/<filename>.py",
-)
 
 
 def _draft_fragment_hash(fragment: str) -> str:
     return hashlib.sha1(fragment.encode("utf-8", errors="replace")).hexdigest()[:12]
-
-
-def normalize_context_node_ids(raw: Any) -> list[int]:
-    if raw is None:
-        return []
-
-    values: list[Any]
-    if isinstance(raw, str):
-        stripped = raw.strip()
-        if not stripped:
-            return []
-        values = [part.strip() for part in stripped.split(",")]
-    elif isinstance(raw, (list, tuple, set)):
-        values = list(raw)
-    else:
-        values = [raw]
-
-    deduped: list[int] = []
-    seen: set[int] = set()
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        try:
-            pk = int(str(value).strip())
-        except (TypeError, ValueError):
-            continue
-        if pk <= 0 or pk in seen:
-            continue
-        seen.add(pk)
-        deduped.append(pk)
-        if len(deduped) >= 30:
-            break
-    return deduped
 
 
 def _now_iso() -> str:
@@ -346,145 +320,6 @@ def _build_session_group_label(project_name: Any, session_name: Any) -> str:
     project_group_label = _build_project_group_label(project_name)
     session_segment = _normalize_group_label_segment(session_name, fallback="session")
     return f"{project_group_label}/{session_segment}"
-
-
-def _coerce_optional_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped and re.fullmatch(r"-?\d+", stripped):
-            return int(stripped)
-    return None
-
-
-def _normalize_process_state_value(value: Any) -> str:
-    return str(value or "").strip().replace("_", " ").lower()
-
-
-def _is_batch_process_node(entry: Any) -> bool:
-    if not isinstance(entry, dict):
-        return False
-
-    process_state = _normalize_process_state_value(entry.get("process_state") or entry.get("state"))
-    if process_state and process_state != "n/a":
-        return True
-
-    node_type_candidates = (
-        entry.get("type"),
-        entry.get("node_type"),
-        entry.get("full_type"),
-    )
-    for candidate in node_type_candidates:
-        normalized = str(candidate or "").strip().lower()
-        if any(token in normalized for token in _BATCH_PROCESS_TYPES):
-            return True
-
-    process_label = str(entry.get("process_label") or "").strip()
-    return bool(process_label and process_label.upper() != "N/A")
-
-
-def _classify_batch_process_status(entry: dict[str, Any]) -> str | None:
-    process_state = _normalize_process_state_value(entry.get("process_state") or entry.get("state"))
-    exit_status = _coerce_optional_int(entry.get("exit_status"))
-
-    if process_state in _BATCH_RUNNING_STATES:
-        return "running"
-    if process_state in _BATCH_QUEUED_STATES:
-        return "queued"
-    if process_state in _BATCH_FINISHED_STATES:
-        if exit_status in (None, 0):
-            return "success"
-        return "failed"
-    if process_state in _BATCH_FAILED_STATES:
-        return "failed"
-
-    if exit_status is not None and exit_status != 0:
-        return "failed"
-    if process_state:
-        return "queued"
-    return None
-
-
-def _batch_process_label(entry: dict[str, Any]) -> str:
-    for key in ("label", "process_label"):
-        value = str(entry.get(key) or "").strip()
-        if value and value.upper() != "N/A":
-            return value
-    pk = _coerce_optional_int(entry.get("pk"))
-    return f"Process #{pk}" if pk is not None and pk > 0 else "Process"
-
-
-def _summarize_chat_session_batch_progress(
-    *,
-    session_id: str,
-    title: str,
-    session_group_label: str,
-    nodes: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    status_rank = {
-        "running": 0,
-        "queued": 1,
-        "failed": 2,
-        "success": 3,
-    }
-    items: list[dict[str, Any]] = []
-    success = 0
-    running = 0
-    queued = 0
-    failed = 0
-
-    for entry in nodes:
-        if not _is_batch_process_node(entry):
-            continue
-        status = _classify_batch_process_status(entry)
-        if status is None:
-            continue
-
-        if status == "success":
-            success += 1
-        elif status == "running":
-            running += 1
-        elif status == "queued":
-            queued += 1
-        elif status == "failed":
-            failed += 1
-
-        items.append(
-            {
-                "pk": _coerce_optional_int(entry.get("pk")) or 0,
-                "label": _batch_process_label(entry),
-                "process_label": str(entry.get("process_label") or "").strip() or None,
-                "state": _normalize_process_state_value(entry.get("process_state") or entry.get("state")) or "unknown",
-                "exit_status": _coerce_optional_int(entry.get("exit_status")),
-                "status": status,
-            }
-        )
-
-    total = len(items)
-    if total <= 1:
-        return None
-
-    done = success + failed
-    percent = int(round((done / total) * 100)) if total else 0
-
-    items.sort(key=lambda item: (status_rank.get(str(item["status"]), 99), item["pk"]))
-
-    return {
-        "session_id": session_id,
-        "label": str(title or _DEFAULT_SESSION_TITLE),
-        "group_label": session_group_label,
-        "total": total,
-        "done": done,
-        "percent": max(0, min(100, percent)),
-        "success": success,
-        "running": running,
-        "queued": queued,
-        "failed": failed,
-        "items": items,
-    }
 
 
 def _resolve_filesystem_path(path_value: Any) -> Path | None:
@@ -990,28 +825,6 @@ def _normalize_chat_messages(raw_messages: Any) -> list[dict[str, Any]]:
             message["payload"] = payload
         normalized.append(message)
     return normalized[-_MAX_CHAT_SESSION_MESSAGES:]
-
-
-def _looks_like_auto_environment_prompt_block(block: str) -> bool:
-    lowered = " ".join(str(block or "").strip().lower().split())
-    if not lowered:
-        return False
-    if "current environment is" not in lowered or "available aiida" not in lowered:
-        return False
-    return any(marker in lowered for marker in _AUTO_ENVIRONMENT_PROMPT_MARKERS[2:])
-
-
-def _strip_auto_environment_prompt(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-
-    blocks = [segment.strip() for segment in re.split(r"\n\s*\n+", text) if str(segment).strip()]
-    if not blocks:
-        return ""
-
-    kept_blocks = [block for block in blocks if not _looks_like_auto_environment_prompt_block(block)]
-    return "\n\n".join(kept_blocks).strip()
 
 
 def _normalize_chat_session_snapshot(raw_snapshot: Any) -> dict[str, Any]:
@@ -2160,70 +1973,6 @@ def _ensure_chat_task_registry(state: Any) -> dict[int, asyncio.Task]:
     return tasks
 
 
-def _is_status_only_text(text: str) -> bool:
-    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
-    if not lines:
-        return False
-    return all(
-        line.lower().startswith("thinking:")
-        or line.lower().startswith("running:")
-        or line.lower().startswith("step:")
-        or line.lower().startswith("⚙️ [step]")
-        for line in lines
-    )
-
-
-def _merge_message_payload(
-    existing_payload: dict[str, Any] | None,
-    incoming_payload: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if not isinstance(existing_payload, dict):
-        return incoming_payload
-    if not isinstance(incoming_payload, dict):
-        return existing_payload
-
-    merged = dict(existing_payload)
-    for key, value in incoming_payload.items():
-        if key == "tool_calls" and isinstance(merged.get("tool_calls"), list) and isinstance(value, list):
-            deduped: list[str] = []
-            seen: set[str] = set()
-            for entry in [*merged["tool_calls"], *value]:
-                cleaned = str(entry).strip()
-                if not cleaned or cleaned in seen:
-                    continue
-                seen.add(cleaned)
-                deduped.append(cleaned)
-            merged["tool_calls"] = deduped
-            continue
-        if (
-            key == "status"
-            and isinstance(merged.get("status"), dict)
-            and isinstance(value, dict)
-        ):
-            merged_status = dict(merged["status"])
-            for status_key, status_value in value.items():
-                if (
-                    status_key == "steps"
-                    and isinstance(merged_status.get("steps"), list)
-                    and isinstance(status_value, list)
-                ):
-                    deduped_steps: list[str] = []
-                    seen_steps: set[str] = set()
-                    for step in [*merged_status["steps"], *status_value]:
-                        step_text = str(step).strip()
-                        if not step_text or step_text in seen_steps:
-                            continue
-                        seen_steps.add(step_text)
-                        deduped_steps.append(step_text)
-                    merged_status["steps"] = deduped_steps
-                else:
-                    merged_status[status_key] = status_value
-            merged["status"] = merged_status
-            continue
-        merged[key] = value
-    return merged
-
-
 def _update_assistant_message(
     state: Any,
     turn_id: int,
@@ -2263,104 +2012,6 @@ def _update_assistant_message(
             touch_chat(state)
             return
     logger.warning(log_event("aiida.chat_turn.message_update_missed", turn_id=turn_id, status=status))
-
-
-def _coerce_positive_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped.isdigit():
-            parsed = int(stripped)
-            return parsed if parsed > 0 else None
-    return None
-
-
-def _normalize_focus_context_nodes(raw_nodes: Any) -> list[dict[str, Any]]:
-    if not isinstance(raw_nodes, list):
-        return []
-
-    normalized: list[dict[str, Any]] = []
-    seen: set[int] = set()
-    for entry in raw_nodes:
-        if not isinstance(entry, dict):
-            continue
-        pk = _coerce_positive_int(entry.get("pk"))
-        if pk is None or pk in seen:
-            continue
-        seen.add(pk)
-
-        label_raw = entry.get("label")
-        label = str(label_raw).strip() if isinstance(label_raw, str) else ""
-        node_type_raw = entry.get("node_type")
-        node_type = str(node_type_raw).strip() if isinstance(node_type_raw, str) else ""
-        formula_raw = entry.get("formula")
-        formula = str(formula_raw).strip() if isinstance(formula_raw, str) else ""
-        normalized.append(
-            {
-                "pk": pk,
-                "label": label or f"#{pk}",
-                "formula": formula or None,
-                "node_type": node_type or "Unknown",
-            }
-        )
-    return normalized
-
-
-def _normalize_session_parameters(raw_parameters: Any) -> list[dict[str, str]]:
-    values = raw_parameters if isinstance(raw_parameters, list) else []
-    normalized: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for entry in values:
-        if not isinstance(entry, dict):
-            continue
-        key = str(entry.get("key") or "").strip()
-        value = str(entry.get("value") or "").strip()
-        if not key or not value:
-            continue
-        lowered = key.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        normalized.append({"key": key, "value": value})
-    return normalized
-
-
-def _build_user_message_payload(
-    metadata: dict[str, Any] | None,
-    context_pks: list[int],
-) -> dict[str, Any] | None:
-    payload: dict[str, Any] = {}
-    normalized_pks = normalize_context_node_ids(context_pks)
-    if normalized_pks:
-        payload["context_pks"] = normalized_pks
-
-    context_nodes = _normalize_focus_context_nodes((metadata or {}).get("context_nodes"))
-    if context_nodes:
-        payload["context_nodes"] = context_nodes
-    pinned_nodes = _normalize_focus_context_nodes((metadata or {}).get("pinned_nodes"))
-    if pinned_nodes:
-        payload["pinned_nodes"] = pinned_nodes
-    session_environment = str((metadata or {}).get("session_environment") or "").strip().lower()
-    if session_environment:
-        payload["session_environment"] = session_environment
-    session_prompt_override = (
-        (metadata or {}).get("session_prompt_override")
-        if isinstance((metadata or {}).get("session_prompt_override"), str)
-        else None
-    )
-    prompt_override = _strip_auto_environment_prompt(
-        session_prompt_override if session_prompt_override is not None else (metadata or {}).get("prompt_override")
-    )
-    if prompt_override:
-        payload["prompt_override"] = prompt_override
-    session_parameters = _normalize_session_parameters((metadata or {}).get("session_parameters"))
-    if session_parameters:
-        payload["session_parameters"] = session_parameters
-
-    return payload or None
 
 
 def _extract_submission_inputs(draft: dict[str, Any]) -> dict[str, Any]:
@@ -3467,57 +3118,6 @@ def _append_assistant_message(
     )
 
 
-def _to_agent_model_name(name: str) -> str:
-    if ":" in name:
-        return name
-    return f"google-gla:{name}"
-
-
-def _build_agent_model(name: str) -> Any:
-    cleaned = str(name or "").strip()
-    if not cleaned:
-        raise ValueError("Model name cannot be empty.")
-    model_name = cleaned.split(":", 1)[1] if ":" in cleaned else cleaned
-
-    api_version = str(getattr(settings, "GEMINI_API_VERSION", "") or "").strip()
-    if not api_version:
-        return _to_agent_model_name(cleaned)
-
-    try:
-        from google.genai import Client as GoogleGenAIClient
-        from google.genai.types import HttpOptions
-        from pydantic_ai.models.google import GoogleModel
-        from pydantic_ai.providers.google import GoogleProvider
-    except Exception:  # noqa: BLE001
-        logger.warning(
-            log_event(
-                "aiida.chat_turn.model_init_api_version_fallback",
-                model=model_name,
-                api_version=api_version,
-            )
-        )
-        return _to_agent_model_name(cleaned)
-
-    api_key = settings.GEMINI_API_KEY
-    if api_key == "your-key-here":
-        api_key = None
-
-    client = GoogleGenAIClient(
-        api_key=api_key,
-        vertexai=False,
-        http_options=HttpOptions(api_version=api_version),
-    )
-    provider = GoogleProvider(client=client)
-    return GoogleModel(model_name, provider=provider)
-
-
-def _build_model_settings() -> ModelSettings | None:
-    max_tokens = int(getattr(settings, "GEMINI_MAX_OUTPUT_TOKENS", 0) or 0)
-    if max_tokens <= 0:
-        return None
-    return ModelSettings(max_tokens=max_tokens)
-
-
 def _generate_session_title_sync(prompt: str, model_name: str) -> str:
     api_key = str(getattr(settings, "GEMINI_API_KEY", "") or "").strip()
     if not api_key or api_key == "your-key-here":
@@ -3677,49 +3277,6 @@ def _schedule_session_title_generation(
     task.add_done_callback(
         lambda _task, _state=state, _session_id=session_id: _ensure_chat_title_task_registry(_state).pop(_session_id, None)
     )
-
-
-def _get_model_unavailable_retry_policy() -> tuple[int, float]:
-    retry_budget = int(getattr(settings, "GEMINI_UNAVAILABLE_RETRIES", 2) or 0)
-    retry_budget = max(0, min(retry_budget, 8))
-    base_backoff_seconds = float(
-        getattr(settings, "GEMINI_UNAVAILABLE_RETRY_BACKOFF_SECONDS", 2.0) or 2.0
-    )
-    base_backoff_seconds = max(0.2, min(base_backoff_seconds, 60.0))
-    return retry_budget, base_backoff_seconds
-
-
-def _error_text_blob(error: Exception) -> str:
-    values: list[str] = [str(error)]
-    for attr in ("message", "body", "payload", "details", "status", "response"):
-        value = getattr(error, attr, None)
-        if value is None:
-            continue
-        values.append(str(value))
-    return " ".join(value for value in values if value).lower()
-
-
-def _is_retryable_model_unavailable_error(error: Exception) -> bool:
-    text = _error_text_blob(error)
-    if not text:
-        return False
-
-    has_503 = (
-        "status_code: 503" in text
-        or "status code: 503" in text
-        or '"code": 503' in text
-        or "'code': 503" in text
-        or "http 503" in text
-    )
-    has_unavailable_hint = (
-        "status': 'unavailable'" in text
-        or '"status": "unavailable"' in text
-        or "currently experiencing high demand" in text
-        or "high demand" in text
-        or "try again later" in text
-        or "temporarily unavailable" in text
-    )
-    return has_503 and has_unavailable_hint
 
 
 def _merge_context_node_ids(
