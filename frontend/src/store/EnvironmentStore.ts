@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 
+import type { ChatProject } from "@/types/aiida";
 import type {
   EnvironmentInspectionCode,
   EnvironmentInspectionComputer,
@@ -19,9 +20,11 @@ const API_BASE_URL = import.meta.env.DEV ? "http://localhost:8000" : "";
 const FRONTEND_API_PREFIX = "/api/aiida/frontend";
 export type EnvironmentInspectionStatus = "idle" | "loading" | "ready" | "error";
 export type PythonPathSource = "auto" | "manual";
+export type ProjectEnvironmentDefaultMode = "worker-default" | "project-auto";
 
 export type EnvironmentState = {
   currentProjectPath: string | null;
+  projectDefaultMode: ProjectEnvironmentDefaultMode;
   pythonPath: string | null;
   pythonPathSource: PythonPathSource;
   useWorkerDefault: boolean;
@@ -43,7 +46,7 @@ type EnvironmentInspectRequestPayload = {
 type EnvironmentStoreApi = {
   getState: () => EnvironmentState;
   subscribe: (listener: () => void) => () => void;
-  setProjectPath: (projectPath: string | null) => void;
+  setProjectContext: (project: ChatProject | null) => void;
   setUseWorkerDefault: (useWorkerDefault: boolean) => void;
   setPythonPath: (pythonPath: string | null) => void;
   resetPythonPath: () => void;
@@ -170,6 +173,7 @@ function normalizeInspectionResponse(
 function createInitialState(): EnvironmentState {
   return {
     currentProjectPath: null,
+    projectDefaultMode: "worker-default",
     pythonPath: null,
     pythonPathSource: "auto",
     useWorkerDefault: false,
@@ -318,8 +322,11 @@ function createEnvironmentStore(): EnvironmentStoreApi {
     }
   };
 
-  const updateProjectState = (projectPath: string | null) => {
-    const normalizedProjectPath = normalizePath(projectPath);
+  const updateProjectState = (project: ChatProject | null) => {
+    const normalizedProjectPath = normalizePath(project?.root_path ?? null);
+    const nextDefaultMode: ProjectEnvironmentDefaultMode =
+      project?.environment_mode_default === "project-auto" ? "project-auto" : "worker-default";
+    const shouldUseWorkerDefault = nextDefaultMode === "worker-default";
     const autoPythonPath = buildAutoPythonPath(normalizedProjectPath);
     const projectChanged = normalizedProjectPath !== state.currentProjectPath;
     const shouldResetToAuto = projectChanged || state.pythonPathSource === "auto";
@@ -327,8 +334,10 @@ function createEnvironmentStore(): EnvironmentStoreApi {
     setState({
       ...state,
       currentProjectPath: normalizedProjectPath,
+      projectDefaultMode: nextDefaultMode,
       pythonPath: shouldResetToAuto ? autoPythonPath : state.pythonPath,
       pythonPathSource: shouldResetToAuto ? "auto" : state.pythonPathSource,
+      useWorkerDefault: shouldResetToAuto ? shouldUseWorkerDefault : state.useWorkerDefault,
     });
     void refreshInspection();
   };
@@ -341,8 +350,11 @@ function createEnvironmentStore(): EnvironmentStoreApi {
         listeners.delete(listener);
       };
     },
-    setProjectPath: (projectPath) => {
-      const normalizedProjectPath = normalizePath(projectPath);
+    setProjectContext: (project) => {
+      const normalizedProjectPath = normalizePath(project?.root_path ?? null);
+      const nextDefaultMode: ProjectEnvironmentDefaultMode =
+        project?.environment_mode_default === "project-auto" ? "project-auto" : "worker-default";
+      const shouldUseWorkerDefault = nextDefaultMode === "worker-default";
       const autoPythonPath = buildAutoPythonPath(normalizedProjectPath);
       const nextPythonPath = state.pythonPathSource === "manual" && normalizedProjectPath === state.currentProjectPath
         ? state.pythonPath
@@ -352,12 +364,14 @@ function createEnvironmentStore(): EnvironmentStoreApi {
         : "auto";
       if (
         normalizedProjectPath === state.currentProjectPath
+        && nextDefaultMode === state.projectDefaultMode
         && nextPythonPath === state.pythonPath
         && nextPythonSource === state.pythonPathSource
+        && (nextPythonSource !== "auto" || shouldUseWorkerDefault === state.useWorkerDefault)
       ) {
         return;
       }
-      updateProjectState(normalizedProjectPath);
+      updateProjectState(project);
     },
     setUseWorkerDefault: (useWorkerDefault) => {
       if (useWorkerDefault === state.useWorkerDefault) {
@@ -417,7 +431,7 @@ export function useEnvironmentActions() {
   const store = useContext(EnvironmentContext);
   return useMemo(
     () => ({
-      setProjectPath: store.setProjectPath,
+      setProjectContext: store.setProjectContext,
       setUseWorkerDefault: store.setUseWorkerDefault,
       setPythonPath: store.setPythonPath,
       resetPythonPath: store.resetPythonPath,
@@ -427,11 +441,11 @@ export function useEnvironmentActions() {
   );
 }
 
-export function useProjectEnvironmentSync(projectPath: string | null): void {
-  const { setProjectPath } = useEnvironmentActions();
+export function useProjectEnvironmentSync(project: ChatProject | null): void {
+  const { setProjectContext } = useEnvironmentActions();
   useEffect(() => {
-    setProjectPath(projectPath);
-  }, [projectPath, setProjectPath]);
+    setProjectContext(project);
+  }, [project, setProjectContext]);
 }
 
 export function getEnvironmentState(): EnvironmentState {

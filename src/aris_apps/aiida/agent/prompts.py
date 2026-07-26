@@ -136,6 +136,10 @@ _BASE_TOOLBOX_RULES: tuple[str, ...] = (
         "diagnostic path and do not bypass it with plugin-specific shortcuts."
     ),
     (
+        "If a tool returns a recovery_plan or validation error, do not invent extra root causes. Only describe "
+        "blockers that are explicitly present in the returned recovery_plan, validation payload, or bridge error."
+    ),
+    (
         "If required resources are unavailable in the current AiiDA profile or database, state that clearly and stop "
         "the submission path until the user chooses how to proceed."
     ),

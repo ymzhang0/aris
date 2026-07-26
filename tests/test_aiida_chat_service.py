@@ -751,6 +751,34 @@ def test_build_chat_message_payload_surfaces_recovery_plan_and_next_step() -> No
     assert payload["tool_calls"] == ["POST submission.draft-builder"]
 
 
+def test_render_canonical_submission_blocker_message_uses_protocol_data_only() -> None:
+    message = chat_service._render_canonical_submission_blocker_message(
+        task_mode="batch",
+        recovery_plan={
+            "status": "blocked",
+            "summary": "Missing required inputs: structure, code",
+            "issues": [
+                {
+                    "type": "missing_required_inputs",
+                    "message": "Required inputs are still missing after builder construction: structure, code",
+                },
+                {
+                    "type": "resource_reference_unresolved",
+                    "message": "Code qe-750-pw@lucia could not be resolved",
+                },
+            ],
+        },
+        next_step="Inspect the spec, verify resources, and ask the user before retrying.",
+    )
+
+    assert message is not None
+    assert "ARIS could not prepare the batch submission preview yet." in message
+    assert "Blocked reason: Missing required inputs: structure, code" in message
+    assert "Required inputs are still missing after builder construction: structure, code" in message
+    assert "Code qe-750-pw@lucia could not be resolved" in message
+    assert "Next step: Inspect the spec, verify resources, and ask the user before retrying." in message
+
+
 def test_build_chat_message_payload_extracts_submission_draft_from_submission_tag_field() -> None:
     output = SimpleNamespace(
         data_payload={
