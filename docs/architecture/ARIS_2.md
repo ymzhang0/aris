@@ -57,6 +57,11 @@ legacy index key, and removes orphaned files. A repository can be injected on
 the application state, so a future SQLite or PostgreSQL adapter does not require
 changes to chat behavior.
 
+Persisted message, tag, and session-snapshot shapes are normalized by the pure
+`chat.session_models` module. It has no filesystem, AiiDA, or model-runtime
+dependencies; the chat service keeps compatibility aliases while delegating
+these transformations to that module.
+
 ### Agent Runtime
 
 Application code calls an `AgentRuntime` protocol with an `AgentRunRequest`.
