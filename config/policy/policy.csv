@@ -1,0 +1,7 @@
+p, role:owner, /aris/*, .*
+p, role:operator, /aris/submissions/*, (execute|cancel)
+p, role:operator, /aris/chat/*, (create|update|delete|activate|stop)
+p, role:operator, /aris/groups/*, (create|update|delete)
+p, role:operator, /aris/nodes/*, (update|delete)
+p, role:operator, /aris/profiles/*, switch
+

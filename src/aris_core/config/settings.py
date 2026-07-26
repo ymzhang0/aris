@@ -173,6 +173,24 @@ class Settings(BaseSettings):
         "ARIS_SCRIPT_ARCHIVE_DIR",
         default=str(Path(ARIS_RUNTIME_ROOT) / "scripts"),
     )
+    ARIS_LOCAL_ACTOR_ID: str = _env_value(
+        "ARIS_LOCAL_ACTOR_ID",
+        default="local-user",
+    )
+    ARIS_LOCAL_ROLE: str = _env_value(
+        "ARIS_LOCAL_ROLE",
+        default="owner",
+    )
+    ARIS_POLICY_MODEL_FILE: str = _resolve_preferred_path(
+        "ARIS_POLICY_MODEL_FILE",
+        preferred_path=_ARIS_CONFIG_ROOT / "policy" / "model.conf",
+        fallback_path=_REPO_ROOT / "config" / "policy" / "model.conf",
+    )
+    ARIS_POLICY_FILE: str = _resolve_preferred_path(
+        "ARIS_POLICY_FILE",
+        preferred_path=_ARIS_CONFIG_ROOT / "policy" / "policy.csv",
+        fallback_path=_REPO_ROOT / "config" / "policy" / "policy.csv",
+    )
 
     ARIS_DEBUG_LEVEL: str = _env_value("ARIS_DEBUG_LEVEL", default="default")
     PRODUCTION_MODE: bool = _env_flag("ARIS_PRODUCTION_MODE", "PRODUCTION_MODE", default="false")

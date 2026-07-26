@@ -111,6 +111,22 @@ Direct legacy API callers remain temporarily supported. Their implicit approval
 is marked as `compatibility_implicit` in the response and logs so it can be
 measured and removed in a later migration.
 
+## Authorization policy
+
+Consequential API actions pass through the `AuthorizationPolicy` boundary. The
+first adapter uses PyCasbin with the model and policies in `config/policy/`.
+Submission execution/cancellation, profile and infrastructure configuration,
+node/group deletion, and chat project/session deletion are currently protected.
+Every decision is written to the structured application log.
+
+ARIS is still a local single-user application, so the subject and role come from
+`ARIS_LOCAL_ACTOR_ID` and `ARIS_LOCAL_ROLE`; the default role is `owner` and
+therefore preserves current behavior. The shipped `operator` role can run or
+cancel submissions and manage research objects, but cannot configure profiles,
+computers, or codes. Unknown roles are denied mutations by default. A future
+login/session provider can replace the subject resolver without changing
+business routes or the Casbin policy adapter.
+
 ## Environment boundaries
 
 The repository may become a monorepo, but runtime environments remain separate:

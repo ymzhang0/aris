@@ -15,7 +15,7 @@ from typing import Any, Literal
 import httpx
 import yaml
 from ag_ui.core import RunErrorEvent, RunStartedEvent
-from fastapi import APIRouter, File, Form, HTTPException, Path as ApiPath, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path as ApiPath, Query, Request, UploadFile
 from fastapi.responses import Response
 from google import genai
 from loguru import logger
@@ -23,6 +23,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from src.aris_core.config import settings
 from src.aris_core.logging import get_log_buffer_snapshot, log_event
+from src.aris_core.policy import AuthorizationDecision
 from src.aris_core.schema.approval import resolve_submission_approval
 from src.aris_core.schema.ui_event import (
     build_ag_ui_sse_event,
@@ -57,6 +58,7 @@ from .chat import (
     write_chat_project_file,
 )
 from .bridge_client import bridge_endpoint
+from .authorization import require_permission
 from .capabilities import aiida_capability
 from .client import (
     BridgeAPIError,
@@ -1447,7 +1449,12 @@ async def get_bridge_profiles() -> BridgeProfilesResponse:
 
 
 @router.post("/profiles/switch", response_model=BridgeSwitchProfileResponse, tags=[WORKER_PROXY_TAG])
-async def switch_bridge_profile(payload: BridgeSwitchProfileRequest) -> BridgeSwitchProfileResponse:
+async def switch_bridge_profile(
+    payload: BridgeSwitchProfileRequest,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/profiles/current", "switch")
+    ),
+) -> BridgeSwitchProfileResponse:
     try:
         raw = await aiida_capability.switch_profile(payload.profile)
         return BridgeSwitchProfileResponse.model_validate(raw)
@@ -1484,7 +1491,12 @@ async def get_management_infrastructure_capabilities():
 
 
 @router.post("/management/infrastructure/setup", tags=[WORKER_PROXY_TAG])
-async def setup_management_infrastructure(payload: dict[str, Any]):
+async def setup_management_infrastructure(
+    payload: dict[str, Any],
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/infrastructure/computers", "configure")
+    ),
+):
     """Proxy to setup a new computer, authentication, and code."""
     try:
         return await bridge_service.setup_infrastructure(payload)
@@ -1541,7 +1553,12 @@ async def get_current_user_info():
 
 
 @router.post("/management/profiles/setup", tags=[WORKER_PROXY_TAG])
-async def setup_profile(payload: ProfileSetupRequest):
+async def setup_profile(
+    payload: ProfileSetupRequest,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/profiles", "configure")
+    ),
+):
     """Proxy to setup a new AiiDA profile on the worker."""
     try:
         return await bridge_service.setup_profile(payload.model_dump())
@@ -1656,12 +1673,24 @@ async def _submit_bridge_workchain_impl(
 
 
 @router.post("/submission/submit", tags=[WORKER_PROXY_TAG])
-async def submit_bridge_workchain(request: Request, payload: SubmissionDraftRequest):
+async def submit_bridge_workchain(
+    request: Request,
+    payload: SubmissionDraftRequest,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/submissions/current", "execute")
+    ),
+):
     return await _submit_bridge_workchain_impl(request, payload)
 
 
 @router.post("/submission/submit_batch", tags=[WORKER_PROXY_TAG])
-async def submit_bridge_workchain_batch(request: Request, payload: SubmissionDraftRequest):
+async def submit_bridge_workchain_batch(
+    request: Request,
+    payload: SubmissionDraftRequest,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/submissions/current", "execute")
+    ),
+):
     return await _submit_bridge_workchain_impl(request, payload, require_batch_list=True)
 
 
@@ -1999,7 +2028,12 @@ async def frontend_rename_group(pk: int, payload: FrontendGroupRenameRequest):
 
 
 @router.delete("/frontend/groups/{pk}", tags=[FRONTEND_TAG])
-async def frontend_delete_group(pk: int):
+async def frontend_delete_group(
+    pk: int,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/groups/item", "delete")
+    ),
+):
     if not hub.current_profile:
         hub.start()
     try:
@@ -2223,7 +2257,12 @@ async def frontend_ssh_hosts():
         raise HTTPException(status_code=500, detail="Failed to fetch SSH hosts")
 
 @router.post("/frontend/infrastructure/setup-code", tags=[FRONTEND_TAG])
-async def frontend_setup_code(payload: CodeSetupRequest):
+async def frontend_setup_code(
+    payload: CodeSetupRequest,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/infrastructure/codes", "configure")
+    ),
+):
     """Proxy code setup to AIIDA worker."""
     logger.info(log_event("aiida.frontend.setup_code.request", computer=payload.computer_label, label=payload.label))
     try:
@@ -2296,6 +2335,9 @@ async def frontend_node_script(pk: int = ApiPath(..., ge=1)) -> NodeScriptRespon
 async def frontend_node_soft_delete(
     pk: int = ApiPath(..., ge=1),
     payload: FrontendNodeSoftDeleteRequest | None = None,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/nodes/item", "delete")
+    ),
 ):
     if not hub.current_profile:
         hub.start()
@@ -2426,6 +2468,9 @@ async def frontend_logs_stream(request: Request, limit: int = Query(default=240,
 async def frontend_cancel_pending_submission(
     request: Request,
     payload: SubmissionApprovalCancelRequest | None = None,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/submissions/current", "cancel")
+    ),
 ):
     if payload is not None and payload.approval is not None:
         approval = payload.approval
@@ -2534,7 +2579,13 @@ async def frontend_create_chat_session(request: Request, payload: FrontendChatSe
 
 
 @router.delete("/frontend/chat/projects/{project_id}", tags=[FRONTEND_TAG])
-async def frontend_delete_chat_project(request: Request, project_id: str):
+async def frontend_delete_chat_project(
+    request: Request,
+    project_id: str,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/chat/projects", "delete")
+    ),
+):
     state = request.app.state
     labels = _collect_chat_group_labels_for_deletion(state, project_ids=[project_id])
     deleted = delete_chat_items(state, project_ids=[project_id])
@@ -2548,7 +2599,13 @@ async def frontend_delete_chat_project(request: Request, project_id: str):
 
 
 @router.delete("/frontend/chat/sessions/{session_id}", tags=[FRONTEND_TAG])
-async def frontend_delete_chat_session(request: Request, session_id: str):
+async def frontend_delete_chat_session(
+    request: Request,
+    session_id: str,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/chat/sessions", "delete")
+    ),
+):
     state = request.app.state
     labels = _collect_chat_group_labels_for_deletion(state, session_ids=[session_id])
     deleted = delete_chat_items(state, session_ids=[session_id])
@@ -2562,7 +2619,13 @@ async def frontend_delete_chat_session(request: Request, session_id: str):
 
 
 @router.post("/frontend/chat/delete", tags=[FRONTEND_TAG])
-async def frontend_delete_chat_items(request: Request, payload: FrontendChatDeleteRequest):
+async def frontend_delete_chat_items(
+    request: Request,
+    payload: FrontendChatDeleteRequest,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/chat/items", "delete")
+    ),
+):
     state = request.app.state
     project_ids = [str(value or "").strip() for value in payload.project_ids if str(value or "").strip()]
     session_ids = [str(value or "").strip() for value in payload.session_ids if str(value or "").strip()]
