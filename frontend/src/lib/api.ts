@@ -119,6 +119,49 @@ export type SubmissionSubmitDraftPayload =
   | Record<string, unknown>
   | Array<Record<string, unknown>>;
 
+export type SubmissionApprovalDecision = {
+  protocol_version: "1";
+  approval_id: string;
+  action: "submission.execute";
+  decision: "approved" | "rejected";
+  scope: "single" | "batch" | "pending";
+  actor_type: "user";
+  decided_at: string;
+  resource_digest?: string;
+};
+
+export type SubmissionApprovalRequest = {
+  protocol_version: "1";
+  approval_id: string;
+  action: "submission.execute";
+  status: "pending";
+  scope: "single" | "batch";
+  resource_digest: string;
+  created_at: string;
+  summary?: string | null;
+};
+
+function createSubmissionApprovalDecision(
+  decision: SubmissionApprovalDecision["decision"],
+  scope: SubmissionApprovalDecision["scope"],
+  request?: SubmissionApprovalRequest | null,
+): SubmissionApprovalDecision {
+  const fallbackId = `approval-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const approvalId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : fallbackId;
+  return {
+    protocol_version: "1",
+    approval_id: request?.approval_id ?? approvalId,
+    action: "submission.execute",
+    decision,
+    scope,
+    actor_type: "user",
+    decided_at: new Date().toISOString(),
+    ...(request?.resource_digest ? { resource_digest: request.resource_digest } : {}),
+  };
+}
+
 function basenamePath(value: string | null | undefined): string {
   const normalized = String(value || "").trim().replace(/\\/g, "/");
   if (!normalized) {
@@ -683,18 +726,27 @@ export async function getRepositoryFileContent(
 
 export async function submitPreviewDraft(
   draft: SubmissionSubmitDraftPayload,
+  approvalRequest?: SubmissionApprovalRequest | null,
 ): Promise<SubmissionResponse> {
-  const endpoint = Array.isArray(draft) ? "/submission/submit_batch" : "/submission/submit";
+  const isBatch = Array.isArray(draft);
+  const endpoint = isBatch ? "/submission/submit_batch" : "/submission/submit";
   const { data } = await aiidaApi.post<SubmissionResponse>(endpoint, {
     draft,
     interpreter_info: buildInterpreterInfo(),
     metadata: buildEnvironmentMetadata(),
+    approval: createSubmissionApprovalDecision(
+      "approved",
+      isBatch ? "batch" : "single",
+      approvalRequest,
+    ),
   });
   return data;
 }
 
 export async function cancelPendingSubmission(): Promise<{ status: string }> {
-  const { data } = await frontendApi.post<{ status: string }>("/submission/pending/cancel");
+  const { data } = await frontendApi.post<{ status: string }>("/submission/pending/cancel", {
+    approval: createSubmissionApprovalDecision("rejected", "pending"),
+  });
   return data;
 }
 

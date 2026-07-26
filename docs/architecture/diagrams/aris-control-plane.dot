@@ -1,0 +1,23 @@
+digraph aris_control_plane {
+    graph [rankdir=LR, bgcolor="transparent", pad=0.25, nodesep=0.45, ranksep=0.8];
+    node [shape=box, style="rounded,filled", fillcolor="#F7F9FC", color="#A8B3C7",
+          fontname="Helvetica", fontsize=11, margin="0.18,0.11"];
+    edge [color="#65758B", fontname="Helvetica", fontsize=10];
+
+    ui [label="React UI"];
+    aris [label="ARIS Host", fillcolor="#E8F3FF", color="#5C9DED"];
+    session [label="Session store"];
+    policy [label="Permission policies"];
+    runtime [label="PydanticAI agent runtime"];
+    capability [label="AiiDA capability"];
+    aiida [label="AiiDA workflows"];
+
+    ui -> aris [dir=both, label="AG-UI events"];
+    aris -> session;
+    aris -> policy;
+    aris -> runtime;
+    runtime -> capability [dir=both, label="MCP"];
+    aris -> capability [label="confirmed submission"];
+    capability -> aiida;
+}
+

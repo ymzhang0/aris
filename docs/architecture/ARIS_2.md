@@ -15,6 +15,11 @@ used to reach it without replacing working product behavior all at once.
 
 ## Target layers
 
+The editable diagram sources live in
+[`docs/architecture/diagrams/aris-control-plane.mmd`](diagrams/aris-control-plane.mmd)
+and
+[`docs/architecture/diagrams/aris-control-plane.dot`](diagrams/aris-control-plane.dot).
+
 ```text
 React UI (browser + macOS shell)
         |
@@ -84,6 +89,23 @@ Internal event creation uses a typed `UIEventEnvelope` with:
 
 During migration, the SSE compatibility adapter emits the existing event names
 and payload bodies so the current frontend does not need a flag-day rewrite.
+Clients may opt into the AG-UI transport with
+`GET /api/aiida/frontend/chat/stream?protocol=ag-ui`. It publishes a
+`RUN_STARTED` lifecycle event followed by atomic `STATE_SNAPSHOT` events. The
+default remains `protocol=legacy` until the current UI subscriber migrates.
+
+## Submission approval
+
+Every new UI confirmation emits a typed `ApprovalDecision` for the
+`submission.execute` action. Its scope is explicit (`single`, `batch`, or
+`pending` for cancellation), and chat-generated approval requests bind the
+decision to the actionable draft with a stable digest. The API rejects a
+mismatched scope, a rejected execution decision, or a draft modified after
+approval.
+
+Direct legacy API callers remain temporarily supported. Their implicit approval
+is marked as `compatibility_implicit` in the response and logs so it can be
+measured and removed in a later migration.
 
 ## Environment boundaries
 

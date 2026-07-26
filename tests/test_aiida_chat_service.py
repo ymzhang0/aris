@@ -485,6 +485,10 @@ def test_build_chat_message_payload_includes_submission_draft_fields() -> None:
     assert submission_draft["meta"]["target_computer"] == "localhost"
     assert submission_draft["meta"]["parallel_settings"]["num_machines"] == 2
     assert submission_draft["meta"]["validation_summary"]["status"] == "VALIDATION_OK"
+    assert payload["approval_request"]["action"] == "submission.execute"
+    assert payload["approval_request"]["status"] == "pending"
+    assert payload["approval_request"]["scope"] == "single"
+    assert len(payload["approval_request"]["resource_digest"]) == 64
 
 
 def test_build_chat_message_payload_reads_pending_submission_from_memory() -> None:

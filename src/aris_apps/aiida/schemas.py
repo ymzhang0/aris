@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Literal
 from pydantic import BaseModel, Field
 
+from src.aris_core.schema.approval import ApprovalDecision
+
 
 class FrontendChatRequest(BaseModel):
     intent: str = Field(..., min_length=1, max_length=12000)
@@ -95,6 +97,11 @@ class SubmissionDraftRequest(BaseModel):
     draft: dict[str, Any] | list[dict[str, Any]] = Field(default_factory=dict)
     interpreter_info: InterpreterInfoPayload | None = None
     metadata: dict[str, Any] | None = None
+    approval: ApprovalDecision | None = None
+
+
+class SubmissionApprovalCancelRequest(BaseModel):
+    approval: ApprovalDecision | None = None
 
 
 class EnvironmentInspectRequest(BaseModel):

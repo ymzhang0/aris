@@ -64,6 +64,7 @@ from src.aris_apps.aiida.domain.submissions import (
 from src.aris_core.agent import AgentModelRejectedError, AgentRunRequest
 from src.aris_core.config import settings
 from src.aris_core.logging import log_event
+from src.aris_core.schema.approval import build_submission_approval_request
 
 _PENDING_SUBMISSION_KEY = "aiida_pending_submission"
 _CHAT_SESSIONS_KV_KEY = "frontend_chat_sessions_v2"
@@ -3011,6 +3012,15 @@ def _build_chat_message_payload(
     if isinstance(resolved_submission_draft, dict):
         combined["type"] = "SUBMISSION_DRAFT"
         combined["submission_draft"] = resolved_submission_draft
+        approval_scope = "batch" if resolved_task_mode == "batch" else "single"
+        approval_resource: Any = resolved_submission_draft
+        approval_meta = resolved_submission_draft.get("meta")
+        if isinstance(approval_meta, dict) and approval_meta.get("draft"):
+            approval_resource = approval_meta["draft"]
+        combined["approval_request"] = build_submission_approval_request(
+            approval_resource,
+            scope=approval_scope,
+        ).model_dump(mode="json")
     combined["task_mode"] = resolved_task_mode
 
     recovery_plan, next_step, status = _extract_recovery_payload(

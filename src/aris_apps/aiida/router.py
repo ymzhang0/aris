@@ -10,10 +10,11 @@ from statistics import median
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import yaml
+from ag_ui.core import RunErrorEvent, RunStartedEvent
 from fastapi import APIRouter, File, Form, HTTPException, Path as ApiPath, Query, Request, UploadFile
 from fastapi.responses import Response
 from google import genai
@@ -22,7 +23,12 @@ from sse_starlette.sse import EventSourceResponse
 
 from src.aris_core.config import settings
 from src.aris_core.logging import get_log_buffer_snapshot, log_event
-from src.aris_core.schema.ui_event import build_legacy_sse_event
+from src.aris_core.schema.approval import resolve_submission_approval
+from src.aris_core.schema.ui_event import (
+    build_ag_ui_sse_event,
+    build_ag_ui_state_snapshot,
+    build_legacy_sse_event,
+)
 
 from .chat import (
     activate_chat_session,
@@ -105,6 +111,7 @@ from .schemas import (
     FrontendChatSessionCreateRequest,
     FrontendChatSessionTitleUpdateRequest,
     FrontendChatSessionUpdateRequest,
+    SubmissionApprovalCancelRequest,
     SubmissionDraftRequest,
     SystemCountsResponse,
     BridgeStatusResponse,
@@ -1554,6 +1561,24 @@ async def _submit_bridge_workchain_impl(
     draft_payload = payload.draft
     if require_batch_list and not isinstance(draft_payload, list):
         raise HTTPException(status_code=422, detail="Batch submission draft list is required")
+    expected_scope: Literal["single", "batch"] = "batch" if isinstance(draft_payload, list) else "single"
+    try:
+        approval_audit = resolve_submission_approval(
+            payload.approval,
+            draft_payload,
+            expected_scope=expected_scope,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if approval_audit.compatibility_implicit:
+        logger.warning(
+            log_event(
+                "aiida.frontend.submission.approval_implicit",
+                approval_id=approval_audit.approval_id,
+                scope=approval_audit.scope,
+            )
+        )
+
     worker_request_headers = _build_submission_request_headers(request.app.state)
     worker_payload: dict[str, Any]
     if (
@@ -1569,8 +1594,11 @@ async def _submit_bridge_workchain_impl(
         worker_payload = {"draft": draft_payload}
     if payload.interpreter_info is not None:
         worker_payload["interpreter_info"] = payload.interpreter_info.model_dump()
-    if payload.metadata is not None:
-        worker_payload["metadata"] = payload.metadata
+    worker_metadata = dict(payload.metadata or {})
+    if payload.approval is not None:
+        worker_metadata["aris_approval"] = approval_audit.model_dump(mode="json")
+    if worker_metadata:
+        worker_payload["metadata"] = worker_metadata
     if isinstance(draft_payload, list):
         if len(draft_payload) == 0:
             raise HTTPException(status_code=422, detail="Submission draft list cannot be empty")
@@ -1599,6 +1627,7 @@ async def _submit_bridge_workchain_impl(
         else:
             if auto_groups:
                 batch_response["auto_groups"] = auto_groups
+        batch_response["approval"] = approval_audit.model_dump(mode="json")
         return batch_response
 
     try:
@@ -1617,6 +1646,7 @@ async def _submit_bridge_workchain_impl(
         else:
             if auto_groups:
                 response["auto_groups"] = auto_groups
+        response["approval"] = approval_audit.model_dump(mode="json")
         return response
     except BridgeOfflineError as exc:
         raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
@@ -2393,9 +2423,31 @@ async def frontend_logs_stream(request: Request, limit: int = Query(default=240,
 
 
 @router.post("/frontend/submission/pending/cancel", tags=[FRONTEND_TAG])
-async def frontend_cancel_pending_submission(request: Request):
+async def frontend_cancel_pending_submission(
+    request: Request,
+    payload: SubmissionApprovalCancelRequest | None = None,
+):
+    if payload is not None and payload.approval is not None:
+        approval = payload.approval
+        if approval.decision != "rejected" or approval.scope != "pending":
+            raise HTTPException(
+                status_code=409,
+                detail="Pending submission cancellation requires a rejected pending approval decision",
+            )
+        logger.info(
+            log_event(
+                "aiida.frontend.submission.cancelled",
+                approval_id=approval.approval_id,
+                actor_type=approval.actor_type,
+            )
+        )
     _clear_pending_submission_memory(request.app.state)
-    return {"status": "cancelled"}
+    return {
+        "status": "cancelled",
+        "approval": payload.approval.model_dump(mode="json")
+        if payload is not None and payload.approval is not None
+        else None,
+    }
 
 
 @router.get("/frontend/chat/messages", tags=[FRONTEND_TAG])
@@ -2754,15 +2806,32 @@ async def frontend_execute_chat_project_file(
 
 
 @router.get("/frontend/chat/stream", tags=[FRONTEND_TAG])
-async def frontend_chat_stream(request: Request):
+async def frontend_chat_stream(
+    request: Request,
+    protocol: Literal["legacy", "ag-ui"] = Query(default="legacy"),
+):
     state = request.app.state
 
     async def event_generator():
         stream_id = id(request)
+        run_id = str(stream_id)
         last_chat_version = -1
         last_sessions_version = -1
         heartbeat_ts = time.monotonic()
-        logger.info(log_event("aiida.frontend.chat_stream.connected", stream_id=stream_id))
+        logger.info(
+            log_event(
+                "aiida.frontend.chat_stream.connected",
+                stream_id=stream_id,
+                protocol=protocol,
+            )
+        )
+        if protocol == "ag-ui":
+            yield build_ag_ui_sse_event(
+                RunStartedEvent(
+                    thread_id=get_active_chat_session_id(state) or "aris",
+                    run_id=run_id,
+                )
+            )
         while True:
             if await request.is_disconnected():
                 logger.info(log_event("aiida.frontend.chat_stream.disconnected", stream_id=stream_id))
@@ -2775,45 +2844,71 @@ async def frontend_chat_stream(request: Request):
                 sessions_snapshot = _chat_sessions_payload(state)
                 now = time.monotonic()
                 should_push_heartbeat = (now - heartbeat_ts) >= 10
-                pushed = False
-                if chat_version != last_chat_version or should_push_heartbeat:
-                    yield build_legacy_sse_event(
-                        "chat.snapshot",
-                        chat_snapshot,
-                        correlation_id=str(stream_id),
+                chat_changed = chat_version != last_chat_version
+                sessions_changed = sessions_version != last_sessions_version
+                pushed = chat_changed or sessions_changed or should_push_heartbeat
+                if protocol == "ag-ui" and pushed:
+                    yield build_ag_ui_sse_event(
+                        build_ag_ui_state_snapshot(
+                            chat=chat_snapshot,
+                            sessions=sessions_snapshot,
+                        )
                     )
                     last_chat_version = chat_version
-                    pushed = True
-                if sessions_version != last_sessions_version or should_push_heartbeat:
-                    yield build_legacy_sse_event(
-                        "sessions.snapshot",
-                        sessions_snapshot,
-                        correlation_id=str(stream_id),
-                    )
                     last_sessions_version = sessions_version
-                    pushed = True
+                elif protocol == "legacy":
+                    if chat_changed or should_push_heartbeat:
+                        yield build_legacy_sse_event(
+                            "chat.snapshot",
+                            chat_snapshot,
+                            correlation_id=run_id,
+                        )
+                        last_chat_version = chat_version
+                    if sessions_changed or should_push_heartbeat:
+                        yield build_legacy_sse_event(
+                            "sessions.snapshot",
+                            sessions_snapshot,
+                            correlation_id=run_id,
+                        )
+                        last_sessions_version = sessions_version
                 if pushed:
                     heartbeat_ts = now
             except Exception as error:  # noqa: BLE001
                 logger.exception(
                     log_event("aiida.frontend.chat_stream.failed", stream_id=stream_id, error=str(error))
                 )
-                yield build_legacy_sse_event(
-                    "chat.snapshot",
-                    {"version": -1, "session_id": None, "messages": [], "snapshot": {}},
-                    correlation_id=str(stream_id),
-                )
-                yield build_legacy_sse_event(
-                    "sessions.snapshot",
-                    {
-                        "version": -1,
-                        "active_session_id": None,
-                        "active_project_id": None,
-                        "projects": [],
-                        "items": [],
-                    },
-                    correlation_id=str(stream_id),
-                )
+                empty_chat = {"version": -1, "session_id": None, "messages": [], "snapshot": {}}
+                empty_sessions = {
+                    "version": -1,
+                    "active_session_id": None,
+                    "active_project_id": None,
+                    "projects": [],
+                    "items": [],
+                }
+                if protocol == "ag-ui":
+                    yield build_ag_ui_sse_event(
+                        RunErrorEvent(
+                            message=str(error),
+                            code="ARIS_CHAT_STREAM_ERROR",
+                        )
+                    )
+                    yield build_ag_ui_sse_event(
+                        build_ag_ui_state_snapshot(
+                            chat=empty_chat,
+                            sessions=empty_sessions,
+                        )
+                    )
+                else:
+                    yield build_legacy_sse_event(
+                        "chat.snapshot",
+                        empty_chat,
+                        correlation_id=run_id,
+                    )
+                    yield build_legacy_sse_event(
+                        "sessions.snapshot",
+                        empty_sessions,
+                        correlation_id=run_id,
+                    )
 
             await asyncio.sleep(0.4)
 

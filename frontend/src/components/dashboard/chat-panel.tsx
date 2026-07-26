@@ -15,7 +15,14 @@ import { ThinkingIndicator, type ProcessLogEntry } from "@/components/dashboard/
 import { Button } from "@/components/ui/button";
 import { CommandPaletteSelect } from "@/components/ui/command-palette-select";
 import { Panel } from "@/components/ui/panel";
-import { cancelPendingSubmission, getActiveSpecializations, getNodeHoverMetadata, saveChatProjectFile, submitPreviewDraft } from "@/lib/api";
+import {
+  cancelPendingSubmission,
+  getActiveSpecializations,
+  getNodeHoverMetadata,
+  saveChatProjectFile,
+  submitPreviewDraft,
+  type SubmissionApprovalRequest,
+} from "@/lib/api";
 import { extractAssistantScriptArtifact, normalizeAssistantScriptCodeFences } from "@/lib/FileManager";
 import { useEnvironmentActions, useEnvironmentStore } from "@/store/EnvironmentStore";
 import { cn } from "@/lib/utils";
@@ -45,6 +52,7 @@ type ChatTurn = {
 type SubmissionDraftPreview = {
   submissionDraft: SubmissionDraftPayload;
   submitDraft: SubmissionSubmitDraft;
+  approvalRequest: SubmissionApprovalRequest | null;
 };
 
 type SubmissionDraftTagParseResult = {
@@ -222,7 +230,27 @@ function normalizeSubmissionPkMap(raw: unknown): Array<{ pk: number; path?: stri
   return entries;
 }
 
-function normalizeSubmissionDraftPreview(rawSubmissionDraft: Record<string, unknown> | null): SubmissionDraftPreview | null {
+function normalizeApprovalRequest(value: unknown): SubmissionApprovalRequest | null {
+  const record = asRecord(value);
+  if (
+    !record ||
+    record.protocol_version !== "1" ||
+    record.action !== "submission.execute" ||
+    record.status !== "pending" ||
+    (record.scope !== "single" && record.scope !== "batch") ||
+    typeof record.approval_id !== "string" ||
+    typeof record.resource_digest !== "string" ||
+    typeof record.created_at !== "string"
+  ) {
+    return null;
+  }
+  return record as SubmissionApprovalRequest;
+}
+
+function normalizeSubmissionDraftPreview(
+  rawSubmissionDraft: Record<string, unknown> | null,
+  approvalRequest?: unknown,
+): SubmissionDraftPreview | null {
   if (!rawSubmissionDraft) {
     return null;
   }
@@ -279,7 +307,11 @@ function normalizeSubmissionDraftPreview(rawSubmissionDraft: Record<string, unkn
     },
   };
 
-  return { submissionDraft, submitDraft };
+  return {
+    submissionDraft,
+    submitDraft,
+    approvalRequest: normalizeApprovalRequest(approvalRequest),
+  };
 }
 
 function isSubmissionDraftLikePayload(value: Record<string, unknown> | null): boolean {
@@ -342,6 +374,7 @@ function extractSubmissionDraft(payload: Record<string, unknown> | null | undefi
     return null;
   }
   const dataPayload = asRecord(root.data_payload);
+  const rootApprovalRequest = root.approval_request;
   const recursiveCandidate = findSubmissionDraftCandidate(root);
   const candidates = [root, dataPayload, recursiveCandidate].filter(
     (item): item is Record<string, unknown> => Boolean(item),
@@ -355,7 +388,10 @@ function extractSubmissionDraft(payload: Record<string, unknown> | null | undefi
       continue;
     }
 
-    const fromNested = normalizeSubmissionDraftPreview(asRecord(candidate.submission_draft));
+    const fromNested = normalizeSubmissionDraftPreview(
+      asRecord(candidate.submission_draft),
+      candidate.approval_request ?? rootApprovalRequest,
+    );
     if (fromNested) {
       return fromNested;
     }
@@ -363,7 +399,10 @@ function extractSubmissionDraft(payload: Record<string, unknown> | null | undefi
     if (normalizedType !== "SUBMISSION_DRAFT" && !isSubmissionDraftLikePayload(candidate)) {
       continue;
     }
-    const fromDirect = normalizeSubmissionDraftPreview(candidate);
+    const fromDirect = normalizeSubmissionDraftPreview(
+      candidate,
+      candidate.approval_request ?? rootApprovalRequest,
+    );
     if (fromDirect && isSubmissionDraftLikePayload(asRecord(fromDirect.submissionDraft))) {
       return fromDirect;
     }
@@ -2413,7 +2452,10 @@ export function ChatPanel({
         [turnId]: submittingState,
       }));
       try {
-        const response = await submitPreviewDraft(draftPayload ?? preview.submitDraft);
+        const response = await submitPreviewDraft(
+          draftPayload ?? preview.submitDraft,
+          preview.approvalRequest,
+        );
         const processPks = extractProcessPks(response);
         const processPk = processPks[0] ?? null;
         const submittedState: SubmissionModalState = {

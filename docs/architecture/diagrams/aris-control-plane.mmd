@@ -1,0 +1,9 @@
+flowchart LR
+    UI["React UI"] <-->|"AG-UI events"| ARIS["ARIS Host"]
+    ARIS --> Session["Session store"]
+    ARIS --> Policy["Permission policies"]
+    ARIS --> Runtime["PydanticAI agent runtime"]
+    Runtime <-->|"MCP"| Capability["AiiDA capability"]
+    ARIS -->|"confirmed submission"| Capability
+    Capability --> AiiDA["AiiDA workflows"]
+

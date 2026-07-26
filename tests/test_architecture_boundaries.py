@@ -14,7 +14,12 @@ from src.aris_apps.aiida.domain.submissions import (
     submission_draft_is_batch,
 )
 from src.aris_core.agent import AgentModelRejectedError, AgentRunRequest
-from src.aris_core.schema.ui_event import UIEventEnvelope, build_legacy_sse_event
+from src.aris_core.schema.ui_event import (
+    UIEventEnvelope,
+    build_ag_ui_sse_event,
+    build_ag_ui_state_snapshot,
+    build_legacy_sse_event,
+)
 
 
 def test_ui_event_envelope_preserves_legacy_sse_payload() -> None:
@@ -34,6 +39,21 @@ def test_ui_event_factory_maps_sessions_protocol_name() -> None:
 
     assert legacy["event"] == "sessions"
     assert json.loads(legacy["data"]) == {"items": []}
+
+
+def test_ag_ui_state_snapshot_contains_atomic_aris_state() -> None:
+    encoded = build_ag_ui_sse_event(
+        build_ag_ui_state_snapshot(
+            chat={"version": 4, "messages": []},
+            sessions={"version": 2, "items": []},
+        )
+    )
+
+    assert "event" not in encoded
+    data = json.loads(encoded["data"])
+    assert data["type"] == "STATE_SNAPSHOT"
+    assert data["snapshot"]["aris"]["chat"]["version"] == 4
+    assert data["snapshot"]["aris"]["sessions"]["version"] == 2
 
 
 def test_submission_domain_uses_explicit_task_mode() -> None:
