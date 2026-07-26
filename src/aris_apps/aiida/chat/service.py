@@ -27,6 +27,14 @@ from src.aris_apps.aiida.client import (
 )
 from src.aris_apps.aiida.frontend_bridge import inspect_group, list_groups, rename_group
 from src.aris_apps.aiida.presenters.workflow_view import enrich_submission_draft_payload
+from src.aris_apps.aiida.domain.submissions import (
+    extract_recovery_plan as _domain_extract_recovery_plan,
+    normalize_submission_request as _domain_normalize_submission_request,
+    normalize_task_mode as _domain_normalize_task_mode,
+    render_submission_blocker_message as _domain_render_submission_blocker_message,
+    submission_draft_is_batch as _domain_submission_draft_is_batch,
+)
+from src.aris_core.agent import AgentModelRejectedError, AgentRunRequest
 from src.aris_core.config import settings
 from src.aris_core.logging import log_event
 
@@ -148,56 +156,11 @@ def _now_iso() -> str:
 
 
 def _normalize_task_mode(value: Any) -> str:
-    cleaned = str(value or "").strip().lower()
-    if cleaned in {"single", "batch", "none"}:
-        return cleaned
-    return "none"
+    return _domain_normalize_task_mode(value)
 
 
 def _normalize_submission_request(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, Mapping):
-        return None
-
-    mode = _normalize_task_mode(value.get("mode"))
-    if mode not in {"single", "batch"}:
-        return None
-
-    workchain = str(value.get("workchain") or "").strip()
-    code = str(value.get("code") or "").strip()
-    protocol = str(value.get("protocol") or "moderate").strip() or "moderate"
-    if not workchain or not code:
-        return None
-
-    normalized: dict[str, Any] = {
-        "mode": mode,
-        "workchain": workchain,
-        "code": code,
-        "protocol": protocol,
-    }
-
-    if mode == "single":
-        structure_pk = _coerce_positive_int(value.get("structure_pk"))
-        if structure_pk is None:
-            return None
-        normalized["structure_pk"] = structure_pk
-    else:
-        raw_structure_pks = value.get("structure_pks")
-        if not isinstance(raw_structure_pks, list):
-            return None
-        structure_pks = [_coerce_positive_int(item) for item in raw_structure_pks]
-        structure_pks = [item for item in structure_pks if item is not None]
-        if not structure_pks:
-            return None
-        normalized["structure_pks"] = structure_pks
-        matrix_mode = str(value.get("matrix_mode") or "product").strip().lower() or "product"
-        normalized["matrix_mode"] = "zip" if matrix_mode == "zip" else "product"
-
-    for key in ("overrides", "protocol_kwargs", "parameter_grid"):
-        raw = value.get(key)
-        if isinstance(raw, Mapping):
-            normalized[key] = dict(raw)
-
-    return normalized
+    return _domain_normalize_submission_request(value)
 
 
 async def _prepare_structured_submission_request(
@@ -2809,24 +2772,7 @@ def _extract_pending_submission_payload(deps: Any) -> dict[str, Any] | None:
 
 
 def _submission_draft_is_batch(submission_draft: dict[str, Any] | None) -> bool:
-    if not isinstance(submission_draft, dict):
-        return False
-    if isinstance(submission_draft.get("jobs"), list) and len(submission_draft["jobs"]) > 1:
-        return True
-    if isinstance(submission_draft.get("batch_aggregation"), dict):
-        return True
-    meta = submission_draft.get("meta")
-    if not isinstance(meta, dict):
-        return False
-    raw_draft = meta.get("draft")
-    if isinstance(raw_draft, list) and len(raw_draft) > 1:
-        return True
-    if _coerce_positive_int(meta.get("job_count")) and int(meta["job_count"]) > 1:
-        return True
-    structure_pks = meta.get("structure_pks")
-    if isinstance(structure_pks, list) and len(structure_pks) > 1:
-        return True
-    return False
+    return _domain_submission_draft_is_batch(submission_draft)
 
 
 def _extract_actionable_submission_draft(
@@ -3222,13 +3168,7 @@ def _extract_submission_draft_from_output_payload(output_payload: dict[str, Any]
 
 
 def _extract_recovery_plan_from_submission_draft(submission_draft: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(submission_draft, dict):
-        return None
-    meta = submission_draft.get("meta")
-    if not isinstance(meta, dict):
-        return None
-    recovery_plan = meta.get("recovery_plan")
-    return recovery_plan if isinstance(recovery_plan, dict) and recovery_plan else None
+    return _domain_extract_recovery_plan(submission_draft)
 
 
 def _extract_recovery_payload(
@@ -3272,41 +3212,11 @@ def _render_canonical_submission_blocker_message(
     recovery_plan: dict[str, Any] | None,
     next_step: str | None,
 ) -> str | None:
-    if not isinstance(recovery_plan, dict) or not recovery_plan:
-        return None
-
-    normalized_mode = _normalize_task_mode(task_mode)
-    if normalized_mode not in {"single", "batch"}:
-        return None
-
-    mode_label = "batch submission preview" if normalized_mode == "batch" else "submission preview"
-    lines = [f"ARIS could not prepare the {mode_label} yet."]
-
-    summary = str(recovery_plan.get("summary") or "").strip()
-    if summary:
-        lines.append("")
-        lines.append(f"Blocked reason: {summary}")
-
-    issues = recovery_plan.get("issues")
-    if isinstance(issues, list) and issues:
-        visible_issue_lines: list[str] = []
-        for issue in issues[:3]:
-            if not isinstance(issue, dict):
-                continue
-            message = str(issue.get("message") or "").strip()
-            if not message:
-                continue
-            visible_issue_lines.append(f"- {message}")
-        if visible_issue_lines:
-            lines.append("")
-            lines.append("Reported issues:")
-            lines.extend(visible_issue_lines)
-
-    if isinstance(next_step, str) and next_step.strip():
-        lines.append("")
-        lines.append(f"Next step: {next_step.strip()}")
-
-    return "\n".join(lines).strip()
+    return _domain_render_submission_blocker_message(
+        task_mode=task_mode,
+        recovery_plan=recovery_plan,
+        next_step=next_step,
+    )
 
 
 def _extract_submission_draft_from_text(answer_text: str | None) -> dict[str, Any] | None:
@@ -3881,7 +3791,7 @@ async def _thinking_status_ticker(
     while not stop_event.is_set():
         elapsed = int(time.perf_counter() - started)
         dots = (dots % 3) + 1
-        status_lines = [f"Thinking: waiting for Gemini response ({elapsed}s){'.' * dots}"]
+        status_lines = [f"Thinking: waiting for model response ({elapsed}s){'.' * dots}"]
         running_tools: list[str] = []
         if callable(get_running_tools):
             running_tools = get_running_tools()
@@ -4049,6 +3959,7 @@ async def _execute_chat_turn(
     metadata: dict[str, Any] | None = None,
 ) -> None:
     agent = getattr(state, "agent", None)
+    agent_runtime = getattr(state, "agent_runtime", None)
     deps_class = getattr(state, "deps_class", None)
     lock = _ensure_chat_lock(state)
     t0 = time.perf_counter()
@@ -4080,7 +3991,7 @@ async def _execute_chat_turn(
         )
 
         try:
-            if agent is None or deps_class is None:
+            if (agent_runtime is None and agent is None) or deps_class is None:
                 raise RuntimeError("Agent dependencies are not ready")
 
             normalized_node_ids = _merge_context_node_ids(context_node_ids, metadata)
@@ -4147,26 +4058,56 @@ async def _execute_chat_turn(
                 run_intent = _inject_session_preference_instruction(user_intent, metadata)
                 run_intent = _inject_context_priority_instruction(run_intent, normalized_node_ids)
                 resolved_model_name = _to_agent_model_name(selected_model)
-                resolved_model = _build_agent_model(selected_model)
-                retry_budget, retry_base_backoff_seconds = _get_model_unavailable_retry_policy()
+                if agent_runtime is None:
+                    resolved_model = _build_agent_model(selected_model)
+                    retry_budget, retry_base_backoff_seconds = _get_model_unavailable_retry_policy()
+                else:
+                    resolved_model = None
+                    retry_policy = agent_runtime.retry_policy
+                    retry_budget = retry_policy.unavailable_retries
+                    retry_base_backoff_seconds = retry_policy.base_backoff_seconds
                 last_run_error: Exception | None = None
                 result = None
                 for attempt in range(retry_budget + 1):
                     try:
-                        result = await agent.run(
-                            run_intent,
-                            deps=current_deps,
-                            model=resolved_model,
-                            model_settings=_build_model_settings(),
-                        )
+                        if agent_runtime is not None:
+                            result = await agent_runtime.run(
+                                AgentRunRequest(
+                                    prompt=run_intent,
+                                    deps=current_deps,
+                                    model_name=selected_model,
+                                    metadata={
+                                        "session_id": session_id,
+                                        "turn_id": turn_id,
+                                    },
+                                )
+                            )
+                        else:
+                            result = await agent.run(
+                                run_intent,
+                                deps=current_deps,
+                                model=resolved_model,
+                                model_settings=_build_model_settings(),
+                            )
                         last_run_error = None
                         break
                     except asyncio.CancelledError:
                         raise
+                    except AgentModelRejectedError as run_error:
+                        logger.error(
+                            log_event(
+                                "aiida.chat_turn.model_rejected",
+                                turn_id=turn_id,
+                                model=selected_model,
+                                provider=run_error.provider,
+                                error=str(run_error)[:500],
+                            )
+                        )
+                        raise RuntimeError(str(run_error)) from run_error
                     except Exception as run_error:  # noqa: BLE001
                         error_text = str(run_error)
                         normalized_error = error_text.lower()
-                        if (
+                        if agent_runtime is None and (
                             "404" in normalized_error
                             and "model" in normalized_error
                             or "is not found for api version" in normalized_error
@@ -4189,10 +4130,15 @@ async def _execute_chat_turn(
                                 "or ARIS_GEMINI_API_VERSION and retry."
                             ) from run_error
 
-                        if _is_retryable_model_unavailable_error(run_error) and attempt < retry_budget:
+                        is_retryable = (
+                            agent_runtime.is_retryable_unavailable_error(run_error)
+                            if agent_runtime is not None
+                            else _is_retryable_model_unavailable_error(run_error)
+                        )
+                        if is_retryable and attempt < retry_budget:
                             wait_seconds = retry_base_backoff_seconds * (2**attempt)
                             retry_step = (
-                                "Gemini is under high demand (503). "
+                                "The model provider is temporarily unavailable. "
                                 f"Auto-retrying in {wait_seconds:.1f}s ({attempt + 1}/{retry_budget})."
                             )
                             current_deps.log_step(retry_step)
@@ -4216,7 +4162,12 @@ async def _execute_chat_turn(
                 if result is None:
                     if last_run_error is None:
                         raise RuntimeError("Model call failed: no result and no error captured.")
-                    if _is_retryable_model_unavailable_error(last_run_error):
+                    retry_exhausted = (
+                        agent_runtime.is_retryable_unavailable_error(last_run_error)
+                        if agent_runtime is not None
+                        else _is_retryable_model_unavailable_error(last_run_error)
+                    )
+                    if retry_exhausted:
                         logger.error(
                             log_event(
                                 "aiida.chat_turn.model_unavailable_retry_exhausted",

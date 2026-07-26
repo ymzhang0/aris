@@ -140,6 +140,12 @@ async def lifespan(app: FastAPI):
         agent = getattr(agent_module, f"{engine_name}_researcher")
         state["agent"] = agent
         app.state.agent = agent
+
+        runtime_factory = getattr(agent_module, "build_agent_runtime", None)
+        if callable(runtime_factory):
+            agent_runtime = runtime_factory(agent)
+            state["agent_runtime"] = agent_runtime
+            app.state.agent_runtime = agent_runtime
         
         deps_module = importlib.import_module(engine_manifest.deps_module)
         configured_deps_class = (settings.DEPS_CLASS or "").strip()
@@ -151,7 +157,12 @@ async def lifespan(app: FastAPI):
         state["deps_class"] = deps_class
         app.state.deps_class = deps_class
         
-        logger.info(log_event("engine.agent.online"))
+        logger.info(
+            log_event(
+                "engine.agent.online",
+                runtime=type(getattr(app.state, "agent_runtime", agent)).__name__,
+            )
+        )
 
         for hub in ACTIVE_HUBS:
             if hasattr(hub, 'start'):

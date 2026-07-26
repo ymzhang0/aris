@@ -22,6 +22,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from src.aris_core.config import settings
 from src.aris_core.logging import get_log_buffer_snapshot, log_event
+from src.aris_core.schema.ui_event import build_legacy_sse_event
 
 from .chat import (
     activate_chat_session,
@@ -50,6 +51,7 @@ from .chat import (
     write_chat_project_file,
 )
 from .bridge_client import bridge_endpoint
+from .capabilities import aiida_capability
 from .client import (
     BridgeAPIError,
     BridgeOfflineError,
@@ -1356,7 +1358,7 @@ def _get_selected_model(state: Any, available_models: list[str]) -> str:
 @router.get("/status", response_model=BridgeStatusResponse, tags=[WORKER_PROXY_TAG])
 async def get_bridge_status() -> BridgeStatusResponse:
     try:
-        snapshot = await bridge_service.get_status()
+        snapshot = await aiida_capability.get_status()
         return BridgeStatusResponse(
             status=snapshot.status,
             url=snapshot.url,
@@ -1376,7 +1378,7 @@ async def get_bridge_status() -> BridgeStatusResponse:
         logger.warning(log_event("aiida.bridge.status.failed", error=error_message))
         return BridgeStatusResponse(
             status="offline",
-            url=bridge_service.bridge_url,
+            url=aiida_capability.bridge_url,
             environment="Remote Bridge",
             worker_mode=None,
             profile="unknown",
@@ -1389,7 +1391,7 @@ async def get_bridge_status() -> BridgeStatusResponse:
 @router.get("/plugins", response_model=list[str], tags=[WORKER_PROXY_TAG])
 async def get_bridge_plugins() -> list[str]:
     try:
-        return await bridge_service.get_plugins()
+        return await aiida_capability.get_plugins()
     except Exception as exc:  # noqa: BLE001
         error_message = f"{type(exc).__name__}: {exc}"
         logger.warning(log_event("aiida.bridge.plugins.failed", error=error_message))
@@ -1399,7 +1401,7 @@ async def get_bridge_plugins() -> list[str]:
 @router.get("/system", response_model=BridgeSystemInfoResponse, tags=[WORKER_PROXY_TAG])
 async def get_bridge_system_info() -> BridgeSystemInfoResponse:
     try:
-        snapshot = await bridge_service.get_status()
+        snapshot = await aiida_capability.get_status()
         return BridgeSystemInfoResponse(
             profile=snapshot.profile,
             counts=SystemCountsResponse(
@@ -1418,7 +1420,7 @@ async def get_bridge_system_info() -> BridgeSystemInfoResponse:
 @router.get("/resources", response_model=BridgeResourcesResponse, tags=[WORKER_PROXY_TAG])
 async def get_bridge_resources() -> BridgeResourcesResponse:
     try:
-        payload = await bridge_service.get_resources()
+        payload = await aiida_capability.get_resources()
         return BridgeResourcesResponse.model_validate(payload)
     except Exception as exc:  # noqa: BLE001
         error_message = f"{type(exc).__name__}: {exc}"
@@ -1429,7 +1431,7 @@ async def get_bridge_resources() -> BridgeResourcesResponse:
 @router.get("/profiles", response_model=BridgeProfilesResponse, tags=[WORKER_PROXY_TAG])
 async def get_bridge_profiles() -> BridgeProfilesResponse:
     try:
-        payload = await bridge_service.get_profiles()
+        payload = await aiida_capability.get_profiles()
         return BridgeProfilesResponse.model_validate(payload)
     except Exception as exc:  # noqa: BLE001
         error_message = f"{type(exc).__name__}: {exc}"
@@ -1440,7 +1442,7 @@ async def get_bridge_profiles() -> BridgeProfilesResponse:
 @router.post("/profiles/switch", response_model=BridgeSwitchProfileResponse, tags=[WORKER_PROXY_TAG])
 async def switch_bridge_profile(payload: BridgeSwitchProfileRequest) -> BridgeSwitchProfileResponse:
     try:
-        raw = await bridge_service.switch_profile(payload.profile)
+        raw = await aiida_capability.switch_profile(payload.profile)
         return BridgeSwitchProfileResponse.model_validate(raw)
     except Exception as exc:  # noqa: BLE001
         error_message = f"{type(exc).__name__}: {exc}"
@@ -2775,17 +2777,19 @@ async def frontend_chat_stream(request: Request):
                 should_push_heartbeat = (now - heartbeat_ts) >= 10
                 pushed = False
                 if chat_version != last_chat_version or should_push_heartbeat:
-                    yield {
-                        "event": "chat",
-                        "data": json.dumps(chat_snapshot),
-                    }
+                    yield build_legacy_sse_event(
+                        "chat.snapshot",
+                        chat_snapshot,
+                        correlation_id=str(stream_id),
+                    )
                     last_chat_version = chat_version
                     pushed = True
                 if sessions_version != last_sessions_version or should_push_heartbeat:
-                    yield {
-                        "event": "sessions",
-                        "data": json.dumps(sessions_snapshot),
-                    }
+                    yield build_legacy_sse_event(
+                        "sessions.snapshot",
+                        sessions_snapshot,
+                        correlation_id=str(stream_id),
+                    )
                     last_sessions_version = sessions_version
                     pushed = True
                 if pushed:
@@ -2794,14 +2798,22 @@ async def frontend_chat_stream(request: Request):
                 logger.exception(
                     log_event("aiida.frontend.chat_stream.failed", stream_id=stream_id, error=str(error))
                 )
-                yield {
-                    "event": "chat",
-                    "data": json.dumps({"version": -1, "session_id": None, "messages": [], "snapshot": {}}),
-                }
-                yield {
-                    "event": "sessions",
-                    "data": json.dumps({"version": -1, "active_session_id": None, "active_project_id": None, "projects": [], "items": []}),
-                }
+                yield build_legacy_sse_event(
+                    "chat.snapshot",
+                    {"version": -1, "session_id": None, "messages": [], "snapshot": {}},
+                    correlation_id=str(stream_id),
+                )
+                yield build_legacy_sse_event(
+                    "sessions.snapshot",
+                    {
+                        "version": -1,
+                        "active_session_id": None,
+                        "active_project_id": None,
+                        "projects": [],
+                        "items": [],
+                    },
+                    correlation_id=str(stream_id),
+                )
 
             await asyncio.sleep(0.4)
 

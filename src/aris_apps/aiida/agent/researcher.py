@@ -184,6 +184,14 @@ aiida_researcher = Agent(
 )
 
 
+def build_agent_runtime(agent: Any = aiida_researcher):
+    """Build the application-facing runtime without exposing SDK details."""
+
+    from src.aris_apps.aiida.agent.runtime import build_aiida_agent_runtime
+
+    return build_aiida_agent_runtime(agent)
+
+
 def _format_context_node_line(node: dict[str, Any]) -> str:
     pk = node.get("pk", "?")
     error = node.get("error")
