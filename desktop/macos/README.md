@@ -13,6 +13,9 @@ Build and install it with:
 The default destination is `~/Applications/ARIS.app`. Override it with
 `ARIS_APP_INSTALL_DIR` when needed.
 
+The application icon is generated from `desktop/macos/assets/aris.png` during
+installation. The browser uses the matching assets under `frontend/public`.
+
 The app intentionally does not stop the services when its window closes. This
 keeps AiiDA and long-running calculations alive and makes subsequent launches
 fast. Stop them explicitly with:

@@ -1,0 +1,17 @@
+{
+  "name": "ARIS",
+  "short_name": "ARIS",
+  "description": "Agentic Research Intelligence System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#173b57",
+  "icons": [
+    {
+      "src": "/aris.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

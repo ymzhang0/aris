@@ -1821,6 +1821,13 @@ export default function App() {
         <section className="flex h-full min-h-0 w-full shrink-0 overflow-hidden border-r border-zinc-200/80 bg-white lg:w-[360px] dark:border-zinc-800 dark:bg-zinc-950">
           <div className="flex h-full w-12 flex-col items-center justify-between border-r border-zinc-200/70 bg-zinc-50/85 px-1.5 py-3 dark:border-zinc-800/70 dark:bg-zinc-900/60">
             <div className="flex flex-col items-center gap-2">
+              <div
+                className="mb-1 flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-zinc-200/70 dark:bg-zinc-950 dark:ring-zinc-800"
+                title="ARIS"
+              >
+                <img src="/aris.svg" alt="ARIS" className="h-8 w-8 object-contain" />
+              </div>
+              <div className="mb-0.5 h-px w-6 bg-zinc-200 dark:bg-zinc-800" aria-hidden="true" />
               <Button
                 variant="ghost"
                 size="icon"

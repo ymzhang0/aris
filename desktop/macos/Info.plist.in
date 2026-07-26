@@ -10,6 +10,8 @@
   <string>ARIS</string>
   <key>CFBundleIdentifier</key>
   <string>com.yimingzhang.aris</string>
+  <key>CFBundleIconFile</key>
+  <string>ARIS.icns</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
