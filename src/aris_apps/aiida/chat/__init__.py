@@ -25,10 +25,12 @@ from .service import (
     update_chat_session,
     write_chat_project_file,
 )
+from .session_repository import ChatSessionRepository, JsonChatSessionRepository
 
 __all__ = [
     "activate_chat_session",
     "build_chat_project_worker_headers",
+    "ChatSessionRepository",
     "cancel_chat_turn",
     "create_chat_project",
     "create_chat_session",
@@ -46,6 +48,7 @@ __all__ = [
     "list_chat_project_workspace_files",
     "list_chat_session_workspace_files",
     "list_chat_sessions",
+    "JsonChatSessionRepository",
     "normalize_context_node_ids",
     "serialize_chat_history",
     "start_chat_turn",

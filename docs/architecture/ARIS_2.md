@@ -50,6 +50,13 @@ FastAPI owns sessions, UI snapshots, event delivery, user preferences, and
 coordination between deterministic services and the agent runtime. It does not
 contain provider-specific model construction.
 
+Session persistence is accessed through `ChatSessionRepository`. The current
+`JsonChatSessionRepository` preserves the existing memory index plus
+`sessions/*.json` files, performs atomic session-file replacement, migrates the
+legacy index key, and removes orphaned files. A repository can be injected on
+the application state, so a future SQLite or PostgreSQL adapter does not require
+changes to chat behavior.
+
 ### Agent Runtime
 
 Application code calls an `AgentRuntime` protocol with an `AgentRunRequest`.

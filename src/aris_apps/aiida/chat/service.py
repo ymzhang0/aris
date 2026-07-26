@@ -52,6 +52,12 @@ from src.aris_apps.aiida.chat.message_payloads import (
     _is_status_only_text,
     _merge_message_payload,
 )
+from src.aris_apps.aiida.chat.session_repository import (
+    CHAT_SESSIONS_KV_KEY as _CHAT_SESSIONS_KV_KEY,
+    LEGACY_CHAT_SESSIONS_KV_KEY as _LEGACY_CHAT_SESSIONS_KV_KEY,
+    ChatSessionRepository,
+    JsonChatSessionRepository,
+)
 from src.aris_apps.aiida.frontend_bridge import inspect_group, list_groups, rename_group
 from src.aris_apps.aiida.presenters.workflow_view import enrich_submission_draft_payload
 from src.aris_apps.aiida.domain.submissions import (
@@ -67,15 +73,12 @@ from src.aris_core.logging import log_event
 from src.aris_core.schema.approval import build_submission_approval_request
 
 _PENDING_SUBMISSION_KEY = "aiida_pending_submission"
-_CHAT_SESSIONS_KV_KEY = "frontend_chat_sessions_v2"
-_LEGACY_CHAT_SESSIONS_KV_KEY = "frontend_chat_sessions_v1"
 _SUBMISSION_DRAFT_PREFIX = "[SUBMISSION_DRAFT]"
 _DEFAULT_PROJECT_NAME = "Default Project"
 _DEFAULT_SESSION_TITLE = "New Conversation"
 _PROJECT_CODES_DIRNAME = "codes"
 _PROJECT_DATA_DIRNAME = "data"
 _PROJECT_SESSIONS_DIRNAME = "sessions"
-_MEMORY_SESSIONS_DIRNAME = "sessions"
 _MAX_CHAT_SESSION_MESSAGES = 200
 _MAX_CHAT_SESSIONS = 120
 _MAX_CHAT_SESSION_TAGS = 12
@@ -120,6 +123,9 @@ _CRITICAL_ADVANCED_KEYS = {
 }
 _UNSET = object()
 _SESSION_SLUG_MAX_LENGTH = 48
+_CHAT_SESSION_REPOSITORY = JsonChatSessionRepository(
+    lambda: settings.ARIS_MEMORY_DIR,
+)
 
 
 def _draft_fragment_hash(fragment: str) -> str:
@@ -338,45 +344,6 @@ def _managed_projects_root() -> Path:
     return root
 
 
-def _managed_memory_root() -> Path:
-    root = _resolve_filesystem_path(getattr(settings, "ARIS_MEMORY_DIR", ""))
-    if root is None:
-        root = Path.home() / ".aris" / "memories"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def _chat_sessions_storage_root() -> Path:
-    return _ensure_directory(_managed_memory_root() / _MEMORY_SESSIONS_DIRNAME)
-
-
-def _safe_session_storage_name(session_id: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(session_id or "").strip()).strip(".-")
-    return cleaned or uuid4().hex
-
-
-def _chat_session_file_path(session_id: str) -> Path:
-    return _chat_sessions_storage_root() / f"{_safe_session_storage_name(session_id)}.json"
-
-
-def _load_chat_session_file(session_id: str) -> dict[str, Any] | None:
-    target = _chat_session_file_path(session_id)
-    if not target.exists() or not target.is_file():
-        return None
-
-    try:
-        return json.loads(target.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        logger.warning(
-            log_event(
-                "aiida.chat_session.file_load_failed",
-                session_id=session_id,
-                path=str(target),
-            )
-        )
-        return None
-
-
 def _build_chat_session_storage_payload(session: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(session.get("id") or "").strip(),
@@ -420,33 +387,24 @@ def _build_chat_session_store_index(store: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _sync_chat_session_storage(store: dict[str, Any]) -> None:
-    sessions_root = _chat_sessions_storage_root()
-    active_ids: set[str] = set()
+def _save_chat_session_store(
+    repository: ChatSessionRepository,
+    memory: Any,
+    store: dict[str, Any],
+) -> None:
+    session_payloads: dict[str, dict[str, Any]] = {}
     for session in store.get("sessions", []):
         if not isinstance(session, dict):
             continue
         session_id = str(session.get("id") or "").strip()
         if not session_id:
             continue
-        active_ids.add(_safe_session_storage_name(session_id))
-        target = _chat_session_file_path(session_id)
-        payload = _build_chat_session_storage_payload(session)
-        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
-        if target.exists():
-            try:
-                if target.read_text(encoding="utf-8") == serialized:
-                    continue
-            except Exception:  # noqa: BLE001
-                pass
-        target.write_text(serialized, encoding="utf-8")
-
-    for child in sessions_root.glob("*.json"):
-        session_id = child.stem.strip()
-        if session_id and session_id in active_ids:
-            continue
-        with suppress(OSError):
-            child.unlink()
+        session_payloads[session_id] = _build_chat_session_storage_payload(session)
+    repository.save(
+        memory,
+        index_payload=_build_chat_session_store_index(store),
+        session_payloads=session_payloads,
+    )
 
 
 def _managed_project_root(project_id: str) -> Path:
@@ -1040,7 +998,11 @@ def _resolve_new_chat_session_project_id(
     return str(_get_store_project(store).get("id"))
 
 
-def _normalize_chat_session_store(raw_store: Any) -> dict[str, Any]:
+def _normalize_chat_session_store(
+    raw_store: Any,
+    *,
+    repository: ChatSessionRepository | None = None,
+) -> dict[str, Any]:
     if not isinstance(raw_store, dict):
         raw_store = {}
 
@@ -1069,7 +1031,7 @@ def _normalize_chat_session_store(raw_store: Any) -> dict[str, Any]:
         session_id = str(session_seed.get("id") or "").strip()
         merged_session = dict(session_seed)
         if session_id:
-            persisted_session = _load_chat_session_file(session_id)
+            persisted_session = (repository or _CHAT_SESSION_REPOSITORY).load_session(session_id)
             if isinstance(persisted_session, dict):
                 merged_session = {
                     **merged_session,
@@ -1137,24 +1099,17 @@ def _get_chat_session_store(state: Any) -> dict[str, Any]:
     if isinstance(store, dict):
         return store
 
-    raw_store: Any = None
     memory = getattr(state, "memory", None)
-    memory_getter = getattr(memory, "get_kv", None)
-    if callable(memory_getter):
-        raw_store = memory_getter(_CHAT_SESSIONS_KV_KEY)
-        if raw_store is None:
-            raw_store = memory_getter(_LEGACY_CHAT_SESSIONS_KV_KEY)
+    repository = getattr(state, "chat_session_repository", _CHAT_SESSION_REPOSITORY)
+    raw_store = repository.load_index(memory)
 
-    store = _normalize_chat_session_store(raw_store)
+    store = _normalize_chat_session_store(raw_store, repository=repository)
     state.chat_session_store = store
     state.chat_sessions_version = int(store["version"])
     state.chat_turn_seq = max(int(getattr(state, "chat_turn_seq", 0)), int(store["turn_seq"]))
     state.active_chat_session_id = store["active_session_id"]
     state.active_chat_project_id = store["active_project_id"]
-    _sync_chat_session_storage(store)
-    memory_setter = getattr(memory, "set_kv", None)
-    if callable(memory_setter):
-        memory_setter(_CHAT_SESSIONS_KV_KEY, _build_chat_session_store_index(store))
+    _save_chat_session_store(repository, memory, store)
     if not hasattr(state, "chat_version"):
         state.chat_version = 0
     return store
@@ -1167,12 +1122,9 @@ def _persist_chat_session_store(state: Any) -> None:
     state.chat_turn_seq = max(int(getattr(state, "chat_turn_seq", 0)), int(store["turn_seq"]))
     state.active_chat_session_id = store["active_session_id"]
     state.active_chat_project_id = store["active_project_id"]
-    _sync_chat_session_storage(store)
-
     memory = getattr(state, "memory", None)
-    memory_setter = getattr(memory, "set_kv", None)
-    if callable(memory_setter):
-        memory_setter(_CHAT_SESSIONS_KV_KEY, _build_chat_session_store_index(store))
+    repository = getattr(state, "chat_session_repository", _CHAT_SESSION_REPOSITORY)
+    _save_chat_session_store(repository, memory, store)
 
 
 def _touch_chat_sessions(state: Any) -> None:
