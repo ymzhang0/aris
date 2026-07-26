@@ -67,6 +67,12 @@ generation, context fingerprints, prompt construction, and lifecycle scheduling
 are deterministic rules. Provider calls, asynchronous task coordination,
 persistence, and workspace/group renaming remain in the chat service.
 
+Project filesystem behavior is owned by `ChatWorkspaceManager`. It defines the
+shared `codes/` and `data/` layout, validates file targets against path and
+symlink escapes, migrates empty legacy `sessions/<slug>` directories, and only
+removes an entire project root when that root is ARIS-managed. Chat sessions
+share their project root rather than creating a second nested workspace.
+
 ### Agent Runtime
 
 Application code calls an `AgentRuntime` protocol with an `AgentRunRequest`.

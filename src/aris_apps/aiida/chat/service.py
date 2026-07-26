@@ -5,7 +5,6 @@ import copy
 import hashlib
 import json
 import re
-import shutil
 import time
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -88,6 +87,7 @@ from src.aris_apps.aiida.chat.title_rules import (
     should_schedule_title_generation as _should_schedule_title_generation,
     slugify_session_name as _slugify_session_name,
 )
+from src.aris_apps.aiida.chat.workspace_manager import ChatWorkspaceManager
 from src.aris_apps.aiida.frontend_bridge import inspect_group, list_groups, rename_group
 from src.aris_apps.aiida.presenters.workflow_view import enrich_submission_draft_payload
 from src.aris_apps.aiida.domain.submissions import (
@@ -105,9 +105,6 @@ from src.aris_core.schema.approval import build_submission_approval_request
 _PENDING_SUBMISSION_KEY = "aiida_pending_submission"
 _SUBMISSION_DRAFT_PREFIX = "[SUBMISSION_DRAFT]"
 _DEFAULT_PROJECT_NAME = "Default Project"
-_PROJECT_CODES_DIRNAME = "codes"
-_PROJECT_DATA_DIRNAME = "data"
-_PROJECT_SESSIONS_DIRNAME = "sessions"
 _MAX_CHAT_SESSIONS = 120
 _KNOWN_PARALLEL_KEYS = {
     "num_machines",
@@ -132,6 +129,24 @@ _CRITICAL_ADVANCED_KEYS = {
 _UNSET = object()
 _CHAT_SESSION_REPOSITORY = JsonChatSessionRepository(
     lambda: settings.ARIS_MEMORY_DIR,
+)
+_CHAT_WORKSPACE_MANAGER = ChatWorkspaceManager(
+    lambda: settings.ARIS_PROJECTS_ROOT,
+)
+_managed_project_root = _CHAT_WORKSPACE_MANAGER.managed_project_root
+_project_root_path = _CHAT_WORKSPACE_MANAGER.project_root_path
+_project_sessions_root_path = _CHAT_WORKSPACE_MANAGER.project_sessions_root_path
+_get_session_slug = _CHAT_WORKSPACE_MANAGER.get_session_slug
+_session_workspace_path = _CHAT_WORKSPACE_MANAGER.session_workspace_path
+_cleanup_session_workspace_dir = _CHAT_WORKSPACE_MANAGER.cleanup_session_workspace_dir
+_cleanup_project_workspace_dir = _CHAT_WORKSPACE_MANAGER.cleanup_project_workspace_dir
+_normalize_project_root_path = _CHAT_WORKSPACE_MANAGER.normalize_project_root_path
+_validate_new_project_root_path = _CHAT_WORKSPACE_MANAGER.validate_new_project_root_path
+_project_default_environment_mode = (
+    _CHAT_WORKSPACE_MANAGER.project_default_environment_mode
+)
+_resolve_workspace_target_path = (
+    _CHAT_WORKSPACE_MANAGER.resolve_workspace_target_path
 )
 
 
@@ -198,19 +213,6 @@ def _normalize_group_label_segment(value: Any, *, fallback: str) -> str:
     return text or fallback
 
 
-def _get_session_slug(session: dict[str, Any]) -> str:
-    stored = str(session.get("session_slug") or "").strip()
-    if stored:
-        return stored
-    workspace_path = _resolve_filesystem_path(session.get("workspace_path"))
-    if workspace_path is not None:
-        workspace_name = workspace_path.name.strip()
-        if workspace_name:
-            return workspace_name
-    session_id = str(session.get("id") or "").strip()
-    return session_id or "session"
-
-
 def _resolve_unique_session_slug(
     store: dict[str, Any],
     project_id: str,
@@ -273,21 +275,6 @@ def _build_session_group_label(project_name: Any, session_name: Any) -> str:
     project_group_label = _build_project_group_label(project_name)
     session_segment = _normalize_group_label_segment(session_name, fallback="session")
     return f"{project_group_label}/{session_segment}"
-
-
-def _resolve_filesystem_path(path_value: Any) -> Path | None:
-    cleaned = str(path_value or "").strip()
-    if not cleaned:
-        return None
-    return Path(cleaned).expanduser().resolve()
-
-
-def _managed_projects_root() -> Path:
-    root = _resolve_filesystem_path(settings.ARIS_PROJECTS_ROOT)
-    if root is None:
-        root = Path.home() / ".aris" / "projects"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
 
 
 def _build_chat_session_storage_payload(session: dict[str, Any]) -> dict[str, Any]:
@@ -353,101 +340,6 @@ def _save_chat_session_store(
     )
 
 
-def _managed_project_root(project_id: str) -> Path:
-    return _managed_projects_root() / str(project_id).strip()
-
-
-def _project_root_path(project: dict[str, Any]) -> Path:
-    return _resolve_filesystem_path(project.get("root_path")) or _managed_project_root(str(project.get("id") or uuid4().hex))
-
-
-def _project_sessions_root_path(project: dict[str, Any]) -> Path:
-    return _project_root_path(project) / _PROJECT_SESSIONS_DIRNAME
-
-
-def _project_codes_root_path(project: dict[str, Any]) -> Path:
-    return _project_root_path(project) / _PROJECT_CODES_DIRNAME
-
-
-def _project_data_root_path(project: dict[str, Any]) -> Path:
-    return _project_root_path(project) / _PROJECT_DATA_DIRNAME
-
-
-def _session_workspace_path(session: dict[str, Any], project: dict[str, Any]) -> Path:
-    return _project_sessions_root_path(project) / _get_session_slug(session)
-
-
-def _cleanup_empty_legacy_sessions_root(project: dict[str, Any]) -> None:
-    sessions_root = _project_sessions_root_path(project)
-    with suppress(OSError):
-        if sessions_root.exists() and sessions_root.is_dir() and not any(sessions_root.iterdir()):
-            sessions_root.rmdir()
-
-
-def _is_path_within(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-        return True
-    except ValueError:
-        return False
-
-
-def _safe_rmtree(path: Path | None) -> None:
-    if path is None:
-        return
-    with suppress(FileNotFoundError):
-        shutil.rmtree(path, ignore_errors=True)
-
-
-def _cleanup_session_workspace_dir(session: dict[str, Any], project: dict[str, Any]) -> None:
-    sessions_root = _project_sessions_root_path(project)
-    candidates: list[Path] = [_session_workspace_path(session, project)]
-    explicit_workspace = _resolve_filesystem_path(session.get("workspace_path"))
-    if explicit_workspace is not None:
-        candidates.insert(0, explicit_workspace)
-
-    for candidate in candidates:
-        if not _is_path_within(candidate, sessions_root):
-            continue
-        _safe_rmtree(candidate)
-        break
-
-    with suppress(OSError):
-        if sessions_root.exists() and not any(sessions_root.iterdir()):
-            sessions_root.rmdir()
-
-
-def _cleanup_project_workspace_dir(project: dict[str, Any]) -> None:
-    sessions_root = _project_sessions_root_path(project)
-    _safe_rmtree(sessions_root)
-
-    root = _project_root_path(project)
-    managed_root = _managed_project_root(str(project.get("id") or ""))
-    if root == managed_root:
-        _safe_rmtree(root)
-
-
-def _normalize_project_root_path(path_value: Any, *, project_id: str) -> str:
-    resolved = _resolve_filesystem_path(path_value) or _managed_project_root(project_id)
-    if resolved.exists() and not resolved.is_dir():
-        resolved = _managed_project_root(project_id)
-    return str(resolved)
-
-
-def _validate_new_project_root_path(path_value: Any, *, project_id: str) -> str:
-    resolved = _resolve_filesystem_path(path_value)
-    if resolved is None:
-        resolved = _managed_project_root(project_id)
-    if resolved.exists() and not resolved.is_dir():
-        raise ValueError(f"Project root path points to a file: {resolved}")
-    return str(resolved)
-
-
-def _ensure_directory(path: Path) -> Path:
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
 def _build_default_chat_project(project_id: str | None = None) -> dict[str, Any]:
     now = _now_iso()
     resolved_project_id = str(project_id or uuid4().hex).strip() or uuid4().hex
@@ -458,21 +350,6 @@ def _build_default_chat_project(project_id: str | None = None) -> dict[str, Any]
         "created_at": now,
         "updated_at": now,
     }
-
-
-def _project_uses_managed_root(project: dict[str, Any]) -> bool:
-    project_id = str(project.get("id") or "").strip()
-    if not project_id:
-        return False
-    root = _project_root_path(project)
-    managed_root = _managed_project_root(project_id)
-    with suppress(OSError, RuntimeError, ValueError):
-        return root.resolve() == managed_root.resolve()
-    return str(root) == str(managed_root)
-
-
-def _project_default_environment_mode(project: dict[str, Any]) -> str:
-    return "worker-default" if _project_uses_managed_root(project) else "project-auto"
 
 
 def _normalize_chat_project_record(raw_project: Any) -> dict[str, Any] | None:
@@ -593,31 +470,12 @@ def _find_store_project(store: dict[str, Any], project_id: str) -> dict[str, Any
 
 
 def _ensure_project_workspace_dir(project: dict[str, Any]) -> Path:
-    root = _ensure_directory(_project_root_path(project))
-    project["root_path"] = str(root)
-    _ensure_directory(root / _PROJECT_CODES_DIRNAME)
-    _ensure_directory(root / _PROJECT_DATA_DIRNAME)
-    _cleanup_empty_legacy_sessions_root(project)
-    return root
+    return _CHAT_WORKSPACE_MANAGER.ensure_project_workspace_dir(project)
 
 
 def _ensure_session_workspace_dir(store: dict[str, Any], session: dict[str, Any]) -> str:
     project = _get_store_project(store, str(session.get("project_id") or ""))
-    project_root = _ensure_project_workspace_dir(project)
-    current_workspace = _resolve_filesystem_path(session.get("workspace_path"))
-    sessions_root = _project_sessions_root_path(project)
-    if (
-        current_workspace is not None
-        and current_workspace != project_root
-        and _is_path_within(current_workspace, sessions_root)
-    ):
-        with suppress(OSError):
-            if current_workspace.exists() and current_workspace.is_dir() and not any(current_workspace.iterdir()):
-                current_workspace.rmdir()
-        _cleanup_empty_legacy_sessions_root(project)
-    session["project_id"] = str(project["id"])
-    session["workspace_path"] = str(project_root)
-    return str(project_root)
+    return _CHAT_WORKSPACE_MANAGER.ensure_session_workspace_dir(project, session)
 
 
 def _ensure_store_workspace_dirs(store: dict[str, Any]) -> None:
@@ -1052,18 +910,6 @@ def _build_worker_workspace_headers(state: Any, session_id: str | None = None) -
         project_id=project.get("id"),
         python_path=snapshot.get("environment_python_path") or snapshot.get("environment_active_python_path"),
     )
-
-
-def _resolve_workspace_target_path(workspace_root: Path, relative_path: str | None = None) -> Path:
-    target = workspace_root
-    cleaned_relative = str(relative_path or "").strip().strip("/")
-    if cleaned_relative:
-        target = (workspace_root / cleaned_relative).resolve()
-        try:
-            target.relative_to(workspace_root)
-        except ValueError as exc:
-            raise ValueError("Workspace path escapes the session root") from exc
-    return target
 
 
 def list_chat_session_workspace_files(

@@ -26,11 +26,13 @@ from .service import (
     write_chat_project_file,
 )
 from .session_repository import ChatSessionRepository, JsonChatSessionRepository
+from .workspace_manager import ChatWorkspaceManager
 
 __all__ = [
     "activate_chat_session",
     "build_chat_project_worker_headers",
     "ChatSessionRepository",
+    "ChatWorkspaceManager",
     "cancel_chat_turn",
     "create_chat_project",
     "create_chat_session",
