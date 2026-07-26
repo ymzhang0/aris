@@ -563,6 +563,8 @@ type SidebarProps = {
   contextNodeIds: number[];
   selectedProcess: ProcessItem | null;
   isUpdatingProcessLimit: boolean;
+  canDeleteGroups: boolean;
+  canDeleteNodes: boolean;
   onSelectAllGroups: () => void;
   onSelectCurrentContext: () => void;
   onGroupChange: (groupLabel: string) => void;
@@ -594,6 +596,8 @@ export function Sidebar({
   contextNodeIds,
   selectedProcess,
   isUpdatingProcessLimit,
+  canDeleteGroups,
+  canDeleteNodes,
   onSelectAllGroups,
   onSelectCurrentContext,
   onGroupChange,
@@ -1026,7 +1030,7 @@ export function Sidebar({
 
   const submitDeleteGroups = useCallback(async (targetPks: number[]) => {
     const normalizedPks = [...new Set(targetPks.filter((pk) => Number.isFinite(pk) && pk > 0))];
-    if (normalizedPks.length === 0 || isDeletingGroups) {
+    if (normalizedPks.length === 0 || isDeletingGroups || !canDeleteGroups) {
       return;
     }
 
@@ -1057,7 +1061,7 @@ export function Sidebar({
     } finally {
       setIsDeletingGroups(false);
     }
-  }, [groups, isDeletingGroups, onDeleteGroups]);
+  }, [canDeleteGroups, groups, isDeletingGroups, onDeleteGroups]);
 
   const groupTree = useMemo(() => {
     const root: Record<string, any> = { children: {}, group: null, path: "", groupPks: [] };
@@ -1459,7 +1463,8 @@ export function Sidebar({
                             onClick={() => {
                               void submitDeleteGroups([...selectedGroupPks]);
                             }}
-                            disabled={isDeletingGroups}
+                            disabled={isDeletingGroups || !canDeleteGroups}
+                            title={!canDeleteGroups ? "Your current role cannot delete groups." : undefined}
                             className="rounded bg-rose-600 px-2 py-0.5 text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {isDeletingGroups ? "Deleting..." : "Delete Selected"}
@@ -1724,6 +1729,8 @@ export function Sidebar({
             <hr className="my-1 border-zinc-200 dark:border-zinc-800" />
             <button
               className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
+              disabled={!canDeleteNodes}
+              title={!canDeleteNodes ? "Your current role cannot delete nodes." : undefined}
               onClick={() => {
                 onSoftDeleteNode(contextMenuNode.pk);
                 setContextMenuNode(null);
@@ -1778,6 +1785,8 @@ export function Sidebar({
           {selectedGroupItems.length > 1 ? (
             <button
               className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
+              disabled={!canDeleteGroups}
+              title={!canDeleteGroups ? "Permission required" : undefined}
               onClick={() => {
                 void submitDeleteGroups(selectedGroupItems.map((group) => group.pk));
                 setContextMenuGroup(null);
@@ -1788,6 +1797,8 @@ export function Sidebar({
           ) : null}
           <button
             className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
+            disabled={!canDeleteGroups}
+            title={!canDeleteGroups ? "Permission required" : undefined}
             onClick={() => {
               void submitDeleteGroups([contextMenuGroup.pk]);
               setContextMenuGroup(null);

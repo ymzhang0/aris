@@ -127,6 +127,11 @@ computers, or codes. Unknown roles are denied mutations by default. A future
 login/session provider can replace the subject resolver without changing
 business routes or the Casbin policy adapter.
 
+The frontend bootstrap contains a versioned authorization snapshot with named
+permissions such as `submission.execute`, `chat.delete`, and `node.delete`.
+Controls use this snapshot to disable unavailable actions, while the API
+dependency remains the authoritative enforcement point.
+
 ## Environment boundaries
 
 The repository may become a monorepo, but runtime environments remain separate:

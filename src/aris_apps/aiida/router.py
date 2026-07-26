@@ -58,7 +58,7 @@ from .chat import (
     write_chat_project_file,
 )
 from .bridge_client import bridge_endpoint
-from .authorization import require_permission
+from .authorization import local_authorization_snapshot, require_permission
 from .capabilities import aiida_capability
 from .client import (
     BridgeAPIError,
@@ -1942,6 +1942,7 @@ async def frontend_bootstrap(request: Request):
         "models": available_models,
         "selected_model": selected_model,
         "quick_prompts": _get_quick_prompts(),
+        "authorization": local_authorization_snapshot().model_dump(mode="json"),
     }
 
 

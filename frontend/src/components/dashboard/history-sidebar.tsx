@@ -13,6 +13,7 @@ type HistorySidebarProps = {
   activeProjectId: string | null;
   activeSessionId: string | null;
   isBusy: boolean;
+  canDeleteItems: boolean;
   onActivateSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, title: string) => void;
   onCreateProject: (payload: { name: string; rootPath: string }) => void;
@@ -55,6 +56,7 @@ export function HistorySidebar({
   activeProjectId,
   activeSessionId,
   isBusy,
+  canDeleteItems,
   onActivateSession,
   onRenameSession,
   onCreateProject,
@@ -272,6 +274,9 @@ export function HistorySidebar({
   };
 
   const submitDeleteSelection = (projectIds: string[], sessionIds: string[]) => {
+    if (!canDeleteItems) {
+      return;
+    }
     onDeleteItems({ projectIds, sessionIds });
     setContextMenu(null);
   };
@@ -427,7 +432,8 @@ export function HistorySidebar({
                 <Button
                   className="h-8 rounded-none px-3"
                   onClick={() => submitDeleteSelection([...selectedProjectIds], [...selectedSessionIds])}
-                  disabled={isBusy || totalSelectedCount === 0}
+                  disabled={isBusy || totalSelectedCount === 0 || !canDeleteItems}
+                  title={!canDeleteItems ? "Your current role cannot delete projects or sessions." : undefined}
                 >
                   <Trash2 className="h-4 w-4" />
                   Delete Selected
@@ -737,6 +743,8 @@ export function HistorySidebar({
                   type="button"
                   className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/40"
                   onClick={() => submitDeleteSelection([contextMenuProject.id], [])}
+                  disabled={!canDeleteItems}
+                  title={!canDeleteItems ? "Permission required" : undefined}
                 >
                   <span>Delete Project</span>
                   <Trash2 className="h-4 w-4" />
@@ -760,6 +768,8 @@ export function HistorySidebar({
                   type="button"
                   className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/40"
                   onClick={() => submitDeleteSelection([], [contextMenuSession.id])}
+                  disabled={!canDeleteItems}
+                  title={!canDeleteItems ? "Permission required" : undefined}
                 >
                   <span>Delete Session</span>
                   <Trash2 className="h-4 w-4" />

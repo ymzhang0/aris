@@ -240,6 +240,13 @@ export type BootstrapResponse = {
   models: string[];
   selected_model: string;
   quick_prompts: Array<{ label: string; prompt: string }>;
+  authorization: {
+    protocol_version: "1";
+    subject: string;
+    roles: string[];
+    policy_provider: string;
+    permissions: Record<string, boolean>;
+  };
 };
 
 export type SpecializationAction = {

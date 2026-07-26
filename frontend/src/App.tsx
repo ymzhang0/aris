@@ -678,6 +678,12 @@ export default function App() {
     queryFn: getBootstrap,
     refetchOnWindowFocus: false,
   });
+  const authorizationPermissions = bootstrapQuery.data?.authorization?.permissions;
+  const canExecuteSubmissions = authorizationPermissions?.["submission.execute"] ?? true;
+  const canCancelSubmissions = authorizationPermissions?.["submission.cancel"] ?? true;
+  const canDeleteChatItems = authorizationPermissions?.["chat.delete"] ?? true;
+  const canDeleteGroups = authorizationPermissions?.["group.delete"] ?? true;
+  const canDeleteNodes = authorizationPermissions?.["node.delete"] ?? true;
 
   const chatSessionsQuery = useQuery({
     queryKey: ["chat-sessions"],
@@ -1958,6 +1964,8 @@ export default function App() {
                 contextNodeIds={contextNodeIds}
                 selectedProcess={activeProcess}
                 isUpdatingProcessLimit={pendingProcessLimit !== null}
+                canDeleteGroups={canDeleteGroups}
+                canDeleteNodes={canDeleteNodes}
                 onSelectAllGroups={handleSelectAllGroups}
                 onSelectCurrentContext={handleSelectCurrentContext}
                 onGroupChange={handleSelectArchiveGroup}
@@ -1989,6 +1997,7 @@ export default function App() {
                 activeProjectId={activeProjectId}
                 activeSessionId={activeChatSessionId}
                 isBusy={isChatBusy}
+                canDeleteItems={canDeleteChatItems}
                 onActivateSession={(sessionId) => {
                   void handleActivateChatSession(sessionId);
                 }}
@@ -2031,6 +2040,8 @@ export default function App() {
                 currentSessionName={activeChatSession?.title ?? null}
                 isLoading={isChatBusy}
                 activeTurnId={activeTurnId}
+                canExecuteSubmissions={canExecuteSubmissions}
+                canCancelSubmissions={canCancelSubmissions}
                 onNewConversation={() => {
                   void handleCreateChatSession();
                 }}
@@ -2076,14 +2087,16 @@ export default function App() {
         turnId={cloneTurnId}
         submissionDraft={cloneDraft}
         state={cloneModalState}
-        isBusy={isCloneDraftLoading || cloneModalState.status === "submitting"}
+        isBusy={isCloneDraftLoading || cloneModalState.status === "submitting" || !canExecuteSubmissions}
         onToggleExpanded={undefined}
         onClose={handleCloseCloneModal}
         onConfirm={(draftPayload) => {
           void handleConfirmCloneDraft(draftPayload);
         }}
         onCancel={() => {
-          void handleCancelCloneDraft();
+          if (canCancelSubmissions) {
+            void handleCancelCloneDraft();
+          }
         }}
         onOpenDetail={handleOpenDetail}
       />

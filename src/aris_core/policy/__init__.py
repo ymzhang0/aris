@@ -1,6 +1,7 @@
 from src.aris_core.policy.engine import (
     AuthorizationDecision,
     AuthorizationPolicy,
+    AuthorizationSnapshot,
     CasbinAuthorizationPolicy,
     PolicySubject,
 )
@@ -8,7 +9,7 @@ from src.aris_core.policy.engine import (
 __all__ = [
     "AuthorizationDecision",
     "AuthorizationPolicy",
+    "AuthorizationSnapshot",
     "CasbinAuthorizationPolicy",
     "PolicySubject",
 ]
-

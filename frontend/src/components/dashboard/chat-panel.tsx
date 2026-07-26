@@ -1489,6 +1489,8 @@ type ChatPanelProps = {
   projectTags?: string[];
   isLoading: boolean;
   activeTurnId: number | null;
+  canExecuteSubmissions: boolean;
+  canCancelSubmissions: boolean;
   onNewConversation: () => void;
   onSendMessage: (text: string, options?: { resourceAttachments?: ResourceAttachment[] }) => void;
   onStopResponse: () => void;
@@ -1726,6 +1728,8 @@ export function ChatPanel({
   projectTags = [],
   isLoading,
   activeTurnId,
+  canExecuteSubmissions,
+  canCancelSubmissions,
   onNewConversation,
   onSendMessage,
   onStopResponse,
@@ -2429,6 +2433,9 @@ export function ChatPanel({
 
   const handleConfirmPreview = useCallback(
     async (turnId: number, preview: SubmissionDraftPreview, draftPayload?: SubmissionSubmitDraft) => {
+      if (!canExecuteSubmissions) {
+        return;
+      }
       const currentStatus = previewStateByTurnRef.current[turnId]?.status ?? "idle";
       if (currentStatus !== "idle") {
         return;
@@ -2499,10 +2506,13 @@ export function ChatPanel({
         }));
       }
     },
-    [queryClient],
+    [canExecuteSubmissions, queryClient],
   );
 
   const handleCancelPreview = useCallback(async (turnId: number) => {
+    if (!canCancelSubmissions) {
+      return;
+    }
     const currentStatus = previewStateByTurnRef.current[turnId]?.status ?? "idle";
     if (currentStatus !== "idle") {
       return;
@@ -2530,7 +2540,7 @@ export function ChatPanel({
     } catch (error) {
       console.error("Failed to clear pending submission", error);
     }
-  }, []);
+  }, [canCancelSubmissions]);
 
   const handleReaskMessage = useCallback(
     (text: string, contextFromMessage: FocusNode[]) => {
@@ -3053,7 +3063,7 @@ export function ChatPanel({
                               turnId={turn.turnId}
                               submissionDraft={submissionDraft.submissionDraft}
                               state={previewState}
-                              isBusy={isLoading}
+                              isBusy={isLoading || !canExecuteSubmissions}
                               onClose={() => { }}
                               onConfirm={(draftPayload) => {
                                 void handleConfirmPreview(turn.turnId, submissionDraft, draftPayload);

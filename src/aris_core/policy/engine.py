@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 import casbin
 from pydantic import BaseModel, Field
@@ -21,6 +21,14 @@ class AuthorizationDecision(BaseModel):
     action: str
     allowed: bool
     policy_provider: str
+
+
+class AuthorizationSnapshot(BaseModel):
+    protocol_version: Literal["1"] = "1"
+    subject: str
+    roles: tuple[str, ...]
+    policy_provider: str
+    permissions: dict[str, bool]
 
 
 class AuthorizationPolicy(Protocol):

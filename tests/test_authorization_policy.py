@@ -60,6 +60,24 @@ def test_viewer_is_denied_mutating_actions_by_default() -> None:
     assert decision.allowed is False
 
 
+def test_local_authorization_snapshot_exposes_named_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        authorization_adapter,
+        "local_policy_subject",
+        lambda: PolicySubject(identifier="operator-1", roles=("operator",)),
+    )
+
+    snapshot = authorization_adapter.local_authorization_snapshot()
+
+    assert snapshot.protocol_version == "1"
+    assert snapshot.subject == "operator-1"
+    assert snapshot.roles == ("role:operator",)
+    assert snapshot.permissions["submission.execute"] is True
+    assert snapshot.permissions["infrastructure.configure"] is False
+
+
 @pytest.mark.anyio
 async def test_fastapi_adapter_returns_structured_forbidden_response(
     monkeypatch: pytest.MonkeyPatch,
@@ -96,4 +114,3 @@ async def test_fastapi_adapter_returns_structured_forbidden_response(
         "resource": "/aris/submissions/current",
         "action": "execute",
     }
-
