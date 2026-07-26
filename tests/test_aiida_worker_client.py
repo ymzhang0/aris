@@ -10,17 +10,15 @@ from src.aris_apps.aiida.client import (
     _merge_request_headers,
     aiida_worker_client,
     build_bridge_context_headers,
-    bridge_service,
     get_aiida_worker_client,
 )
 
 
-def test_worker_client_singleton_aliases_are_stable() -> None:
+def test_worker_client_singleton_is_stable() -> None:
     first = get_aiida_worker_client()
     second = get_aiida_worker_client()
     assert first is second
     assert aiida_worker_client is first
-    assert bridge_service is first
 
 
 def test_build_bridge_context_headers_emits_canonical_headers() -> None:
@@ -98,7 +96,9 @@ async def test_inspect_infrastructure_uses_cache(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.anyio
-async def test_get_status_uses_plugin_probe_when_status_payload_has_no_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_status_does_not_probe_alternate_plugin_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = AiiDAWorkerClient(bridge_url="http://127.0.0.1:8001")
     calls: list[str] = []
 
@@ -111,8 +111,6 @@ async def test_get_status_uses_plugin_probe_when_status_payload_has_no_plugins(m
                 "mode": "core-injected-executor",
                 "environment": "Remote Bridge",
             }
-        if path == "/plugins":
-            return ["core.arithmetic.add"]
         raise AssertionError(f"Unexpected path: {path}")
 
     monkeypatch.setattr(client, "_fetch_json", _fake_fetch_json)  # type: ignore[method-assign]
@@ -120,8 +118,8 @@ async def test_get_status_uses_plugin_probe_when_status_payload_has_no_plugins(m
     snapshot = await client.get_status(force_refresh=True)
 
     assert snapshot.mode == "core-injected-executor"
-    assert snapshot.plugins == ["core.arithmetic.add"]
-    assert calls == ["/status", "/plugins"]
+    assert snapshot.plugins == []
+    assert calls == ["/status"]
 
 
 @pytest.mark.anyio
@@ -155,7 +153,7 @@ def test_environment_inspect_path_is_not_cached_as_unsupported() -> None:
     assert client._is_path_known_unsupported("/management/environments/inspect") is False  # noqa: SLF001
 
 
-def test_known_legacy_unsupported_prefix_is_cached() -> None:
+def test_known_unsupported_prefix_is_cached() -> None:
     client = AiiDAWorkerClient(bridge_url="http://127.0.0.1:8001")
 
     client._remember_unsupported_path("/management/profiles", 404)  # noqa: SLF001

@@ -23,7 +23,6 @@ config.json
 
 # --- 运行日志与临时文件 ---
 *.log
-.nicegui/
 temp_script_*.py
 
 # --- IDE 相关 ---
@@ -46,23 +45,10 @@ __pycache__/
 # 如果有自动生成的文档
 site/
 
-# Runtime memory snapshots (do not track)
-engines/aiida/data/memories/history_sabr_v2_global.json
-runtime/memories/*
-!runtime/memories/.gitkeep
-runtime/projects/*
-!runtime/projects/.gitkeep
-runtime/uploads/*
-!runtime/uploads/.gitkeep
-runtime/cache/*
-!runtime/cache/.gitkeep
-runtime/scripts/*
-!runtime/scripts/.gitkeep
 desktop/macos/build/
 
 # --- Node.js / Frontend ---
 node_modules/
 frontend/node_modules/
-apps/web/node_modules/
 *.tsbuildinfo
 dist/

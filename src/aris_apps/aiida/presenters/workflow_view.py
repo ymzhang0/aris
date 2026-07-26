@@ -694,36 +694,6 @@ def _build_validation_summary(
     }
 
 
-def _coerce_validation_payload(validation_result: Any, *, entry_point: str) -> dict[str, Any]:
-    if validation_result is None:
-        return {
-            "status": "VALIDATION_OK",
-            "is_valid": True,
-            "errors": [],
-            "warnings": [],
-            "source": "spec.validate",
-            "entry_point": entry_point,
-        }
-
-    if isinstance(validation_result, dict):
-        payload = dict(validation_result)
-        payload.setdefault("status", "VALIDATION_FAILED")
-        payload.setdefault("is_valid", False)
-        payload.setdefault("source", "spec.validate")
-        payload.setdefault("entry_point", entry_point)
-        return payload
-
-    message = str(validation_result).strip() or "Builder inputs failed schema validation."
-    return {
-        "status": "VALIDATION_FAILED",
-        "is_valid": False,
-        "errors": [message],
-        "warnings": [],
-        "source": "spec.validate",
-        "entry_point": entry_point,
-    }
-
-
 def _extract_candidate_entry_points(payload: dict[str, Any]) -> list[str]:
     meta = _as_dict(payload.get("meta")) or {}
     entry_points: list[str] = []
@@ -838,122 +808,7 @@ def _resolve_required_code_plugin(
     return None
 
 
-def _is_namespace_port(port: Any) -> bool:
-    if port is None:
-        return False
-    items = getattr(port, "items", None)
-    if not callable(items):
-        return False
-    class_name = _normalize_key(getattr(type(port), "__name__", ""))
-    if "namespace" in class_name:
-        return True
-    return getattr(port, "valid_type", None) is None
-
-
-def _extract_valid_types(port: Any) -> tuple[type[Any], ...]:
-    valid_type = getattr(port, "valid_type", None)
-    if valid_type is None:
-        return ()
-    if isinstance(valid_type, tuple):
-        return tuple(entry for entry in valid_type if isinstance(entry, type))
-    if isinstance(valid_type, type):
-        return (valid_type,)
-    return ()
-
-
-def _is_code_valid_type(valid_type: type[Any]) -> bool:
-    try:
-        from aiida import orm
-    except Exception:
-        return False
-
-    with suppress(Exception):
-        if issubclass(valid_type, orm.Code):
-            return True
-    abstract_code = getattr(orm, "AbstractCode", None)
-    if isinstance(abstract_code, type):
-        with suppress(Exception):
-            if issubclass(valid_type, abstract_code):
-                return True
-    type_name = _normalize_key(getattr(valid_type, "__name__", ""))
-    return type_name.endswith("code")
-
-
-def _load_workflow_port_spec(entry_points: list[str]) -> dict[str, Any] | None:
-    if not entry_points:
-        return None
-    candidates = _expand_entry_point_candidates(entry_points)
-    if not candidates:
-        return None
-
-    try:
-        from aiida.plugins import WorkflowFactory
-    except Exception:
-        return None
-
-    for entry_point in candidates:
-        try:
-            wc_class = WorkflowFactory(entry_point)
-            spec = wc_class.spec()
-            inputs = getattr(spec, "inputs", None)
-        except Exception:
-            continue
-
-        if inputs is None:
-            continue
-
-        namespace_paths: set[str] = set()
-        ports: list[dict[str, Any]] = []
-        code_paths: set[str] = set()
-
-        def walk(namespace: Any, prefix: str = "") -> None:
-            items = getattr(namespace, "items", None)
-            if not callable(items):
-                return
-            try:
-                port_items = list(items())
-            except Exception:
-                return
-
-            for key, port in port_items:
-                key_text = str(key).strip()
-                if not key_text:
-                    continue
-                path = f"{prefix}.{key_text}" if prefix else key_text
-                if _is_namespace_port(port):
-                    namespace_paths.add(path)
-                    walk(port, path)
-                    continue
-
-                valid_types = _extract_valid_types(port)
-                is_code_port = key_text.lower() == "code" or any(
-                    _is_code_valid_type(valid_type) for valid_type in valid_types
-                )
-                if is_code_port:
-                    code_paths.add(path)
-                ports.append(
-                    {
-                        "path": path,
-                        "kind": "code" if is_code_port else "port",
-                        "required": bool(getattr(port, "required", False)),
-                        "valid_types": [
-                            f"{valid_type.__module__}.{valid_type.__name__}" for valid_type in valid_types
-                        ],
-                    }
-                )
-
-        walk(inputs)
-
-        return {
-            "entry_point": entry_point,
-            "namespaces": sorted(namespace_paths),
-            "ports": sorted(ports, key=lambda item: str(item.get("path") or "")),
-            "code_paths": sorted(code_paths),
-        }
-    return None
-
-
-def _build_fallback_port_spec(entry_points: list[str], inputs: dict[str, Any]) -> dict[str, Any] | None:
+def _build_port_spec_from_inputs(entry_points: list[str], inputs: dict[str, Any]) -> dict[str, Any] | None:
     flattened = _flatten_input_ports(inputs)
     namespace_paths: set[str] = set()
     code_paths: set[str] = set()
@@ -990,68 +845,6 @@ def _build_fallback_port_spec(entry_points: list[str], inputs: dict[str, Any]) -
     }
 
 
-def _merge_port_specs(
-    primary: dict[str, Any] | None,
-    fallback: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if not isinstance(primary, dict) and not isinstance(fallback, dict):
-        return None
-    if not isinstance(primary, dict):
-        return dict(fallback or {})
-    if not isinstance(fallback, dict):
-        return dict(primary)
-
-    merged = dict(primary)
-    namespaces = set()
-    for source in (primary.get("namespaces"), fallback.get("namespaces")):
-        if isinstance(source, list):
-            for item in source:
-                if isinstance(item, str) and item.strip():
-                    namespaces.add(item.strip())
-    merged["namespaces"] = sorted(namespaces)
-
-    code_paths = set()
-    for source in (primary.get("code_paths"), fallback.get("code_paths")):
-        if isinstance(source, list):
-            for item in source:
-                if isinstance(item, str) and item.strip():
-                    code_paths.add(item.strip())
-    merged["code_paths"] = sorted(code_paths)
-
-    ports_by_path: dict[str, dict[str, Any]] = {}
-    for source in (fallback.get("ports"), primary.get("ports")):
-        if not isinstance(source, list):
-            continue
-        for port in source:
-            if not isinstance(port, dict):
-                continue
-            path = str(port.get("path") or "").strip()
-            if not path:
-                continue
-            existing = ports_by_path.get(path) or {}
-            merged_port = dict(existing)
-            merged_port.update(port)
-            ports_by_path[path] = merged_port
-    merged["ports"] = [ports_by_path[path] for path in sorted(ports_by_path)]
-    return merged
-
-
-def _extract_code_plugin(code: Any) -> str | None:
-    plugin = getattr(code, "default_calc_job_plugin", None)
-    if isinstance(plugin, str) and plugin.strip():
-        return plugin.strip()
-
-    attributes = getattr(getattr(code, "base", None), "attributes", None)
-    if attributes is None or not hasattr(attributes, "get"):
-        return None
-    for key in ("default_calc_job_plugin", "input_plugin"):
-        with suppress(Exception):
-            candidate = attributes.get(key)
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
-    return None
-
-
 def _is_plugin_compatible(plugin: str | None, required_plugin: str | None) -> bool:
     if not required_plugin:
         return False
@@ -1081,39 +874,14 @@ def _sort_available_codes(
     return sorted(items, key=sort_key)
 
 
-def _merge_available_code_entries(*collections: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged_by_value: dict[str, dict[str, Any]] = {}
-    for collection in collections:
-        for item in collection:
-            value = str(item.get("value") or "").strip()
-            if not value:
-                continue
-            existing = merged_by_value.get(value)
-            if existing is None:
-                merged_by_value[value] = dict(item)
-                continue
-            combined = dict(existing)
-            combined.update(item)
-            if not combined.get("label"):
-                combined["label"] = value
-            if combined.get("plugin") is None and existing.get("plugin"):
-                combined["plugin"] = existing.get("plugin")
-            if combined.get("pk") is None and existing.get("pk") is not None:
-                combined["pk"] = existing.get("pk")
-            if combined.get("is_compatible") is not True and existing.get("is_compatible") is True:
-                combined["is_compatible"] = True
-            merged_by_value[value] = combined
-    return list(merged_by_value.values())
-
-
-def _query_available_codes_from_bridge(required_plugin: str | None) -> list[dict[str, Any]]:
+def _query_available_codes(required_plugin: str | None) -> list[dict[str, Any]]:
     try:
-        from src.aris_apps.aiida.client import bridge_service
+        from src.aris_apps.aiida.client import aiida_worker_client
     except Exception:
         return []
 
     try:
-        payload = bridge_service.request_json_sync("GET", "/resources", timeout=0.8, retries=0)
+        payload = aiida_worker_client.request_json_sync("GET", "/resources", timeout=0.8, retries=0)
     except Exception:
         return []
     if not isinstance(payload, dict):
@@ -1187,97 +955,6 @@ def _query_available_codes_from_bridge(required_plugin: str | None) -> list[dict
     return _sort_available_codes(available_codes, required_plugin)
 
 
-def _query_available_codes(required_plugin: str | None) -> list[dict[str, Any]]:
-    bridge_codes = _query_available_codes_from_bridge(required_plugin)
-
-    try:
-        from aiida import orm
-    except Exception:
-        return bridge_codes
-
-    codes_raw: list[Any] = []
-    all_codes_raw: list[Any] = []
-
-    def query_codes(filters: dict[str, Any] | None) -> list[Any]:
-        code_class = getattr(orm, "AbstractCode", orm.Code)
-        qb = orm.QueryBuilder()
-        append_kwargs: dict[str, Any] = {"tag": "code"}
-        if isinstance(filters, dict):
-            append_kwargs["filters"] = filters
-        try:
-            qb.append(code_class, **append_kwargs)
-        except Exception:
-            qb = orm.QueryBuilder()
-            qb.append(orm.Code, **append_kwargs)
-        with suppress(Exception):
-            qb.order_by({code_class: {"id": "asc"}})
-        return qb.all(flat=True)
-
-    if required_plugin:
-        plugin_filters = {
-            "or": [
-                {"attributes.input_plugin": {"==": required_plugin}},
-                {"attributes.default_calc_job_plugin": {"==": required_plugin}},
-            ]
-        }
-        try:
-            codes_raw = query_codes(plugin_filters)
-        except Exception:
-            codes_raw = []
-
-    try:
-        all_codes_raw = query_codes(None)
-    except Exception:
-        all_codes_raw = []
-    if not all_codes_raw:
-        all_codes_raw = codes_raw
-    if not all_codes_raw:
-        return bridge_codes
-
-    local_codes: list[dict[str, Any]] = []
-    seen_values: set[str] = set()
-    for code in all_codes_raw:
-        label = str(getattr(code, "label", "") or "").strip()
-        if not label:
-            continue
-
-        computer_label: str | None = None
-        computer = getattr(code, "computer", None)
-        if computer is not None:
-            candidate = str(getattr(computer, "label", "") or "").strip()
-            if candidate:
-                computer_label = candidate
-
-        plugin = _extract_code_plugin(code)
-        is_compatible = _is_plugin_compatible(plugin, required_plugin)
-
-        value = f"{label}@{computer_label}" if computer_label else label
-        if value in seen_values:
-            continue
-        seen_values.add(value)
-
-        pk: int | None = None
-        with suppress(Exception):
-            pk = int(getattr(code, "pk"))
-
-        local_codes.append(
-            {
-                "value": value,
-                "label": value,
-                "code_label": label,
-                "computer_label": computer_label,
-                "plugin": plugin,
-                "pk": pk,
-                "is_compatible": is_compatible,
-            }
-        )
-
-    merged_codes = _merge_available_code_entries(bridge_codes, local_codes)
-    if merged_codes:
-        return _sort_available_codes(merged_codes, required_plugin)
-    return []
-
-
 def _collect_available_codes_from_inputs(
     inputs: dict[str, Any],
     required_plugin: str | None,
@@ -1347,29 +1024,6 @@ def _collect_available_codes_from_inputs(
     return available_codes
 
 
-def _validate_builder_inputs(
-    payload: dict[str, Any],
-    inputs: dict[str, Any],
-) -> dict[str, Any] | None:
-    entry_points = _expand_entry_point_candidates(_extract_candidate_entry_points(payload))
-    if not entry_points:
-        return None
-
-    try:
-        from aiida.plugins import WorkflowFactory
-    except Exception:
-        return None
-
-    for entry_point in entry_points:
-        try:
-            wc_class = WorkflowFactory(entry_point)
-            validation_result = wc_class.spec().validate(inputs)
-            return _coerce_validation_payload(validation_result, entry_point=entry_point)
-        except Exception:
-            continue
-    return None
-
-
 def enrich_submission_draft_payload(submission_draft: dict[str, Any]) -> dict[str, Any]:
     payload = dict(submission_draft)
     
@@ -1386,10 +1040,6 @@ def enrich_submission_draft_payload(submission_draft: dict[str, Any]) -> dict[st
         existing_input_groups = meta_input_groups if isinstance(meta_input_groups, list) else None
     
     validation = _as_dict(meta.get("validation"))
-    if validation is None:
-        validation = _validate_builder_inputs(payload, inputs)
-        if isinstance(validation, dict):
-            meta["validation"] = validation
             
     builder_inputs: dict[str, Any] | None = None
     if isinstance(validation, dict) and isinstance(validation.get("builder_inputs"), dict):
@@ -1422,9 +1072,7 @@ def enrich_submission_draft_payload(submission_draft: dict[str, Any]) -> dict[st
         meta["input_groups"] = payload["input_groups"]
 
     entry_points = _expand_entry_point_candidates(_extract_candidate_entry_points(payload))
-    port_spec = _load_workflow_port_spec(entry_points)
-    fallback_port_spec = _build_fallback_port_spec(entry_points, inputs)
-    port_spec = _merge_port_specs(port_spec, fallback_port_spec)
+    port_spec = _build_port_spec_from_inputs(entry_points, inputs)
     if isinstance(port_spec, dict):
         meta["port_spec"] = port_spec
         if isinstance(port_spec.get("entry_point"), str):
@@ -1444,12 +1092,6 @@ def enrich_submission_draft_payload(submission_draft: dict[str, Any]) -> dict[st
         meta.setdefault("symmetry", first.get("symmetry"))
         meta.setdefault("num_atoms", first.get("num_atoms"))
         meta.setdefault("estimated_runtime", first.get("estimated_runtime"))
-
-    validation = _as_dict(meta.get("validation"))
-    if validation is None:
-        validation = _validate_builder_inputs(payload, inputs)
-        if isinstance(validation, dict):
-            meta["validation"] = validation
 
     validation_summary = _build_validation_summary(
         validation if isinstance(validation, dict) else None,

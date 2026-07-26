@@ -22,7 +22,6 @@ from src.aris_core.config import settings
 from src.aris_core.config.runtime import (
     bootstrap_home_config,
     collect_reload_excludes,
-    migrate_runtime_layout,
 )
 from src.aris_core.memory import JSONMemory
 from src.aris_core.plugins import iter_enabled_app_manifests
@@ -34,17 +33,6 @@ ACTIVE_HUBS = []
 DEFAULT_ENGINE = "aiida"
 APP_MANIFESTS = iter_enabled_app_manifests()
 APP_MANIFESTS_BY_NAME = {manifest.name: manifest for manifest in APP_MANIFESTS}
-
-
-def _get_compat_env_value(*env_names: str, default: str | None = None) -> str | None:
-    for env_name in env_names:
-        value = os.getenv(env_name)
-        if value is None:
-            continue
-        cleaned = str(value).strip()
-        if cleaned:
-            return cleaned
-    return default
 
 
 def _configure_proxy_environment() -> None:
@@ -115,15 +103,6 @@ async def lifespan(app: FastAPI):
             )
         )
 
-    migrated_runtime_entries = migrate_runtime_layout(settings)
-    if migrated_runtime_entries:
-        logger.info(
-            log_event(
-                "runtime.layout.migrated",
-                count=len(migrated_runtime_entries),
-            )
-        )
-    
     # Initialize Global Memory
     memory = JSONMemory(
         namespace="aris_v2_global",
@@ -138,14 +117,13 @@ async def lifespan(app: FastAPI):
         engine_manifest = _get_engine_manifest(engine_name)
         agent_module = importlib.import_module(engine_manifest.agent_module)
         agent = getattr(agent_module, f"{engine_name}_researcher")
-        state["agent"] = agent
-        app.state.agent = agent
 
         runtime_factory = getattr(agent_module, "build_agent_runtime", None)
-        if callable(runtime_factory):
-            agent_runtime = runtime_factory(agent)
-            state["agent_runtime"] = agent_runtime
-            app.state.agent_runtime = agent_runtime
+        if not callable(runtime_factory):
+            raise RuntimeError(f"Engine '{engine_name}' does not provide an agent runtime")
+        agent_runtime = runtime_factory(agent)
+        state["agent_runtime"] = agent_runtime
+        app.state.agent_runtime = agent_runtime
         
         deps_module = importlib.import_module(engine_manifest.deps_module)
         configured_deps_class = (settings.DEPS_CLASS or "").strip()
@@ -160,7 +138,7 @@ async def lifespan(app: FastAPI):
         logger.info(
             log_event(
                 "engine.agent.online",
-                runtime=type(getattr(app.state, "agent_runtime", agent)).__name__,
+                runtime=type(agent_runtime).__name__,
             )
         )
 
@@ -277,11 +255,7 @@ if __name__ == "__main__":
     parser.add_argument("--reload", action="store_true")
     parser.add_argument(
         "--log-level",
-        default=_get_compat_env_value(
-            "ARIS_LOG_LEVEL",
-            "ARIS_DEBUG_LEVEL",
-            default="INFO",
-        ),
+        default=os.getenv("ARIS_LOG_LEVEL", "INFO"),
         choices=["TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"],
     )
     args = parser.parse_args()

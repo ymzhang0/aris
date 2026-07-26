@@ -9,8 +9,6 @@ src/aris_apps/aiida/
 ├── chat/             # Chat session orchestration and workspace state
 ├── presenters/       # Frontend-facing payload shaping
 ├── client.py         # Canonical worker client facade
-├── bridge_client.py  # Low-level HTTP request helpers
-├── bridge_service.py # Bridge snapshot/status service
 ├── service.py        # Service facade for hub/frontend helpers
 ├── frontend_bridge.py
 ├── hub.py

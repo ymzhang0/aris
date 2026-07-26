@@ -363,7 +363,7 @@ def setup_logging(default_level: str = "INFO") -> str:
     - ARIS_HTTPX_LOG_LEVEL: level for httpx/httpcore logs.
     """
     global_level = _normalize_level(
-        _get_env_value("ARIS_LOG_LEVEL", "ARIS_DEBUG_LEVEL"),
+        _get_env_value("ARIS_LOG_LEVEL"),
         fallback=_normalize_level(default_level),
     )
     access_level = _normalize_level(

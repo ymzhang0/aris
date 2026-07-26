@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import hashlib
 import json
 import re
 import time
@@ -15,13 +14,6 @@ from uuid import uuid4
 
 from loguru import logger
 
-from src.aris_apps.aiida.agent.runtime import (
-    _build_agent_model,
-    _build_model_settings,
-    _get_model_unavailable_retry_policy,
-    _is_retryable_model_unavailable_error,
-    _to_agent_model_name,
-)
 from src.aris_apps.aiida.client import (
     build_bridge_context_headers,
     reset_bridge_call_listener,
@@ -66,7 +58,6 @@ from src.aris_apps.aiida.chat.session_models import (
 )
 from src.aris_apps.aiida.chat.session_repository import (
     CHAT_SESSIONS_KV_KEY as _CHAT_SESSIONS_KV_KEY,
-    LEGACY_CHAT_SESSIONS_KV_KEY as _LEGACY_CHAT_SESSIONS_KV_KEY,
     ChatSessionRepository,
     JsonChatSessionRepository,
 )
@@ -85,7 +76,6 @@ from src.aris_apps.aiida.chat.title_rules import (
     derive_chat_session_title as _derive_chat_session_title,
     extract_first_session_message_text as _extract_first_session_message_text,
     extract_latest_session_message_text as _extract_latest_session_message_text,
-    looks_like_session_identifier_title as _looks_like_session_identifier_title,
     normalize_session_title as _normalize_session_title,
     normalize_title_state as _normalize_title_state,
     sanitize_generated_title as _sanitize_generated_title,
@@ -108,7 +98,6 @@ from src.aris_core.logging import log_event
 from src.aris_core.schema.approval import build_submission_approval_request
 
 _PENDING_SUBMISSION_KEY = "aiida_pending_submission"
-_SUBMISSION_DRAFT_PREFIX = "[SUBMISSION_DRAFT]"
 _DEFAULT_PROJECT_NAME = "Default Project"
 _MAX_CHAT_SESSIONS = 120
 _KNOWN_PARALLEL_KEYS = {
@@ -141,10 +130,7 @@ _CHAT_WORKSPACE_MANAGER = ChatWorkspaceManager(
 _CHAT_GROUP_GATEWAY: ChatGroupGateway = FrontendBridgeGroupGateway()
 _managed_project_root = _CHAT_WORKSPACE_MANAGER.managed_project_root
 _project_root_path = _CHAT_WORKSPACE_MANAGER.project_root_path
-_project_sessions_root_path = _CHAT_WORKSPACE_MANAGER.project_sessions_root_path
 _get_session_slug = _CHAT_WORKSPACE_MANAGER.get_session_slug
-_session_workspace_path = _CHAT_WORKSPACE_MANAGER.session_workspace_path
-_cleanup_session_workspace_dir = _CHAT_WORKSPACE_MANAGER.cleanup_session_workspace_dir
 _cleanup_project_workspace_dir = _CHAT_WORKSPACE_MANAGER.cleanup_project_workspace_dir
 _normalize_project_root_path = _CHAT_WORKSPACE_MANAGER.normalize_project_root_path
 _validate_new_project_root_path = _CHAT_WORKSPACE_MANAGER.validate_new_project_root_path
@@ -154,10 +140,6 @@ _project_default_environment_mode = (
 _resolve_workspace_target_path = (
     _CHAT_WORKSPACE_MANAGER.resolve_workspace_target_path
 )
-
-
-def _draft_fragment_hash(fragment: str) -> str:
-    return hashlib.sha1(fragment.encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
 def _now_iso() -> str:
@@ -384,11 +366,8 @@ def _normalize_chat_session_record(
     created_at = str(raw_session.get("created_at") or _now_iso())
     updated_at = str(raw_session.get("updated_at") or created_at)
     raw_title = _trim_text(raw_session.get("title") or _DEFAULT_SESSION_TITLE, limit=80) or _DEFAULT_SESSION_TITLE
-    is_legacy_identifier_title = _looks_like_session_identifier_title(raw_title, session_id)
-    title = _DEFAULT_SESSION_TITLE if is_legacy_identifier_title else _normalize_session_title(raw_title)
-    auto_title = True if is_legacy_identifier_title else bool(
-        raw_session.get("auto_title", title == _DEFAULT_SESSION_TITLE)
-    )
+    title = _normalize_session_title(raw_title)
+    auto_title = bool(raw_session.get("auto_title", title == _DEFAULT_SESSION_TITLE))
     project_id = str(raw_session.get("project_id") or "").strip()
     if project_id not in known_project_ids:
         project_id = default_project_id
@@ -401,16 +380,8 @@ def _normalize_chat_session_record(
         title_generation_count = max(0, int(raw_session.get("title_generation_count") or 0))
     except (TypeError, ValueError):
         title_generation_count = 0
-    if is_legacy_identifier_title:
-        title_last_generated_turn = 0
-        title_generation_count = 0
-
     workspace_path = str(raw_session.get("workspace_path") or "").strip() or None
     session_slug = str(raw_session.get("session_slug") or "").strip()
-    if not session_slug and workspace_path:
-        workspace_candidate = Path(workspace_path)
-        if workspace_candidate.parent.name == _PROJECT_SESSIONS_DIRNAME:
-            session_slug = workspace_candidate.name.strip()
     if not session_slug:
         title_slug = _slugify_session_name(title, fallback="")
         session_slug = title_slug or session_id
@@ -421,11 +392,11 @@ def _normalize_chat_session_record(
         "title": title,
         "session_slug": session_slug,
         "auto_title": auto_title,
-        "title_state": _TITLE_STATE_IDLE if is_legacy_identifier_title else _normalize_title_state(raw_session.get("title_state")),
+        "title_state": _normalize_title_state(raw_session.get("title_state")),
         "title_first_intent": str(raw_session.get("title_first_intent") or "").strip() or None,
         "title_last_generated_turn": title_last_generated_turn,
         "title_generation_count": title_generation_count,
-        "title_last_context_key": None if is_legacy_identifier_title else (str(raw_session.get("title_last_context_key") or "").strip() or None),
+        "title_last_context_key": str(raw_session.get("title_last_context_key") or "").strip() or None,
         "is_archived": bool(raw_session.get("is_archived", False)),
         "created_at": created_at,
         "updated_at": updated_at,
@@ -542,6 +513,7 @@ def _normalize_chat_session_store(
         session_seed = raw_session if isinstance(raw_session, dict) else {}
         session_id = str(session_seed.get("id") or "").strip()
         merged_session = dict(session_seed)
+        merged_session.pop("messages", None)
         if session_id:
             persisted_session = (repository or _CHAT_SESSION_REPOSITORY).load_session(session_id)
             if isinstance(persisted_session, dict):
@@ -723,13 +695,11 @@ def _serialize_chat_project_summary(project: dict[str, Any], store: dict[str, An
         ),
         default="",
     )
-    sessions_root = _project_sessions_root_path(project)
     return {
         "id": project_id,
         "name": project_name,
         "group_label": _build_project_group_label(project_name),
         "root_path": str(project.get("root_path") or ""),
-        "sessions_path": str(sessions_root),
         "created_at": str(project.get("created_at") or _now_iso()),
         "updated_at": max(str(project.get("updated_at") or _now_iso()), latest_session_update),
         "session_count": len(project_sessions),
@@ -1357,17 +1327,6 @@ def delete_chat_items(
             continue
         _cleanup_project_workspace_dir(project)
 
-    for session_id in matched_session_ids:
-        session = sessions_by_id.get(session_id)
-        if not isinstance(session, dict):
-            continue
-        project_id = str(session.get("project_id") or "").strip()
-        if project_id in matched_project_ids:
-            continue
-        project = projects_by_id.get(project_id)
-        if isinstance(project, dict):
-            _cleanup_session_workspace_dir(session, project)
-
     store["sessions"] = [
         session
         for session in store.get("sessions", [])
@@ -1400,9 +1359,6 @@ def get_chat_history(state: Any, session_id: str | None = None) -> list[dict[str
         state.active_chat_session_id = store.get("active_session_id")
         if not hasattr(state, "chat_version"):
             state.chat_version = 0
-        legacy_history = getattr(state, "chat_history", None)
-        if isinstance(legacy_history, list):
-            return legacy_history
         return []
     if not hasattr(state, "chat_version"):
         state.chat_version = 0
@@ -1861,23 +1817,6 @@ def _collect_pk_map(payload: Any) -> list[dict[str, Any]]:
     return entries[:120]
 
 
-def _extract_pending_submission_payload(deps: Any) -> dict[str, Any] | None:
-    pending: Any = None
-    getter = getattr(deps, "get_registry_value", None)
-    if callable(getter):
-        pending = getter(_PENDING_SUBMISSION_KEY)
-    elif isinstance(getattr(deps, "registry", None), dict):
-        pending = deps.registry.get(_PENDING_SUBMISSION_KEY)
-
-    if not isinstance(pending, dict):
-        memory = getattr(deps, "memory", None)
-        memory_getter = getattr(memory, "get_kv", None)
-        if callable(memory_getter):
-            pending = memory_getter(_PENDING_SUBMISSION_KEY)
-
-    return pending if isinstance(pending, dict) else None
-
-
 def _submission_draft_is_batch(submission_draft: dict[str, Any] | None) -> bool:
     return _domain_submission_draft_is_batch(submission_draft)
 
@@ -2015,16 +1954,6 @@ def _apply_submission_preview_overview(
     meta["preview_mode"] = overview["mode"]
     meta["preview_overview"] = overview
     return submission_draft
-
-
-def _strip_submission_draft_tail(answer_text: str | None) -> str:
-    text = str(answer_text or "")
-    if not text.strip():
-        return text
-    tag_index = text.upper().rfind(_SUBMISSION_DRAFT_PREFIX)
-    if tag_index < 0:
-        return text
-    return text[:tag_index].rstrip()
 
 
 def _normalize_submission_draft_payload(
@@ -2193,85 +2122,16 @@ def _build_submission_draft_payload(
     return _apply_submission_preview_overview(enrich_submission_draft_payload(payload))
 
 
-def _extract_balanced_json_object(fragment: str) -> str | None:
-    start = fragment.find("{")
-    if start < 0:
-        return None
-
-    depth = 0
-    in_string = False
-    escaped = False
-    for index in range(start, len(fragment)):
-        char = fragment[index]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            continue
-
-        if char == '"':
-            in_string = True
-            continue
-        if char == "{":
-            depth += 1
-            continue
-        if char != "}":
-            continue
-
-        depth -= 1
-        if depth == 0:
-            return fragment[start : index + 1]
-
-    return None
-
-
 def _extract_submission_draft_from_output_payload(output_payload: dict[str, Any]) -> dict[str, Any] | None:
-    payload_type = str(output_payload.get("type") or "").strip().upper()
-    status_type = str(output_payload.get("status") or "").strip().upper()
     raw_submission = output_payload.get("submission_draft")
-    if isinstance(raw_submission, dict):
-        return _normalize_submission_draft_payload(
-            raw_submission,
-            draft=None,
-            validation=None,
-            validation_summary=None,
-        )
-    raw_submission_tag = output_payload.get("submission_draft_tag")
-    if isinstance(raw_submission_tag, str) and raw_submission_tag.strip():
-        parsed_from_tag = _extract_submission_draft_from_text(raw_submission_tag)
-        if isinstance(parsed_from_tag, dict):
-            return parsed_from_tag
-    raw_draft = output_payload.get("draft")
-    if isinstance(raw_draft, dict):
-        validation = output_payload.get("validation")
-        validation_summary = output_payload.get("validation_summary")
-        return _build_submission_draft_payload(
-            raw_draft,
-            validation=validation if isinstance(validation, dict) else None,
-            validation_summary=validation_summary if isinstance(validation_summary, dict) else None,
-        )
-    if payload_type == "SUBMISSION_DRAFT":
-        return _normalize_submission_draft_payload(
-            output_payload,
-            draft=None,
-            validation=None,
-            validation_summary=None,
-        )
-    if status_type == "SUBMISSION_DRAFT":
-        return _normalize_submission_draft_payload(
-            output_payload,
-            draft=raw_draft if isinstance(raw_draft, dict) else None,
-            validation=output_payload.get("validation") if isinstance(output_payload.get("validation"), dict) else None,
-            validation_summary=(
-                output_payload.get("validation_summary")
-                if isinstance(output_payload.get("validation_summary"), dict)
-                else None
-            ),
-        )
-    return None
+    if not isinstance(raw_submission, dict):
+        return None
+    return _normalize_submission_draft_payload(
+        raw_submission,
+        draft=None,
+        validation=None,
+        validation_summary=None,
+    )
 
 
 def _extract_recovery_plan_from_submission_draft(submission_draft: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -2326,76 +2186,10 @@ def _render_canonical_submission_blocker_message(
     )
 
 
-def _extract_submission_draft_from_text(answer_text: str | None) -> dict[str, Any] | None:
-    text = str(answer_text or "")
-    if not text.strip():
-        return None
-
-    tag_index = text.upper().rfind(_SUBMISSION_DRAFT_PREFIX)
-    if tag_index < 0:
-        return None
-
-    fragment = text[tag_index + len(_SUBMISSION_DRAFT_PREFIX) :]
-    json_text = _extract_balanced_json_object(fragment)
-    if not json_text:
-        logger.warning(
-            log_event(
-                "aiida.chat_turn.submission_draft_parse_failed",
-                reason="incomplete_json_object",
-                fragment_hash=_draft_fragment_hash(fragment),
-                fragment_chars=len(fragment),
-            )
-        )
-        return None
-
-    try:
-        parsed = json.loads(json_text)
-    except Exception:  # noqa: BLE001
-        logger.warning(
-            log_event(
-                "aiida.chat_turn.submission_draft_parse_failed",
-                reason="invalid_json",
-                fragment_hash=_draft_fragment_hash(fragment),
-                fragment_chars=len(fragment),
-            )
-        )
-        return None
-
-    if not isinstance(parsed, dict):
-        logger.warning(
-            log_event(
-                "aiida.chat_turn.submission_draft_parse_failed",
-                reason="parsed_payload_not_object",
-                fragment_hash=_draft_fragment_hash(fragment),
-                fragment_chars=len(fragment),
-            )
-        )
-        return None
-    raw_submission = parsed.get("submission_draft") if isinstance(parsed.get("submission_draft"), dict) else parsed
-    if not isinstance(raw_submission, dict):
-        logger.warning(
-            log_event(
-                "aiida.chat_turn.submission_draft_parse_failed",
-                reason="submission_draft_not_object",
-                fragment_hash=_draft_fragment_hash(fragment),
-                fragment_chars=len(fragment),
-            )
-        )
-        return None
-    return _normalize_submission_draft_payload(
-        raw_submission,
-        draft=None,
-        validation=None,
-        validation_summary=None,
-    )
-
-
 def _build_chat_message_payload(
     output: Any,
-    deps: Any,
     *,
     tool_calls: list[str] | None = None,
-    answer_text: str | None = None,
     task_mode: str | None = None,
 ) -> dict[str, Any] | None:
     combined: dict[str, Any] = {}
@@ -2415,35 +2209,9 @@ def _build_chat_message_payload(
         if normalized_calls:
             combined["tool_calls"] = normalized_calls
 
-    parsed_submission_draft_from_text = _extract_submission_draft_from_text(answer_text)
-    answer_text_clean = str(answer_text or "").strip()
-
     resolved_submission_draft: dict[str, Any] | None = None
     if isinstance(output_payload, dict):
         resolved_submission_draft = _extract_submission_draft_from_output_payload(output_payload)
-
-    if resolved_submission_draft is None:
-        resolved_submission_draft = parsed_submission_draft_from_text
-
-    if resolved_submission_draft is None and not answer_text_clean:
-        pending = _extract_pending_submission_payload(deps)
-        draft = pending.get("draft") if isinstance(pending, dict) else None
-        validation = pending.get("validation") if isinstance(pending, dict) else None
-        validation_summary = pending.get("validation_summary") if isinstance(pending, dict) else None
-        raw_submission_draft = pending.get("submission_draft") if isinstance(pending, dict) else None
-        if isinstance(raw_submission_draft, dict):
-            resolved_submission_draft = _normalize_submission_draft_payload(
-                raw_submission_draft,
-                draft=draft if isinstance(draft, dict) else None,
-                validation=validation if isinstance(validation, dict) else None,
-                validation_summary=validation_summary if isinstance(validation_summary, dict) else None,
-            )
-        elif isinstance(draft, dict):
-            resolved_submission_draft = _build_submission_draft_payload(
-                draft,
-                validation=validation if isinstance(validation, dict) else None,
-                validation_summary=validation_summary if isinstance(validation_summary, dict) else None,
-            )
 
     resolved_task_mode = _normalize_task_mode(task_mode)
     if resolved_task_mode == "none":
@@ -2512,44 +2280,6 @@ def _build_chat_message_payload(
         combined["status"] = status
 
     return combined or None
-
-
-def _build_submission_draft_text_block(payload: dict[str, Any] | None) -> str | None:
-    if not isinstance(payload, dict):
-        return None
-    payload_type = str(payload.get("type") or "").strip().upper()
-    if payload_type != "SUBMISSION_DRAFT":
-        return None
-
-    draft = payload.get("submission_draft")
-    if not isinstance(draft, dict):
-        return None
-
-    try:
-        serialized = json.dumps(draft, ensure_ascii=False, indent=2)
-    except Exception:  # noqa: BLE001
-        return None
-    return f"{_SUBMISSION_DRAFT_PREFIX}\n{serialized}"
-
-
-def _merge_submission_draft_block_into_answer(
-    answer_text: str | None,
-    payload: dict[str, Any] | None,
-) -> str:
-    text = str(answer_text or "")
-    submission_draft_block = _build_submission_draft_text_block(payload)
-    if not submission_draft_block:
-        return text
-
-    has_submission_prefix = _SUBMISSION_DRAFT_PREFIX.lower() in text.lower()
-    has_parseable_submission_draft = _extract_submission_draft_from_text(text) is not None
-    has_canonical_block = submission_draft_block in text
-
-    if not has_submission_prefix:
-        return f"{text.rstrip()}\n\n{submission_draft_block}" if text.strip() else submission_draft_block
-    if has_parseable_submission_draft or has_canonical_block:
-        return text
-    return f"{text.rstrip()}\n\n{submission_draft_block}"
 
 
 def _append_assistant_message(
@@ -2980,7 +2710,6 @@ async def _execute_chat_turn(
     context_node_ids: list[int] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
-    agent = getattr(state, "agent", None)
     agent_runtime = getattr(state, "agent_runtime", None)
     deps_class = getattr(state, "deps_class", None)
     lock = _ensure_chat_lock(state)
@@ -3013,7 +2742,7 @@ async def _execute_chat_turn(
         )
 
         try:
-            if (agent_runtime is None and agent is None) or deps_class is None:
+            if agent_runtime is None or deps_class is None:
                 raise RuntimeError("Agent dependencies are not ready")
 
             normalized_node_ids = _merge_context_node_ids(context_node_ids, metadata)
@@ -3079,38 +2808,24 @@ async def _execute_chat_turn(
             try:
                 run_intent = _inject_session_preference_instruction(user_intent, metadata)
                 run_intent = _inject_context_priority_instruction(run_intent, normalized_node_ids)
-                resolved_model_name = _to_agent_model_name(selected_model)
-                if agent_runtime is None:
-                    resolved_model = _build_agent_model(selected_model)
-                    retry_budget, retry_base_backoff_seconds = _get_model_unavailable_retry_policy()
-                else:
-                    resolved_model = None
-                    retry_policy = agent_runtime.retry_policy
-                    retry_budget = retry_policy.unavailable_retries
-                    retry_base_backoff_seconds = retry_policy.base_backoff_seconds
+                retry_policy = agent_runtime.retry_policy
+                retry_budget = retry_policy.unavailable_retries
+                retry_base_backoff_seconds = retry_policy.base_backoff_seconds
                 last_run_error: Exception | None = None
                 result = None
                 for attempt in range(retry_budget + 1):
                     try:
-                        if agent_runtime is not None:
-                            result = await agent_runtime.run(
-                                AgentRunRequest(
-                                    prompt=run_intent,
-                                    deps=current_deps,
-                                    model_name=selected_model,
-                                    metadata={
-                                        "session_id": session_id,
-                                        "turn_id": turn_id,
-                                    },
-                                )
-                            )
-                        else:
-                            result = await agent.run(
-                                run_intent,
+                        result = await agent_runtime.run(
+                            AgentRunRequest(
+                                prompt=run_intent,
                                 deps=current_deps,
-                                model=resolved_model,
-                                model_settings=_build_model_settings(),
+                                model_name=selected_model,
+                                metadata={
+                                    "session_id": session_id,
+                                    "turn_id": turn_id,
+                                },
                             )
+                        )
                         last_run_error = None
                         break
                     except asyncio.CancelledError:
@@ -3128,35 +2843,7 @@ async def _execute_chat_turn(
                         raise RuntimeError(str(run_error)) from run_error
                     except Exception as run_error:  # noqa: BLE001
                         error_text = str(run_error)
-                        normalized_error = error_text.lower()
-                        if agent_runtime is None and (
-                            "404" in normalized_error
-                            and "model" in normalized_error
-                            or "is not found for api version" in normalized_error
-                            or "unsupported model" in normalized_error
-                        ):
-                            logger.error(
-                                log_event(
-                                    "aiida.chat_turn.model_rejected",
-                                    turn_id=turn_id,
-                                    model=selected_model,
-                                    resolved_model=resolved_model_name,
-                                    api_version=getattr(settings, "GEMINI_API_VERSION", "unknown"),
-                                    error=error_text[:500],
-                                )
-                            )
-                            raise RuntimeError(
-                                "Gemini model was rejected by the API. "
-                                f"Model='{selected_model}', api_version='{getattr(settings, 'GEMINI_API_VERSION', 'unknown')}'. "
-                                "Update ARIS_DEFAULT_MODEL (e.g., gemini-flash-latest) "
-                                "or ARIS_GEMINI_API_VERSION and retry."
-                            ) from run_error
-
-                        is_retryable = (
-                            agent_runtime.is_retryable_unavailable_error(run_error)
-                            if agent_runtime is not None
-                            else _is_retryable_model_unavailable_error(run_error)
-                        )
+                        is_retryable = agent_runtime.is_retryable_unavailable_error(run_error)
                         if is_retryable and attempt < retry_budget:
                             wait_seconds = retry_base_backoff_seconds * (2**attempt)
                             retry_step = (
@@ -3184,10 +2871,8 @@ async def _execute_chat_turn(
                 if result is None:
                     if last_run_error is None:
                         raise RuntimeError("Model call failed: no result and no error captured.")
-                    retry_exhausted = (
-                        agent_runtime.is_retryable_unavailable_error(last_run_error)
-                        if agent_runtime is not None
-                        else _is_retryable_model_unavailable_error(last_run_error)
+                    retry_exhausted = agent_runtime.is_retryable_unavailable_error(
+                        last_run_error
                     )
                     if retry_exhausted:
                         logger.error(
@@ -3214,8 +2899,6 @@ async def _execute_chat_turn(
             elapsed = time.perf_counter() - t0
             output = getattr(result, "output", None)
             if output is None:
-                output = getattr(result, "data", None)
-            if output is None:
                 raise RuntimeError("Agent returned no output payload")
 
             if hasattr(current_deps, "step_history") and hasattr(output, "thought_process"):
@@ -3231,7 +2914,7 @@ async def _execute_chat_turn(
                 else None
             )
             auto_prepared_payload = None
-            if output_task_mode == "batch" and not _submission_draft_is_batch(existing_submission_draft):
+            if output_task_mode in {"single", "batch"} and existing_submission_draft is None:
                 auto_prepared_payload = await _prepare_structured_submission_request(
                     structured_submission_request,
                     current_deps,
@@ -3244,9 +2927,7 @@ async def _execute_chat_turn(
                     output.data_payload = merged_output_payload
             message_payload = _build_chat_message_payload(
                 output,
-                current_deps,
                 tool_calls=bridge_tool_calls,
-                answer_text=answer_text,
                 task_mode=output_task_mode,
             )
             if isinstance(message_payload, dict) and not isinstance(message_payload.get("submission_draft"), dict):
@@ -3257,15 +2938,6 @@ async def _execute_chat_turn(
                 )
                 if canonical_blocker_text:
                     answer_text = canonical_blocker_text
-            if (
-                output_task_mode == "batch"
-                and not (
-                    isinstance(message_payload, dict)
-                    and isinstance(message_payload.get("submission_draft"), dict)
-                )
-            ):
-                answer_text = _strip_submission_draft_tail(answer_text)
-            answer_text = _merge_submission_draft_block_into_answer(answer_text, message_payload)
             _append_assistant_message(
                 state,
                 turn_id,

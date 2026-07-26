@@ -3,19 +3,13 @@ from __future__ import annotations
 from textwrap import dedent
 from typing import Sequence
 
-SUBMISSION_DRAFT_PREFIX = "[SUBMISSION_DRAFT]"
-SUBMISSION_DRAFT_REQUIRED_RULE = (
-    "ALL successful workflow preparations MUST result in a [SUBMISSION_DRAFT] JSON block. "
-    "NEVER use Markdown Python blocks for final submission confirmation."
+SUBMISSION_PREVIEW_PROTOCOL_RULE = (
+    "ALL successful workflow preparations MUST put the ready preview in the structured "
+    "'data_payload.submission_draft' field. Keep machine-readable JSON out of the answer text "
+    "and wait for explicit confirmation before submission."
 )
-SUBMISSION_DRAFT_FORMAT_EXAMPLE = (
-    '{"process_label":"...","primary_inputs":{"code":{...},"structure":{...},"pseudos":{...}},'
-    '"recommended_inputs":{...},"advanced_settings":{...},"all_inputs":{"settings.convergence_tolerance":{"value":1e-08,"is_recommended":true}},'
-    '"inputs":{...},"meta":{"pk_map":[...],"structure_metadata":[{"pk":123,"symmetry":"Fm-3m","num_atoms":4,"estimated_runtime":"2h"}]}}'
-)
-SUBMISSION_DRAFT_NEXT_STEP_GUIDANCE = (
-    "Present validation results and include the exact [SUBMISSION_DRAFT] JSON block "
-    "before waiting for explicit confirmation."
+SUBMISSION_PREVIEW_NEXT_STEP_GUIDANCE = (
+    "Present the validation result and wait for explicit confirmation."
 )
 TASK_MODE_RULE = (
     "Every response MUST set the structured 'task_mode' field to exactly one of: "
@@ -34,7 +28,7 @@ SUBMISSION_REQUEST_RULE = (
 PREVIEW_NARRATIVE_RULE = (
     "When you present a submission preview to the user, explicitly say whether it is a 'Single job preview' or a "
     "'Batch job preview'. For batch previews, also summarize the shared inputs and the varying dimensions or matrix "
-    "axes in plain language before the [SUBMISSION_DRAFT] block."
+    "axes in plain language."
 )
 
 REFERENCED_NODES_HEADER = "### REFERENCED AiiDA NODES"
@@ -48,23 +42,20 @@ _BASE_OPERATIONAL_RULES: tuple[str, ...] = (
     TASK_MODE_RULE,
     SUBMISSION_REQUEST_RULE,
     PREVIEW_NARRATIVE_RULE,
-    SUBMISSION_DRAFT_REQUIRED_RULE,
-    "If a workflow is validated and ready for user confirmation, include a raw JSON block prefixed by '[SUBMISSION_DRAFT]'.",
-    f"Format:\n  {SUBMISSION_DRAFT_PREFIX}\n  {SUBMISSION_DRAFT_FORMAT_EXAMPLE}",
+    SUBMISSION_PREVIEW_PROTOCOL_RULE,
     (
         "'primary_inputs', 'recommended_inputs', and 'advanced_settings' must include only non-empty, "
         "high-signal scientific parameters (non-default overrides)."
     ),
     (
-        "When a calculation is ready, output the block exactly as "
-        "'[SUBMISSION_DRAFT] { ...JSON... }'. This is the ONLY way the user can see the launch button."
+        "When a calculation is ready, copy the validated tool result into "
+        "'data_payload.submission_draft'. This is how the UI receives the launch preview."
     ),
     (
         "Do not force low-level solver parameters into narrative summaries. Mention detailed numerical settings only "
         "when they are explicitly present in the prepared builder/draft payload."
     ),
-    "Do not wrap this block in markdown code fences unless the frontend parser explicitly handles it.",
-    "Do not skip this block. Do not summarize it away. Do not wrap it in markdown fences.",
+    "Do not paste the structured submission payload into the user-facing answer.",
 )
 
 _BASE_TOOLBOX_RULES: tuple[str, ...] = (
@@ -91,7 +82,7 @@ _BASE_TOOLBOX_RULES: tuple[str, ...] = (
     "Submission readiness: call 'inspect_lab_infrastructure' before submission to confirm required computers/codes exist.",
     (
         "Pre-submission validation: call 'submit_new_workflow' first. If it returns status SUBMISSION_DRAFT, "
-        "include the '[SUBMISSION_DRAFT]' JSON block and wait for explicit confirmation before calling "
+        "copy its 'submission_draft' into structured 'data_payload' and wait for explicit confirmation before calling "
         "'submit_validated_workflow'."
     ),
     (
@@ -193,7 +184,7 @@ _DEFAULT_HTP_CONSTRAINTS: tuple[str, ...] = (
     ),
     (
         "If you run a custom script to resolve pseudopotentials or inputs, the same response MUST still finish "
-        "with a valid [SUBMISSION_DRAFT] JSON block in plain text (not fenced code)."
+        "with a valid structured submission_draft payload."
     ),
 )
 
@@ -251,9 +242,8 @@ def build_system_prompt(
 
 
 __all__ = [
-    "SUBMISSION_DRAFT_PREFIX",
-    "SUBMISSION_DRAFT_REQUIRED_RULE",
-    "SUBMISSION_DRAFT_NEXT_STEP_GUIDANCE",
+    "SUBMISSION_PREVIEW_PROTOCOL_RULE",
+    "SUBMISSION_PREVIEW_NEXT_STEP_GUIDANCE",
     "TASK_MODE_RULE",
     "SUBMISSION_REQUEST_RULE",
     "REFERENCED_NODES_HEADER",

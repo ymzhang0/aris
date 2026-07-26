@@ -45,23 +45,6 @@ def normalize_title_state(value: Any) -> str:
     return TITLE_STATE_IDLE
 
 
-def looks_like_session_identifier_title(title: Any, session_id: Any) -> bool:
-    cleaned_title = str(title or "").strip()
-    cleaned_session_id = str(session_id or "").strip()
-    if not cleaned_title:
-        return False
-    if cleaned_session_id and cleaned_title == cleaned_session_id:
-        return True
-    return bool(
-        re.fullmatch(r"[0-9a-f]{32}", cleaned_title, flags=re.IGNORECASE)
-        or re.fullmatch(
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-            cleaned_title,
-            flags=re.IGNORECASE,
-        )
-    )
-
-
 def ascii_text(value: Any) -> str:
     normalized = unicodedata.normalize("NFKD", str(value or ""))
     return normalized.encode("ascii", "ignore").decode("ascii")
@@ -332,7 +315,6 @@ __all__ = [
     "derive_chat_session_title",
     "extract_first_session_message_text",
     "extract_latest_session_message_text",
-    "looks_like_session_identifier_title",
     "normalize_session_title",
     "normalize_title_state",
     "pick_title_focus_node",

@@ -165,44 +165,21 @@ function buildNodeScriptIntent(process: ProcessItem): string {
     .join(" ");
 }
 
-async function copyTextWithFallback(text: string): Promise<boolean> {
+async function copyTextToClipboard(text: string): Promise<boolean> {
   const normalized = String(text ?? "");
   if (!normalized) {
     return false;
   }
 
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(normalized);
-      return true;
-    } catch {
-      // Fall through to legacy copy path.
-    }
+  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    return false;
   }
-
-  if (typeof document !== "undefined") {
-    const textarea = document.createElement("textarea");
-    textarea.value = normalized;
-    textarea.setAttribute("readonly", "true");
-    textarea.style.position = "fixed";
-    textarea.style.top = "-9999px";
-    textarea.style.left = "-9999px";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.focus();
-    textarea.select();
-    textarea.setSelectionRange(0, normalized.length);
-    try {
-      if (document.execCommand("copy")) {
-        document.body.removeChild(textarea);
-        return true;
-      }
-    } catch {
-      // Ignore and continue to manual fallback.
-    }
-    document.body.removeChild(textarea);
+  try {
+    await navigator.clipboard.writeText(normalized);
+    return true;
+  } catch {
+    return false;
   }
-  return false;
 }
 
 function downloadTextFile(filename: string, content: string, mimeType = "text/plain;charset=utf-8"): void {
@@ -826,7 +803,7 @@ export function Sidebar({
   }, []);
 
   const handleCopyPk = useCallback(async (pk: number) => {
-    const copied = await copyTextWithFallback(String(pk));
+    const copied = await copyTextToClipboard(String(pk));
     if (!copied) {
       openManualCopyDialog(
         `Copy node #${pk} PK`,
@@ -840,7 +817,7 @@ export function Sidebar({
     setCopyingScriptPk(process.pk);
     try {
       const payload = await getNodeScript(process.pk);
-      const copied = await copyTextWithFallback(payload.script);
+      const copied = await copyTextToClipboard(payload.script);
       if (!copied) {
         openManualCopyDialog(
           `Copy script for node #${process.pk}`,
@@ -1917,7 +1894,7 @@ export function Sidebar({
                 size="sm"
                 onClick={() => {
                   void (async () => {
-                    const copied = await copyTextWithFallback(manualCopyState.text);
+                    const copied = await copyTextToClipboard(manualCopyState.text);
                     if (copied) {
                       setManualCopyState(null);
                     }

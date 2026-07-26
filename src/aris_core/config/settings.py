@@ -3,7 +3,7 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_REPO_ROOT = Path(os.getcwd())
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _ARIS_HOME_ROOT = Path.home() / ".aris"
 _ARIS_CONFIG_ROOT = _ARIS_HOME_ROOT / "config"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -24,15 +24,10 @@ def _env_flag(*names: str, default: str = "false") -> bool:
     return _env_value(*names, default=default).strip().lower() in _TRUE_VALUES
 
 
-def _resolve_path(*env_names: str, default_path: Path, legacy_paths: tuple[Path, ...] = ()) -> str:
+def _resolve_path(*env_names: str, default_path: Path) -> str:
     explicit = _env_value(*env_names, default="")
     if explicit:
         return explicit
-    if default_path.exists():
-        return str(default_path)
-    for legacy_path in legacy_paths:
-        if legacy_path.exists():
-            return str(legacy_path)
     return str(default_path)
 
 
@@ -40,7 +35,6 @@ def _resolve_preferred_path(
     *env_names: str,
     preferred_path: Path,
     fallback_path: Path,
-    legacy_paths: tuple[Path, ...] = (),
 ) -> str:
     explicit = _env_value(*env_names, default="")
     if explicit:
@@ -49,52 +43,7 @@ def _resolve_preferred_path(
         return str(preferred_path)
     if fallback_path.exists():
         return str(fallback_path)
-    for legacy_path in legacy_paths:
-        if legacy_path.exists():
-            return str(legacy_path)
     return str(fallback_path)
-
-
-def _path_variants(raw_path: str) -> set[str]:
-    cleaned = str(raw_path or "").strip().rstrip("/").rstrip("\\")
-    if not cleaned:
-        return set()
-
-    path = Path(cleaned).expanduser()
-    lexical_absolute = path if path.is_absolute() else (_REPO_ROOT / path)
-    variants = {
-        cleaned,
-        lexical_absolute.as_posix(),
-    }
-
-    try:
-        variants.add(lexical_absolute.relative_to(_REPO_ROOT).as_posix())
-    except ValueError:
-        pass
-
-    try:
-        variants.add(lexical_absolute.resolve(strict=False).as_posix())
-    except OSError:
-        pass
-
-    return {value for value in variants if value}
-
-
-def _normalize_runtime_path(raw_path: str, *, canonical_path: Path, legacy_paths: tuple[Path, ...]) -> str:
-    raw_variants = _path_variants(raw_path)
-    canonical = str(canonical_path)
-    if not raw_variants:
-        return canonical
-
-    canonical_variants = _path_variants(canonical)
-    if raw_variants & canonical_variants:
-        return canonical
-
-    for legacy_path in legacy_paths:
-        if raw_variants & _path_variants(str(legacy_path)):
-            return canonical
-
-    return str(raw_path)
 
 
 class Settings(BaseSettings):
@@ -123,9 +72,6 @@ class Settings(BaseSettings):
     ARIS_RUNTIME_ROOT: str = _resolve_path(
         "ARIS_RUNTIME_ROOT",
         default_path=_ARIS_HOME_ROOT,
-        legacy_paths=(
-            _REPO_ROOT / "runtime",
-        ),
     )
     ARIS_MEMORY_DIR: str = _env_value(
         "ARIS_MEMORY_DIR",
@@ -141,9 +87,6 @@ class Settings(BaseSettings):
             "ARIS_AIIDA_PRESETS_FILE",
             preferred_path=_ARIS_CONFIG_ROOT / "apps" / "aiida" / "presets.yaml",
             fallback_path=_REPO_ROOT / "config" / "apps" / "aiida" / "presets.yaml",
-            legacy_paths=(
-                _REPO_ROOT / "config" / "aiida_presets.yaml",
-            ),
         ),
     )
     ARIS_AIIDA_SETTINGS_FILE: str = _env_value(
@@ -152,18 +95,12 @@ class Settings(BaseSettings):
             "ARIS_AIIDA_SETTINGS_FILE",
             preferred_path=_ARIS_CONFIG_ROOT / "apps" / "aiida" / "settings.yaml",
             fallback_path=_REPO_ROOT / "config" / "apps" / "aiida" / "settings.yaml",
-            legacy_paths=(
-                _REPO_ROOT / "config" / "aiida_settings.yaml",
-            ),
         ),
     )
     ARIS_AIIDA_SPECIALIZATIONS_ROOT: str = _resolve_preferred_path(
         "ARIS_AIIDA_SPECIALIZATIONS_ROOT",
         preferred_path=_ARIS_CONFIG_ROOT / "apps" / "aiida" / "specializations",
         fallback_path=_REPO_ROOT / "config" / "apps" / "aiida" / "specializations",
-        legacy_paths=(
-            _REPO_ROOT / "config" / "specializations",
-        ),
     )
     ARIS_PROJECTS_ROOT: str = _env_value(
         "ARIS_PROJECTS_ROOT",
@@ -192,7 +129,6 @@ class Settings(BaseSettings):
         fallback_path=_REPO_ROOT / "config" / "policy" / "policy.csv",
     )
 
-    ARIS_DEBUG_LEVEL: str = _env_value("ARIS_DEBUG_LEVEL", default="default")
     PRODUCTION_MODE: bool = _env_flag("ARIS_PRODUCTION_MODE", "PRODUCTION_MODE", default="false")
 
     HTTPS_PROXY: str = _env_value("HTTPS_PROXY", default="")
@@ -204,80 +140,16 @@ class Settings(BaseSettings):
     )
     FRONTEND_DIST_DIR: str = _resolve_path(
         "ARIS_FRONTEND_DIST_DIR",
-        default_path=_REPO_ROOT / "apps" / "web" / "dist",
-        legacy_paths=(
-            _REPO_ROOT / "frontend" / "dist",
-        ),
+        default_path=_REPO_ROOT / "frontend" / "dist",
     )
     FRONTEND_ASSETS_DIR: str = _resolve_path(
         "ARIS_FRONTEND_ASSETS_DIR",
-        default_path=_REPO_ROOT / "apps" / "web" / "dist" / "assets",
-        legacy_paths=(
-            _REPO_ROOT / "frontend" / "dist" / "assets",
-        ),
+        default_path=_REPO_ROOT / "frontend" / "dist" / "assets",
     )
     FRONTEND_INDEX_FILE: str = _resolve_path(
         "ARIS_FRONTEND_INDEX_FILE",
-        default_path=_REPO_ROOT / "apps" / "web" / "dist" / "index.html",
-        legacy_paths=(
-            _REPO_ROOT / "frontend" / "dist" / "index.html",
-        ),
+        default_path=_REPO_ROOT / "frontend" / "dist" / "index.html",
     )
-
-    def model_post_init(self, __context) -> None:
-        raw_runtime_root = Path(self.ARIS_RUNTIME_ROOT)
-        object.__setattr__(
-            self,
-            "ARIS_RUNTIME_ROOT",
-            _normalize_runtime_path(
-                self.ARIS_RUNTIME_ROOT,
-                canonical_path=_ARIS_HOME_ROOT,
-                legacy_paths=(
-                    _REPO_ROOT / "runtime",
-                ),
-            ),
-        )
-        runtime_root = Path(self.ARIS_RUNTIME_ROOT)
-        object.__setattr__(
-            self,
-            "ARIS_MEMORY_DIR",
-            _normalize_runtime_path(
-                self.ARIS_MEMORY_DIR,
-                canonical_path=runtime_root / "memories",
-                legacy_paths=(
-                    raw_runtime_root / "memories",
-                    _REPO_ROOT / "runtime" / "memories",
-                    _REPO_ROOT / "default",
-                    _REPO_ROOT / "data" / "memories",
-                    _REPO_ROOT / "engines" / "aiida" / "data" / "memories",
-                ),
-            ),
-        )
-        object.__setattr__(
-            self,
-            "ARIS_PROJECTS_ROOT",
-            _normalize_runtime_path(
-                self.ARIS_PROJECTS_ROOT,
-                canonical_path=_ARIS_HOME_ROOT / "projects",
-                legacy_paths=(
-                    runtime_root / "projects",
-                    _REPO_ROOT / "data" / "projects",
-                ),
-            ),
-        )
-        object.__setattr__(
-            self,
-            "ARIS_SCRIPT_ARCHIVE_DIR",
-            _normalize_runtime_path(
-                self.ARIS_SCRIPT_ARCHIVE_DIR,
-                canonical_path=runtime_root / "scripts",
-                legacy_paths=(
-                    raw_runtime_root / "scripts",
-                    _REPO_ROOT / "runtime" / "scripts",
-                    _REPO_ROOT / "engines" / "aiida" / "data" / "scripts",
-                ),
-            ),
-        )
 
     model_config = SettingsConfigDict(
         env_file=".env",

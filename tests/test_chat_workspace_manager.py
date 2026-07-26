@@ -25,47 +25,21 @@ def test_ensure_project_workspace_creates_one_shared_project_layout(tmp_path: Pa
     assert not (root / "sessions").exists()
 
 
-def test_ensure_session_workspace_migrates_empty_legacy_directory(tmp_path: Path) -> None:
+def test_ensure_session_workspace_uses_shared_project_root(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     project = {"id": "project-1"}
     root = manager.ensure_project_workspace_dir(project)
-    legacy_workspace = root / "sessions" / "si-bands"
-    legacy_workspace.mkdir(parents=True)
     session = {
         "id": "session-1",
         "project_id": "project-1",
         "session_slug": "si-bands",
-        "workspace_path": str(legacy_workspace),
     }
 
     workspace = manager.ensure_session_workspace_dir(project, session)
 
     assert workspace == str(root)
     assert session["workspace_path"] == str(root)
-    assert not legacy_workspace.exists()
     assert not (root / "sessions").exists()
-
-
-def test_session_cleanup_never_deletes_an_explicit_path_outside_legacy_root(
-    tmp_path: Path,
-) -> None:
-    manager = _manager(tmp_path)
-    custom_root = tmp_path / "custom-project"
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    sentinel = outside / "keep.txt"
-    sentinel.write_text("keep", encoding="utf-8")
-    project = {"id": "project-1", "root_path": str(custom_root)}
-    session = {
-        "id": "session-1",
-        "session_slug": "legacy-session",
-        "workspace_path": str(outside),
-    }
-
-    manager.cleanup_session_workspace_dir(session, project)
-
-    assert outside.is_dir()
-    assert sentinel.read_text(encoding="utf-8") == "keep"
 
 
 def test_project_cleanup_preserves_custom_root_but_removes_managed_root(
@@ -85,7 +59,7 @@ def test_project_cleanup_preserves_custom_root_but_removes_managed_root(
 
     assert custom_root.is_dir()
     assert (custom_root / "codes").is_dir()
-    assert not (custom_root / "sessions").exists()
+    assert (custom_root / "sessions").is_dir()
     assert not managed_root.exists()
 
 
@@ -136,9 +110,9 @@ def test_managed_project_id_cannot_escape_managed_root(tmp_path: Path) -> None:
     assert manager.is_path_within(target, tmp_path / "managed")
 
 
-def test_chat_service_preserves_workspace_compatibility_entrypoints() -> None:
+def test_chat_service_uses_workspace_manager_path_validation() -> None:
     assert isinstance(chat_service._CHAT_WORKSPACE_MANAGER, ChatWorkspaceManager)
     assert chat_service._resolve_workspace_target_path(
-        Path("/tmp/aris-workspace-compat"),
+        Path("/tmp/aris-workspace-test"),
         "codes/job.py",
-    ) == Path("/tmp/aris-workspace-compat/codes/job.py").resolve()
+    ) == Path("/tmp/aris-workspace-test/codes/job.py").resolve()

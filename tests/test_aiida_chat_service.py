@@ -11,6 +11,7 @@ import pytest
 os.environ.setdefault("GOOGLE_API_KEY", "dummy")
 
 from src.aris_apps.aiida.agent import researcher
+from src.aris_apps.aiida.agent.runtime import PydanticAIGeminiRuntime
 from src.aris_apps.aiida.chat import service as chat_service
 
 
@@ -194,78 +195,6 @@ def test_build_worker_workspace_headers_fall_back_to_active_environment_python_p
     assert headers["X-ARIS-Active-Python-Path"] == "/tmp/worker-default/.venv/bin/python"
 
 
-def test_legacy_chat_session_store_migrates_messages_to_session_files(tmp_path) -> None:
-    original_memory_dir = chat_service.settings.ARIS_MEMORY_DIR
-    chat_service.settings.ARIS_MEMORY_DIR = str(tmp_path)
-    try:
-        memory = _Memory()
-        session_id = "legacy-session"
-        memory.set_kv(
-            chat_service._CHAT_SESSIONS_KV_KEY,
-            {
-                "version": 4,
-                "turn_seq": 1,
-                "active_project_id": "project-1",
-                "active_session_id": session_id,
-                "projects": [
-                    {
-                        "id": "project-1",
-                        "name": "Legacy Project",
-                        "root_path": str(tmp_path / "project"),
-                        "created_at": "2026-03-14T00:00:00+00:00",
-                        "updated_at": "2026-03-14T00:00:00+00:00",
-                    }
-                ],
-                "sessions": [
-                    {
-                        "id": session_id,
-                        "project_id": "project-1",
-                        "title": "Legacy",
-                        "created_at": "2026-03-14T00:00:00+00:00",
-                        "updated_at": "2026-03-14T00:00:00+00:00",
-                        "messages": [
-                            {"role": "user", "text": "legacy user", "turn_id": 1},
-                            {"role": "assistant", "text": "legacy reply", "turn_id": 1, "status": "done"},
-                        ],
-                    }
-                ],
-            },
-        )
-        state = SimpleNamespace(memory=memory, chat_version=0)
-
-        detail = chat_service.get_chat_session_detail(state, session_id)
-        session_file = _session_file_path(session_id)
-        migrated_index = memory.get_kv(chat_service._CHAT_SESSIONS_KV_KEY)
-    finally:
-        chat_service.settings.ARIS_MEMORY_DIR = original_memory_dir
-
-    assert detail is not None
-    assert session_file.is_file()
-    assert [message["text"] for message in detail["messages"]] == ["legacy user", "legacy reply"]
-    assert isinstance(migrated_index, dict)
-    assert "messages" not in migrated_index["sessions"][0]
-
-
-def test_normalize_chat_session_record_converts_legacy_uuid_title_to_default() -> None:
-    session = chat_service._normalize_chat_session_record(
-        {
-            "id": "f193d874cd40464f99291f8b3f1bb657",
-            "project_id": "project-1",
-            "title": "f193d874cd40464f99291f8b3f1bb657",
-            "auto_title": False,
-            "messages": [],
-        },
-        default_project_id="project-1",
-        known_project_ids={"project-1"},
-    )
-
-    assert session is not None
-    assert session["title"] == "New Conversation"
-    assert session["auto_title"] is True
-    assert session["title_state"] == "idle"
-    assert session["title_generation_count"] == 0
-
-
 def test_title_prompt_prefers_pinned_node_context() -> None:
     session = {
         "title": "New Conversation",
@@ -357,13 +286,10 @@ def test_inject_context_priority_instruction_adds_primary_scope() -> None:
 
 def test_build_chat_message_payload_includes_structured_task_mode() -> None:
     output = SimpleNamespace(task_mode="batch", data_payload={"source": "agent"})
-    deps = SimpleNamespace(get_registry_value=lambda _key: None)
 
     payload = chat_service._build_chat_message_payload(
         output,
-        deps,
         tool_calls=None,
-        answer_text="Preparing a batch draft.",
         task_mode=output.task_mode,
     )
 
@@ -453,8 +379,8 @@ def test_serialize_chat_history_keeps_payload() -> None:
 
 
 def test_build_chat_message_payload_includes_submission_draft_fields() -> None:
-    pending = {
-        "draft": {
+    submission_draft = chat_service._build_submission_draft_payload(
+        {
             "builder": {
                 "structure_pk": 11,
                 "metadata": {
@@ -465,14 +391,13 @@ def test_build_chat_message_payload_includes_submission_draft_fields() -> None:
                 },
             }
         },
-        "validation_summary": {"status": "VALIDATION_OK", "is_valid": True},
-    }
-    output = SimpleNamespace(data_payload={"source": "agent"})
-    deps = SimpleNamespace(get_registry_value=lambda key: pending if key == "aiida_pending_submission" else None)
+        validation=None,
+        validation_summary={"status": "VALIDATION_OK", "is_valid": True},
+    )
+    output = SimpleNamespace(data_payload={"submission_draft": submission_draft})
 
     payload = chat_service._build_chat_message_payload(
         output,
-        deps,
         tool_calls=["GET management.statistics", "POST submission.draft-builder"],
     )
 
@@ -494,59 +419,19 @@ def test_build_chat_message_payload_includes_submission_draft_fields() -> None:
     assert len(payload["approval_request"]["resource_digest"]) == 64
 
 
-def test_build_chat_message_payload_reads_pending_submission_from_memory() -> None:
-    pending = {
-        "draft": {
-            "builder": {
-                "structure_pk": 19,
-                "metadata": {"options": {"resources": {"num_machines": 1}}},
-            }
-        },
-        "validation_summary": {"status": "VALIDATION_OK", "is_valid": True},
-    }
-
-    class _Memory:
-        def get_kv(self, key: str):
-            if key == "aiida_pending_submission":
-                return pending
-            return None
-
-    deps = SimpleNamespace(
-        get_registry_value=lambda _key: None,
-        memory=_Memory(),
-    )
-    output = SimpleNamespace(data_payload={"source": "agent"})
-
-    payload = chat_service._build_chat_message_payload(
-        output,
-        deps,
-        tool_calls=None,
-    )
-
-    assert payload is not None
-    assert payload["type"] == "SUBMISSION_DRAFT"
-    assert payload["submission_draft"]["inputs"]["structure_pk"] == 19
-    assert payload["submission_draft"]["meta"]["validation_summary"]["status"] == "VALIDATION_OK"
-
-
 def test_build_chat_message_payload_blocks_single_draft_for_batch_intent() -> None:
-    pending = {
-        "draft": {
-            "builder": {
-                "structure_pk": 19,
-                "metadata": {"options": {"resources": {"num_machines": 1}}},
+    output = SimpleNamespace(
+        task_mode="batch",
+        data_payload={
+            "submission_draft": {
+                "process_label": "PwBaseWorkChain",
+                "inputs": {"structure_pk": 19},
+                "meta": {"pk_map": [{"pk": 19}]},
             }
         },
-        "validation_summary": {"status": "VALIDATION_OK", "is_valid": True},
-    }
-    deps = SimpleNamespace(
-        get_registry_value=lambda key: pending if key == "aiida_pending_submission" else None,
     )
-    output = SimpleNamespace(task_mode="batch", data_payload={"source": "agent"})
-
     payload = chat_service._build_chat_message_payload(
         output,
-        deps,
         tool_calls=None,
         task_mode=output.task_mode,
     )
@@ -598,46 +483,6 @@ async def test_prepare_structured_submission_request_auto_builds_batch_preview(
     assert payload["submission_draft"]["meta"]["job_count"] == 5
 
 
-def test_build_chat_message_payload_extracts_submission_draft_from_answer_text() -> None:
-    output = SimpleNamespace(data_payload={"source": "agent"})
-    deps = SimpleNamespace(get_registry_value=lambda _key: None)
-    answer_text = (
-        "Validation complete.\n\n"
-        "[SUBMISSION_DRAFT]\n"
-        "{\n"
-        '  "process_label": "PwBaseWorkChain",\n'
-        '  "inputs": {"structure_pk": 21},\n'
-        '  "meta": {"pk_map": [{"pk": 21}]}\n'
-        "}"
-    )
-
-    payload = chat_service._build_chat_message_payload(
-        output,
-        deps,
-        tool_calls=None,
-        answer_text=answer_text,
-    )
-
-    assert payload is not None
-    assert payload["type"] == "SUBMISSION_DRAFT"
-    assert payload["submission_draft"]["process_label"] == "PwBaseWorkChain"
-    assert payload["submission_draft"]["meta"]["pk_map"][0]["pk"] == 21
-
-
-def test_strip_submission_draft_tail_removes_raw_submission_block() -> None:
-    answer_text = (
-        "Validation complete.\n\n"
-        "[SUBMISSION_DRAFT]\n"
-        "{\n"
-        '  "process_label": "PwBaseWorkChain"\n'
-        "}\n"
-    )
-
-    stripped = chat_service._strip_submission_draft_tail(answer_text)
-
-    assert stripped == "Validation complete."
-
-
 def test_build_chat_message_payload_extracts_submission_draft_from_output_payload() -> None:
     output = SimpleNamespace(
         data_payload={
@@ -649,72 +494,15 @@ def test_build_chat_message_payload_extracts_submission_draft_from_output_payloa
             },
         }
     )
-    deps = SimpleNamespace(get_registry_value=lambda _key: None)
-
     payload = chat_service._build_chat_message_payload(
         output,
-        deps,
         tool_calls=None,
-        answer_text="",
     )
 
     assert payload is not None
     assert payload["type"] == "SUBMISSION_DRAFT"
     assert payload["submission_draft"]["process_label"] == "PwRelaxWorkChain"
     assert payload["submission_draft"]["meta"]["pk_map"][0]["pk"] == 34
-
-
-def test_build_chat_message_payload_does_not_reuse_stale_pending_submission() -> None:
-    deps = SimpleNamespace(
-        get_registry_value=lambda key: {
-            "submission_draft": {
-                "process_label": "quantumespresso.pw.bands",
-                "inputs": {"bands": {"pw": {"code": "pw-7.5@localhost"}}},
-                "meta": {"workchain": "quantumespresso.pw.bands"},
-            }
-        } if key == "aiida_pending_submission" else None
-    )
-
-    payload = chat_service._build_chat_message_payload(
-        SimpleNamespace(data_payload={"status": "OK"}),
-        deps,
-        answer_text="I prepared a reusable EOS Python script instead of a submission draft.",
-    )
-
-    assert payload is not None
-    assert "submission_draft" not in payload
-
-
-def test_build_chat_message_payload_extracts_submission_draft_from_output_draft_shape() -> None:
-    output = SimpleNamespace(
-        data_payload={
-            "status": "SUBMISSION_DRAFT",
-            "draft": {
-                "builder": {
-                    "structure_pk": 56,
-                    "metadata": {
-                        "options": {
-                            "resources": {"num_machines": 2},
-                        }
-                    },
-                }
-            },
-            "validation_summary": {"status": "VALIDATION_OK", "is_valid": True},
-        }
-    )
-    deps = SimpleNamespace(get_registry_value=lambda _key: None)
-
-    payload = chat_service._build_chat_message_payload(
-        output,
-        deps,
-        tool_calls=None,
-        answer_text="",
-    )
-
-    assert payload is not None
-    assert payload["type"] == "SUBMISSION_DRAFT"
-    assert payload["submission_draft"]["inputs"]["structure_pk"] == 56
-    assert payload["submission_draft"]["meta"]["validation_summary"]["status"] == "VALIDATION_OK"
 
 
 def test_build_chat_message_payload_surfaces_recovery_plan_and_next_step() -> None:
@@ -741,13 +529,9 @@ def test_build_chat_message_payload_surfaces_recovery_plan_and_next_step() -> No
             },
         }
     )
-    deps = SimpleNamespace(get_registry_value=lambda _key: None)
-
     payload = chat_service._build_chat_message_payload(
         output,
-        deps,
         tool_calls=["POST submission.draft-builder"],
-        answer_text="",
     )
 
     assert payload is not None
@@ -784,38 +568,6 @@ def test_render_canonical_submission_blocker_message_uses_protocol_data_only() -
     assert "Required inputs are still missing after builder construction: structure, code" in message
     assert "Code qe-750-pw@lucia could not be resolved" in message
     assert "Next step: Inspect the spec, verify resources, and ask the user before retrying." in message
-
-
-def test_build_chat_message_payload_extracts_submission_draft_from_submission_tag_field() -> None:
-    output = SimpleNamespace(
-        data_payload={
-            "submission_draft_tag": (
-                "[SUBMISSION_DRAFT]\n"
-                "{\n"
-                '  "process_label": "PwBaseWorkChain",\n'
-                '  "inputs": {"structure_pk": 77},\n'
-                '  "meta": {"pk_map": [{"pk": 77}], "workchain": "quantumespresso.pw.base"}\n'
-                "}"
-            )
-        }
-    )
-    deps = SimpleNamespace(get_registry_value=lambda _key: None)
-
-    payload = chat_service._build_chat_message_payload(
-        output,
-        deps,
-        tool_calls=None,
-        answer_text="",
-    )
-
-    assert payload is not None
-    assert payload["type"] == "SUBMISSION_DRAFT"
-    assert payload["submission_draft"]["process_label"] == "PwBaseWorkChain"
-    assert payload["submission_draft"]["meta"]["pk_map"][0]["pk"] == 77
-    assert payload["submission_draft"]["meta"]["draft"] == {
-        "entry_point": "quantumespresso.pw.base",
-        "inputs": {"structure_pk": 77},
-    }
 
 
 def test_normalize_submission_draft_payload_derives_batch_submit_draft_from_jobs() -> None:
@@ -959,26 +711,6 @@ def test_build_chat_session_snapshot_prefers_session_prompt_override() -> None:
     )
 
     assert snapshot["prompt_override"] == "Keep four decimal places."
-
-
-def test_build_submission_draft_text_block_for_ui_tag() -> None:
-    payload = {
-        "type": "SUBMISSION_DRAFT",
-        "submission_draft": {
-            "process_label": "PwBaseWorkChain",
-            "inputs": {"structure_pk": 11},
-            "primary_inputs": {"structure": {"label": "Structure", "value": "PK 11", "pk": 11}},
-            "advanced_settings": {},
-            "meta": {"pk_map": [{"pk": 11}]},
-        },
-    }
-
-    block = chat_service._build_submission_draft_text_block(payload)
-
-    assert block is not None
-    assert block.startswith("[SUBMISSION_DRAFT]\n{")
-    assert '"process_label": "PwBaseWorkChain"' in block
-    assert '"structure_pk": 11' in block
 
 
 def test_normalize_submission_draft_payload_derives_primary_and_advanced() -> None:
@@ -1154,53 +886,17 @@ def test_normalize_submission_draft_payload_preserves_existing_all_inputs_withou
     assert normalized["meta"]["all_inputs"]["kpoints"]["value"] == [4, 4, 4]
 
 
-def test_merge_submission_draft_block_into_answer_keeps_existing_parseable_block() -> None:
-    answer_text = (
-        "Prepared preview.\n\n"
-        "[SUBMISSION_DRAFT]\n"
-        + json.dumps(
-            {
-                "process_label": "quantumespresso.pw.base",
-                "primary_inputs": {"code": "q-e-qe-7.5-pw@manneback_async"},
-                "recommended_inputs": {"protocol": "moderate"},
-                "all_inputs": {
-                    "kpoints": {"value": [4, 4, 4], "is_recommended": True},
-                },
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
-    payload = {
-        "type": "SUBMISSION_DRAFT",
-        "submission_draft": {
-            "process_label": "quantumespresso.pw.base",
-            "inputs": {},
-            "primary_inputs": {"code": "q-e-qe-7.5-pw@manneback_async"},
-            "recommended_inputs": {"protocol": "moderate"},
-            "advanced_settings": {},
-            "all_inputs": {},
-            "meta": {"pk_map": []},
-        },
-    }
-
-    merged = chat_service._merge_submission_draft_block_into_answer(answer_text, payload)
-
-    assert merged == answer_text
-    assert merged.count("[SUBMISSION_DRAFT]") == 1
-
-
 def test_update_assistant_message_keeps_existing_text_when_status_payload_arrives() -> None:
-    state = SimpleNamespace(
-        chat_history=[
-            {
-                "role": "assistant",
-                "turn_id": 9,
-                "text": "Partial result is already visible.",
-                "status": "thinking",
-            }
-        ],
-        chat_version=0,
+    state = _make_chat_state()
+    session = chat_service.create_chat_session(state, activate=True)
+    history = chat_service.get_chat_history(state, session["id"])
+    history.append(
+        {
+            "role": "assistant",
+            "turn_id": 9,
+            "text": "Partial result is already visible.",
+            "status": "thinking",
+        }
     )
 
     chat_service._update_assistant_message(
@@ -1208,6 +904,7 @@ def test_update_assistant_message_keeps_existing_text_when_status_payload_arrive
         9,
         "Running: custom script...",
         status="thinking",
+        session_id=session["id"],
         payload={
             "type": "status",
             "tool_calls": ["POST management.run-python"],
@@ -1218,7 +915,7 @@ def test_update_assistant_message_keeps_existing_text_when_status_payload_arrive
         },
     )
 
-    message = state.chat_history[0]
+    message = history[0]
     assert message["text"] == "Partial result is already visible."
     assert message["status"] == "thinking"
     assert message["payload"]["type"] == "status"
@@ -1231,12 +928,14 @@ def test_is_retryable_model_unavailable_error_detects_high_demand_503() -> None:
         "body: {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. "
         "Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}"
     )
-    assert chat_service._is_retryable_model_unavailable_error(error) is True
+    runtime = PydanticAIGeminiRuntime(SimpleNamespace())
+    assert runtime.is_retryable_unavailable_error(error) is True
 
 
 def test_is_retryable_model_unavailable_error_ignores_non_retryable_errors() -> None:
     model_rejected = RuntimeError("Request failed: status_code: 404, model is not found for api version")
-    assert chat_service._is_retryable_model_unavailable_error(model_rejected) is False
+    runtime = PydanticAIGeminiRuntime(SimpleNamespace())
+    assert runtime.is_retryable_unavailable_error(model_rejected) is False
 
 
 def test_create_chat_session_archives_previous_active_session() -> None:

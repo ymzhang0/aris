@@ -12,8 +12,7 @@ from src.aris_apps.aiida.agent.prompts import (
     REFERENCED_NODES_HEADER,
     REFERENCED_NODES_INTRO,
     REFERENCED_NODES_OMITTED_TEMPLATE,
-    SUBMISSION_DRAFT_NEXT_STEP_GUIDANCE,
-    SUBMISSION_DRAFT_PREFIX,
+    SUBMISSION_PREVIEW_NEXT_STEP_GUIDANCE,
     build_system_prompt,
 )
 from src.aris_apps.aiida.agent.tools import (
@@ -1458,14 +1457,6 @@ def _build_submission_draft_payload(
     return enrich_submission_draft_payload(payload)
 
 
-def _format_submission_draft_tag(submission_draft: dict[str, Any]) -> str:
-    return f"{SUBMISSION_DRAFT_PREFIX}\n" + json.dumps(
-        submission_draft,
-        ensure_ascii=False,
-        indent=2,
-    )
-
-
 def _cache_pending_submission(
     ctx: RunContext[AiiDADeps],
     draft: dict[str, Any] | list[dict[str, Any]],
@@ -1930,10 +1921,9 @@ async def submit_new_workflow(
             "status": "SUBMISSION_DRAFT",
             "workchain": workchain,
             "submission_draft": submission_draft,
-            "submission_draft_tag": _format_submission_draft_tag(submission_draft),
             "validation_summary": validation_summary,
             "validation": validation,
-            "next_step": SUBMISSION_DRAFT_NEXT_STEP_GUIDANCE,
+            "next_step": SUBMISSION_PREVIEW_NEXT_STEP_GUIDANCE,
         }
 
     recovery_plan = _normalize_recovery_plan_for_agent(draft)
@@ -2097,10 +2087,9 @@ async def submit_new_batch_workflow(
         "workchain": workchain,
         "job_count": len(expanded_requests),
         "submission_draft": submission_draft,
-        "submission_draft_tag": _format_submission_draft_tag(submission_draft),
         "validation_summary": batch_validation_summary,
         "validation": {"jobs": ready_validations},
-        "next_step": SUBMISSION_DRAFT_NEXT_STEP_GUIDANCE,
+        "next_step": SUBMISSION_PREVIEW_NEXT_STEP_GUIDANCE,
     }
 
 

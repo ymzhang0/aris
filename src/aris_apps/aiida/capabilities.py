@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
-from src.aris_apps.aiida.client import AiiDAWorkerClient, BridgeSnapshot, bridge_service
+from src.aris_apps.aiida.client import AiiDAWorkerClient, BridgeSnapshot, aiida_worker_client
 
 
 @runtime_checkable
@@ -51,7 +51,7 @@ class HttpAiiDACapability:
         return await self._client.switch_profile(profile)
 
 
-aiida_capability: AiiDACapability = HttpAiiDACapability(bridge_service)
+aiida_capability: AiiDACapability = HttpAiiDACapability(aiida_worker_client)
 
 
 __all__ = ["AiiDACapability", "HttpAiiDACapability", "aiida_capability"]

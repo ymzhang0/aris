@@ -1,6 +1,4 @@
-AiiDA application configuration for the future ARIS layout.
-
-This directory mirrors the legacy `config/` structure during the migration:
+AiiDA application configuration:
 - `presets.yaml`
 - `settings.yaml`
 - `specializations/`

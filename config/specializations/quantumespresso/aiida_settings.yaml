@@ -1,9 +1,0 @@
-quick_prompts:
-  - label: "structure relaxation"
-    prompt: "perform vc-relax using PseudoDojo"
-  - label: "band structure"
-    prompt: "calculate the electron band structure using PseudoDojo"
-  - label: "relax+band"
-    prompt: "perform vc-relax and then use the optimized structure to calculate the electron band structure"
-  - label: "check pseudopotential"
-    prompt: "check the PseudoDojo library in the database"

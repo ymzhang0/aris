@@ -149,7 +149,6 @@ export type ChatProject = {
   name: string;
   group_label?: string | null;
   root_path: string;
-  sessions_path: string;
   created_at: string;
   updated_at: string;
   session_count: number;

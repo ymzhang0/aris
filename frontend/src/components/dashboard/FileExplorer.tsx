@@ -77,43 +77,20 @@ function clampMenuPosition(x: number, y: number) {
   };
 }
 
-async function copyTextWithFallback(text: string): Promise<boolean> {
+async function copyTextToClipboard(text: string): Promise<boolean> {
   const normalized = String(text ?? "");
   if (!normalized) {
     return false;
   }
 
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(normalized);
-      return true;
-    } catch {
-      // Fall through to execCommand copy for older environments.
-    }
-  }
-
-  if (typeof document === "undefined") {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
     return false;
   }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = normalized;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.top = "-9999px";
-  textarea.style.left = "-9999px";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  textarea.setSelectionRange(0, normalized.length);
-
   try {
-    return document.execCommand("copy");
+    await navigator.clipboard.writeText(normalized);
+    return true;
   } catch {
     return false;
-  } finally {
-    document.body.removeChild(textarea);
   }
 }
 
@@ -486,7 +463,7 @@ export function FileExplorer({
           onClose={() => setContextMenu(null)}
           onSelect={(action, node) => {
             if (action === "copy-path") {
-              void copyTextWithFallback(node.path);
+              void copyTextToClipboard(node.path);
             }
             void onContextAction?.({ action, node });
           }}

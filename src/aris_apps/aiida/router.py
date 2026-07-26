@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import os
-from pprint import pformat
 import re
 from statistics import median
 import tempfile
@@ -56,14 +55,14 @@ from .chat import (
     update_chat_session,
     write_chat_project_file,
 )
-from .bridge_client import bridge_endpoint
 from .authorization import local_authorization_snapshot, require_permission
 from .capabilities import aiida_capability
 from .client import (
     BridgeAPIError,
     BridgeOfflineError,
+    aiida_worker_client,
+    bridge_endpoint,
     build_bridge_context_headers,
-    bridge_service,
     reset_bridge_request_headers,
     request_json,
     set_bridge_request_headers,
@@ -245,119 +244,6 @@ def _get_node_hover_metadata(pk: int) -> NodeHoverMetadataResponse:
         return NodeHoverMetadataResponse(pk=pk)
 
     return _extract_node_hover_metadata(matched, pk)
-
-
-def _format_python_literal(value: Any) -> str:
-    return pformat(value, width=100, sort_dicts=False)
-
-
-def _build_dict_script_from_summary(payload: dict[str, Any]) -> NodeScriptResponse:
-    pk = int(payload.get("pk") or 0)
-    attributes = payload.get("attributes")
-    data = attributes if isinstance(attributes, dict) else {}
-    script = "\n".join(
-        [
-            f"# Dict PK {pk}",
-            f"data = {_format_python_literal(data)}",
-            "",
-            "# Optional: wrap back into AiiDA",
-            "# from aiida.orm import Dict",
-            "# data_node = Dict(dict=data)",
-        ]
-    )
-    return NodeScriptResponse(pk=pk, node_type="Dict", language="python", script=script)
-
-
-def _build_structure_script_from_summary(payload: dict[str, Any]) -> NodeScriptResponse:
-    pk = int(payload.get("pk") or 0)
-    attributes = payload.get("attributes")
-    attrs = attributes if isinstance(attributes, dict) else {}
-    preview = payload.get("preview_info") if isinstance(payload.get("preview_info"), dict) else {}
-    formula = str(preview.get("formula") or payload.get("label") or f"StructureData #{pk}").strip()
-
-    kind_symbol_map: dict[str, str] = {}
-    raw_kinds = attrs.get("kinds")
-    if isinstance(raw_kinds, list):
-        for item in raw_kinds:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name") or "").strip()
-            if not name:
-                continue
-            raw_symbols = item.get("symbols")
-            if isinstance(raw_symbols, list) and len(raw_symbols) == 1:
-                kind_symbol_map[name] = str(raw_symbols[0])
-                continue
-            raw_symbol = item.get("symbol")
-            if isinstance(raw_symbol, str) and raw_symbol.strip():
-                kind_symbol_map[name] = raw_symbol.strip()
-                continue
-            kind_symbol_map[name] = name
-
-    symbols: list[str] = []
-    positions: list[list[float]] = []
-    raw_sites = attrs.get("sites")
-    if isinstance(raw_sites, list):
-        for item in raw_sites:
-            if not isinstance(item, dict):
-                continue
-            kind_name = str(item.get("kind_name") or item.get("kind") or "").strip()
-            if not kind_name:
-                continue
-            raw_position = item.get("position")
-            if not isinstance(raw_position, list):
-                continue
-            symbols.append(kind_symbol_map.get(kind_name, kind_name))
-            positions.append([float(coord) for coord in raw_position[:3]])
-
-    cell: list[list[float]] = []
-    raw_cell = attrs.get("cell")
-    if isinstance(raw_cell, list):
-        for row in raw_cell[:3]:
-            if isinstance(row, list):
-                cell.append([float(coord) for coord in row[:3]])
-
-    pbc = [
-        bool(attrs.get("pbc1", True)),
-        bool(attrs.get("pbc2", True)),
-        bool(attrs.get("pbc3", True)),
-    ]
-
-    script = "\n".join(
-        [
-            f"# StructureData PK {pk}: {formula}",
-            "from ase import Atoms",
-            "",
-            f"symbols = {_format_python_literal(symbols)}",
-            f"positions = {_format_python_literal(positions)}",
-            f"cell = {_format_python_literal(cell)}",
-            f"pbc = {_format_python_literal(pbc)}",
-            "",
-            "atoms = Atoms(",
-            "    symbols=symbols,",
-            "    positions=positions,",
-            "    cell=cell,",
-            "    pbc=pbc,",
-            ")",
-            "",
-            "# Optional: wrap back into AiiDA",
-            "# from aiida.orm import StructureData",
-            "# structure = StructureData(ase=atoms)",
-        ]
-    )
-    return NodeScriptResponse(pk=pk, node_type="StructureData", language="python", script=script)
-
-
-def _build_node_script_from_summary(payload: dict[str, Any]) -> NodeScriptResponse:
-    node_type = str(payload.get("node_type") or payload.get("type") or "").strip()
-    if node_type == "Dict":
-        return _build_dict_script_from_summary(payload)
-    if node_type == "StructureData":
-        return _build_structure_script_from_summary(payload)
-    raise HTTPException(
-        status_code=422,
-        detail={"error": "Copy as Script is only supported for StructureData and Dict nodes", "node_type": node_type or "Unknown"},
-    )
 
 
 def _fetch_context_nodes(context_node_ids: list[int]) -> list[dict[str, Any]]:
@@ -723,7 +609,7 @@ def _parse_worker_json_output(payload: Any) -> dict[str, Any] | None:
 
 async def _run_worker_json_script(script: str, *, timeout: float = 90.0) -> dict[str, Any] | None:
     environment_payload = await asyncio.wait_for(
-        bridge_service.inspect_default_environment(force_refresh=False),
+        aiida_worker_client.inspect_default_environment(force_refresh=False),
         timeout=min(5.0, max(timeout / 6.0, 1.0)),
     )
     python_interpreter_path = _coerce_text_value(
@@ -774,7 +660,7 @@ async def _resolve_compute_health_computer_label(
         return reference_label
     try:
         computers = await asyncio.wait_for(
-            bridge_service.inspect_infrastructure_v2(),
+            aiida_worker_client.inspect_infrastructure_v2(),
             timeout=COMPUTE_HEALTH_INFRA_TIMEOUT_SECONDS,
         )
     except TimeoutError:
@@ -1467,7 +1353,7 @@ async def switch_bridge_profile(
 async def get_management_infrastructure():
     """Proxy to fetch hierarchical infrastructure (Computers -> Codes)."""
     try:
-        return await bridge_service.inspect_infrastructure_v2()
+        return await aiida_worker_client.inspect_infrastructure_v2()
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         logger.warning(log_event("aiida.bridge.infrastructure.unsupported", error=error_message))
@@ -1481,7 +1367,7 @@ async def get_management_infrastructure():
 )
 async def get_management_infrastructure_capabilities():
     try:
-        payload = await bridge_service.get_infrastructure_capabilities()
+        payload = await aiida_worker_client.get_infrastructure_capabilities()
         return InfrastructureCapabilitiesResponse(**payload)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
@@ -1498,7 +1384,7 @@ async def setup_management_infrastructure(
 ):
     """Proxy to setup a new computer, authentication, and code."""
     try:
-        return await bridge_service.setup_infrastructure(payload)
+        return await aiida_worker_client.setup_infrastructure(payload)
     except Exception as exc:
         _raise_worker_http_error(exc)
 
@@ -1546,7 +1432,7 @@ async def export_management_code(code_pk: int = ApiPath(..., ge=1)):
 async def get_current_user_info():
     """Proxy to fetch current user information from the worker."""
     try:
-        return await bridge_service.get_current_user_info()
+        return await aiida_worker_client.get_current_user_info()
     except Exception as exc:
         _raise_worker_http_error(exc)
 
@@ -1560,7 +1446,7 @@ async def setup_profile(
 ):
     """Proxy to setup a new AiiDA profile on the worker."""
     try:
-        return await bridge_service.setup_profile(payload.model_dump())
+        return await aiida_worker_client.setup_profile(payload.model_dump())
     except Exception as exc:
         _raise_worker_http_error(exc)
 
@@ -1691,7 +1577,7 @@ async def frontend_environment_inspect(payload: EnvironmentInspectRequest):
 
     if payload.use_worker_default or not python_path:
         try:
-            raw = await bridge_service.inspect_default_environment(force_refresh=False)
+            raw = await aiida_worker_client.inspect_default_environment(force_refresh=False)
         except Exception as exc:
             _raise_worker_http_error(exc)
 
@@ -1891,7 +1777,7 @@ async def proxy_import_data(
     data = {k: v for k, v in data.items() if v is not None}
 
     try:
-        return await bridge_service.request_multipart(
+        return await aiida_worker_client.request_multipart(
             "POST",
             f"/data/import/{data_type}",
             files=files,
@@ -2241,7 +2127,7 @@ async def frontend_process_diagnostics(identifier: str):
 @router.get("/frontend/ssh-hosts", tags=[FRONTEND_TAG])
 async def frontend_ssh_hosts():
     try:
-        hosts = await bridge_service.get_ssh_config()
+        hosts = await aiida_worker_client.get_ssh_config()
         return {"items": hosts}
     except Exception as error:
         logger.exception(log_event("aiida.frontend.ssh_hosts.failed", error=str(error)))
@@ -2257,7 +2143,7 @@ async def frontend_setup_code(
     """Proxy code setup to AIIDA worker."""
     logger.info(log_event("aiida.frontend.setup_code.request", computer=payload.computer_label, label=payload.label))
     try:
-        response = await bridge_service.setup_code(payload)
+        response = await aiida_worker_client.setup_code(payload)
         logger.info(log_event("aiida.frontend.setup_code.success", pk=response.get("pk")))
         return response
     except Exception as exc:
@@ -2269,7 +2155,7 @@ async def frontend_setup_code(
 async def frontend_get_computer_codes(computer_label: str):
     """Proxy fetching detailed computer codes to AIIDA worker."""
     try:
-        response = await bridge_service.get_computer_codes(computer_label)
+        response = await aiida_worker_client.get_computer_codes(computer_label)
         return response
     except Exception as exc:
         _raise_worker_http_error(exc)
@@ -2305,16 +2191,6 @@ async def frontend_node_hover_metadata(pk: int = ApiPath(..., ge=1)) -> NodeHove
 async def frontend_node_script(pk: int = ApiPath(..., ge=1)) -> NodeScriptResponse:
     try:
         payload = await request_json("GET", f"/management/nodes/{pk}/script")
-    except BridgeAPIError as exc:
-        if int(exc.status_code or 0) != 404:
-            _raise_worker_http_error(exc)
-        try:
-            summary_payload = await request_json("GET", f"/management/nodes/{pk}")
-        except Exception as fallback_exc:  # noqa: BLE001
-            _raise_worker_http_error(fallback_exc)
-        if not isinstance(summary_payload, dict):
-            raise HTTPException(status_code=502, detail={"error": "Worker returned an invalid node summary payload"})
-        return _build_node_script_from_summary(summary_payload)
     except Exception as exc:  # noqa: BLE001
         _raise_worker_http_error(exc)
     if not isinstance(payload, dict):
@@ -2399,7 +2275,7 @@ async def frontend_infrastructure_stream(request: Request):
                 break
 
             try:
-                infrastructure = await bridge_service.inspect_infrastructure_v2()
+                infrastructure = await aiida_worker_client.inspect_infrastructure_v2()
                 digest = hashlib.sha1(json.dumps(infrastructure, sort_keys=True).encode("utf-8")).hexdigest()
                 now = time.monotonic()
                 should_push = (digest != last_digest) or ((now - heartbeat_ts) >= 15)

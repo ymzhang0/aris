@@ -141,7 +141,7 @@ async def test_submit_new_workflow_validates_before_submission(monkeypatch: pyte
     assert isinstance(result["submission_draft"]["primary_inputs"], dict)
     assert isinstance(result["submission_draft"]["advanced_settings"], dict)
     assert isinstance(result["submission_draft"]["meta"]["pk_map"], list)
-    assert str(result["submission_draft_tag"]).startswith("[SUBMISSION_DRAFT]")
+    assert "submission_draft_tag" not in result
     assert "summary_text" in result["validation_summary"]
     assert calls == ["draft", "validate"]
 

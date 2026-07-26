@@ -1,4 +1,4 @@
-"""Filesystem boundary for ARIS project and legacy session workspaces."""
+"""Filesystem boundary for ARIS project workspaces."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from uuid import uuid4
 
 PROJECT_CODES_DIRNAME = "codes"
 PROJECT_DATA_DIRNAME = "data"
-PROJECT_SESSIONS_DIRNAME = "sessions"
 
 
 class ChatWorkspaceManager:
@@ -58,9 +57,6 @@ class ChatWorkspaceManager:
             str(project.get("id") or uuid4().hex)
         )
 
-    def project_sessions_root_path(self, project: dict[str, Any]) -> Path:
-        return self.project_root_path(project) / PROJECT_SESSIONS_DIRNAME
-
     def project_codes_root_path(self, project: dict[str, Any]) -> Path:
         return self.project_root_path(project) / PROJECT_CODES_DIRNAME
 
@@ -79,25 +75,6 @@ class ChatWorkspaceManager:
         session_id = str(session.get("id") or "").strip()
         return session_id or "session"
 
-    def session_workspace_path(
-        self,
-        session: dict[str, Any],
-        project: dict[str, Any],
-    ) -> Path:
-        """Return the legacy per-session directory used only for migration cleanup."""
-
-        return self.project_sessions_root_path(project) / self.get_session_slug(session)
-
-    def cleanup_empty_legacy_sessions_root(self, project: dict[str, Any]) -> None:
-        sessions_root = self.project_sessions_root_path(project)
-        with suppress(OSError):
-            if (
-                sessions_root.exists()
-                and sessions_root.is_dir()
-                and not any(sessions_root.iterdir())
-            ):
-                sessions_root.rmdir()
-
     @staticmethod
     def is_path_within(path: Path, root: Path) -> bool:
         try:
@@ -113,31 +90,7 @@ class ChatWorkspaceManager:
         with suppress(FileNotFoundError):
             shutil.rmtree(path, ignore_errors=True)
 
-    def cleanup_session_workspace_dir(
-        self,
-        session: dict[str, Any],
-        project: dict[str, Any],
-    ) -> None:
-        sessions_root = self.project_sessions_root_path(project)
-        candidates: list[Path] = [self.session_workspace_path(session, project)]
-        explicit_workspace = self.resolve_filesystem_path(session.get("workspace_path"))
-        if explicit_workspace is not None:
-            candidates.insert(0, explicit_workspace)
-
-        for candidate in candidates:
-            if not self.is_path_within(candidate, sessions_root):
-                continue
-            self._safe_rmtree(candidate)
-            break
-
-        with suppress(OSError):
-            if sessions_root.exists() and not any(sessions_root.iterdir()):
-                sessions_root.rmdir()
-
     def cleanup_project_workspace_dir(self, project: dict[str, Any]) -> None:
-        sessions_root = self.project_sessions_root_path(project)
-        self._safe_rmtree(sessions_root)
-
         root = self.project_root_path(project)
         managed_root = self.managed_project_root(str(project.get("id") or ""))
         if root == managed_root:
@@ -167,7 +120,6 @@ class ChatWorkspaceManager:
         project["root_path"] = str(root)
         self.ensure_directory(root / PROJECT_CODES_DIRNAME)
         self.ensure_directory(root / PROJECT_DATA_DIRNAME)
-        self.cleanup_empty_legacy_sessions_root(project)
         return root
 
     def ensure_session_workspace_dir(
@@ -175,24 +127,8 @@ class ChatWorkspaceManager:
         project: dict[str, Any],
         session: dict[str, Any],
     ) -> str:
-        """Point a session at its project root and remove an empty legacy directory."""
-
+        """Point a session at its shared project root."""
         project_root = self.ensure_project_workspace_dir(project)
-        current_workspace = self.resolve_filesystem_path(session.get("workspace_path"))
-        sessions_root = self.project_sessions_root_path(project)
-        if (
-            current_workspace is not None
-            and current_workspace != project_root
-            and self.is_path_within(current_workspace, sessions_root)
-        ):
-            with suppress(OSError):
-                if (
-                    current_workspace.exists()
-                    and current_workspace.is_dir()
-                    and not any(current_workspace.iterdir())
-                ):
-                    current_workspace.rmdir()
-            self.cleanup_empty_legacy_sessions_root(project)
         session["project_id"] = str(project["id"])
         session["workspace_path"] = str(project_root)
         return str(project_root)
@@ -231,5 +167,4 @@ __all__ = [
     "ChatWorkspaceManager",
     "PROJECT_CODES_DIRNAME",
     "PROJECT_DATA_DIRNAME",
-    "PROJECT_SESSIONS_DIRNAME",
 ]

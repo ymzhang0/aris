@@ -875,35 +875,6 @@ async def test_frontend_node_script_proxies_worker_payload(monkeypatch: pytest.M
 
 
 @pytest.mark.anyio
-async def test_frontend_node_script_falls_back_to_node_summary_when_worker_route_is_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[str] = []
-
-    async def _fake_request_json(method: str, path: str, **_: object) -> dict[str, object]:
-        assert method == "GET"
-        calls.append(path)
-        if path == "/management/nodes/77/script":
-            raise aiida_router.BridgeAPIError(status_code=404, message="Not found", payload={"error": "Not found"})
-        if path == "/management/nodes/77":
-            return {
-                "pk": 77,
-                "node_type": "Dict",
-                "attributes": {"ecutwfc": 50, "conv_thr": 1.0e-8},
-            }
-        raise AssertionError(f"Unexpected path: {path}")
-
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
-
-    response = await aiida_router.frontend_node_script(77)
-
-    assert calls == ["/management/nodes/77/script", "/management/nodes/77"]
-    assert response.pk == 77
-    assert response.node_type == "Dict"
-    assert "ecutwfc" in response.script
-
-
-@pytest.mark.anyio
 async def test_worker_repository_files_proxies_worker_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_request_json(method: str, path: str, **kwargs: object) -> dict[str, object]:
         assert method == "GET"
@@ -1015,7 +986,7 @@ async def test_get_management_infrastructure_capabilities_proxies_worker_payload
     async def _fake_capabilities() -> dict[str, object]:
         return expected
 
-    monkeypatch.setattr(aiida_router.bridge_service, "get_infrastructure_capabilities", _fake_capabilities)
+    monkeypatch.setattr(aiida_router.aiida_worker_client, "get_infrastructure_capabilities", _fake_capabilities)
 
     response = await aiida_router.get_management_infrastructure_capabilities()
 
@@ -1240,7 +1211,7 @@ async def test_run_worker_json_script_uses_default_environment_interpreter(
         }
         return {"output": f"noise\n{aiida_router.WORKER_JSON_MARKER}{{\"available\": true}}\n"}
 
-    monkeypatch.setattr(aiida_router.bridge_service, "inspect_default_environment", _fake_inspect_default_environment)
+    monkeypatch.setattr(aiida_router.aiida_worker_client, "inspect_default_environment", _fake_inspect_default_environment)
     monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
 
     payload = await aiida_router._run_worker_json_script("print('hello')")

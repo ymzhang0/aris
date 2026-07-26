@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from loguru import logger
 from pydantic_ai.settings import ModelSettings
 
 from src.aris_core.agent import (
@@ -14,7 +13,6 @@ from src.aris_core.agent import (
     AgentRunResult,
 )
 from src.aris_core.config import settings
-from src.aris_core.logging import log_event
 
 
 def _error_text_blob(error: Exception) -> str:
@@ -71,20 +69,10 @@ def _build_gemini_model(name: str) -> Any:
     if not api_version:
         return _to_pydantic_model_name(cleaned)
 
-    try:
-        from google.genai import Client as GoogleGenAIClient
-        from google.genai.types import HttpOptions
-        from pydantic_ai.models.google import GoogleModel
-        from pydantic_ai.providers.google import GoogleProvider
-    except Exception:  # noqa: BLE001
-        logger.warning(
-            log_event(
-                "aiida.agent_runtime.model_init_api_version_fallback",
-                model=model_name,
-                api_version=api_version,
-            )
-        )
-        return _to_pydantic_model_name(cleaned)
+    from google.genai import Client as GoogleGenAIClient
+    from google.genai.types import HttpOptions
+    from pydantic_ai.models.google import GoogleModel
+    from pydantic_ai.providers.google import GoogleProvider
 
     api_key = settings.GEMINI_API_KEY
     if api_key == "your-key-here":
@@ -150,8 +138,6 @@ class PydanticAIGeminiRuntime:
             raise
 
         output = getattr(result, "output", None)
-        if output is None:
-            output = getattr(result, "data", None)
         return AgentRunResult(
             output=output,
             provider=self.provider,
@@ -164,20 +150,6 @@ class PydanticAIGeminiRuntime:
 
 def build_aiida_agent_runtime(agent: Any) -> PydanticAIGeminiRuntime:
     return PydanticAIGeminiRuntime(agent)
-
-
-# Temporary import compatibility for the legacy chat fallback. These names keep
-# provider-specific construction out of the application service while older
-# tests and states that expose only ``state.agent`` continue to work.
-_to_agent_model_name = _to_pydantic_model_name
-_build_agent_model = _build_gemini_model
-_build_model_settings = _build_gemini_model_settings
-_is_retryable_model_unavailable_error = _is_retryable_unavailable_error
-
-
-def _get_model_unavailable_retry_policy() -> tuple[int, float]:
-    policy = _build_retry_policy()
-    return policy.unavailable_retries, policy.base_backoff_seconds
 
 
 __all__ = [

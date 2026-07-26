@@ -43,7 +43,7 @@ async def test_parse_infrastructure_yaml_accepts_asyncssh_fields(monkeypatch: py
     async def _fake_capabilities() -> dict[str, object]:
         return _capabilities_payload()
 
-    monkeypatch.setattr(aiida_service.bridge_service, "get_infrastructure_capabilities", _fake_capabilities)
+    monkeypatch.setattr(aiida_service.aiida_worker_client, "get_infrastructure_capabilities", _fake_capabilities)
     monkeypatch.setattr(
         aiida_service.infrastructure_manager,
         "merge_preset",
@@ -76,11 +76,11 @@ auth:
 
 
 @pytest.mark.anyio
-async def test_parse_infrastructure_yaml_rejects_legacy_ssh_fields_for_asyncssh(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_parse_infrastructure_yaml_rejects_core_ssh_fields_for_asyncssh(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_capabilities() -> dict[str, object]:
         return _capabilities_payload()
 
-    monkeypatch.setattr(aiida_service.bridge_service, "get_infrastructure_capabilities", _fake_capabilities)
+    monkeypatch.setattr(aiida_service.aiida_worker_client, "get_infrastructure_capabilities", _fake_capabilities)
     monkeypatch.setattr(
         aiida_service.infrastructure_manager,
         "merge_preset",
@@ -109,7 +109,7 @@ async def test_parse_infrastructure_uses_selected_ssh_host_without_ai(monkeypatc
     async def _fake_capabilities() -> dict[str, object]:
         return _capabilities_payload()
 
-    monkeypatch.setattr(aiida_service.bridge_service, "get_infrastructure_capabilities", _fake_capabilities)
+    monkeypatch.setattr(aiida_service.aiida_worker_client, "get_infrastructure_capabilities", _fake_capabilities)
     monkeypatch.setattr(
         aiida_service.infrastructure_manager,
         "merge_preset",

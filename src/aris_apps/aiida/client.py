@@ -191,7 +191,6 @@ class AiiDAWorkerClient:
         self._retry_backoff_seconds = max(0.05, float(retry_backoff_seconds))
 
         self._snapshot = BridgeSnapshot(url=self._bridge_url, environment=self._environment)
-        self._status_endpoint_supported: bool | None = None
         self._status_lock = asyncio.Lock()
         self._infrastructure_lock = asyncio.Lock()
         self._infrastructure_cache: dict[str, Any] | None = None
@@ -637,37 +636,22 @@ class AiiDAWorkerClient:
     async def _refresh_locked(self) -> None:
         checked_at = time.monotonic()
 
-        status_error: Exception | None = None
-        payload: Any | None = None
-
-        if self._status_endpoint_supported is not False:
-            try:
-                payload = await self._fetch_json("/status")
-                self._status_endpoint_supported = True
-            except Exception as exc:  # noqa: BLE001
-                status_error = exc
-                if self._is_http_not_found(exc):
-                    self._status_endpoint_supported = False
-
-        if payload is None:
-            payload = await self._fetch_legacy_status_payload()
-            if payload is None:
-                self._snapshot.status = "offline"
-                self._snapshot.checked_at = checked_at
-                error_message = (
-                    f"{type(status_error).__name__}: {status_error}"
-                    if status_error is not None
-                    else "Legacy status endpoints unavailable"
+        try:
+            payload = await self._fetch_json("/status")
+        except Exception as error:  # noqa: BLE001
+            self._snapshot.status = "offline"
+            self._snapshot.checked_at = checked_at
+            logger.error(
+                log_event(
+                    "aiida.bridge.unreachable",
+                    url=self._bridge_url,
+                    error=f"{type(error).__name__}: {error}",
                 )
-                logger.error(log_event("aiida.bridge.unreachable", url=self._bridge_url, error=error_message))
-                return
+            )
+            return
 
         normalized = self._normalize_status_payload(payload)
         if normalized["status"] == "online":
-            if not normalized["plugins"]:
-                fallback_plugins = await self._fetch_plugins_from_known_endpoints()
-                if fallback_plugins:
-                    normalized["plugins"] = fallback_plugins
             if normalized["resources"].workchains == 0 and normalized["plugins"]:
                 normalized["resources"].workchains = len(normalized["plugins"])
             self._snapshot.status = normalized["status"]
@@ -678,15 +662,6 @@ class AiiDAWorkerClient:
             self._snapshot.resources = normalized["resources"]
             self._snapshot.plugins = normalized["plugins"]
             self._snapshot.checked_at = checked_at
-
-        if status_error is not None:
-            logger.warning(
-                log_event(
-                    "aiida.bridge.status.fallback",
-                    url=self._bridge_url,
-                    error=f"{type(status_error).__name__}: {status_error}",
-                )
-            )
 
         if not self._logged_first_handshake:
             logger.info(f"[AiiDA Bridge] Connected to worker at {self._worker_target}")
@@ -721,66 +696,6 @@ class AiiDAWorkerClient:
             timeout=timeout_seconds or self._request_timeout_seconds,
             retries=retries,
         )
-
-    async def _fetch_legacy_status_payload(self) -> dict[str, Any] | None:
-        plugins_result, system_result, resources_result = await asyncio.gather(
-            self._fetch_json("/plugins"),
-            self._fetch_json("/system/info"),
-            self._fetch_json("/resources"),
-            return_exceptions=True,
-        )
-
-        if isinstance(plugins_result, Exception):
-            fallback_plugins = await self._fetch_plugins_from_known_endpoints(prefer_legacy=False)
-            if fallback_plugins:
-                plugins_result = fallback_plugins
-
-        any_success = not all(
-            isinstance(item, Exception)
-            for item in (plugins_result, system_result, resources_result)
-        )
-        if not any_success:
-            return None
-
-        payload: dict[str, Any] = {"status": "online"}
-
-        if not isinstance(plugins_result, Exception):
-            payload["plugins"] = plugins_result
-
-        if isinstance(system_result, dict):
-            payload["profile"] = system_result.get("profile")
-            payload["daemon_status"] = system_result.get("daemon_status")
-            counts = system_result.get("counts")
-            if isinstance(counts, dict):
-                payload["counts"] = counts
-            environment = system_result.get("environment")
-            if isinstance(environment, str) and environment.strip():
-                payload["environment"] = environment.strip()
-
-        if isinstance(resources_result, dict):
-            payload["resources"] = resources_result
-
-        return payload
-
-    async def _fetch_plugins_from_known_endpoints(self, *, prefer_legacy: bool = True) -> list[str]:
-        if prefer_legacy:
-            candidates = ("/plugins", "/submission/plugins", "/system/plugins")
-        else:
-            candidates = ("/submission/plugins", "/system/plugins", "/plugins")
-
-        for path in candidates:
-            try:
-                payload = await self._fetch_json(path)
-            except Exception:
-                continue
-            normalized = self._normalize_plugins(payload)
-            if normalized:
-                return normalized
-        return []
-
-    @staticmethod
-    def _is_http_not_found(error: Exception) -> bool:
-        return isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 404
 
     @staticmethod
     def _is_idempotent_method(method: str) -> bool:
@@ -902,7 +817,7 @@ class AiiDAWorkerClient:
             return
         if self._is_path_known_unsupported(path):
             raise self._unsupported_endpoint_error(path)
-        if self._snapshot.checked_at <= 0 and self._status_endpoint_supported is not False:
+        if self._snapshot.checked_at <= 0:
             try:
                 await self._refresh_if_needed(force_refresh=False)
             except Exception:
@@ -913,7 +828,7 @@ class AiiDAWorkerClient:
             return
         if self._is_path_known_unsupported(path):
             raise self._unsupported_endpoint_error(path)
-        if self._snapshot.checked_at <= 0 and self._status_endpoint_supported is not False:
+        if self._snapshot.checked_at <= 0:
             self._probe_status_sync()
 
     def _probe_status_sync(self) -> None:
@@ -1112,10 +1027,6 @@ class AiiDAWorkerClient:
         return str(item).strip()
 
 
-# Backward-compatible alias used by tests/importers.
-AiiDABridgeService = AiiDAWorkerClient
-
-
 _aiida_worker_client: AiiDAWorkerClient | None = None
 
 
@@ -1130,8 +1041,6 @@ def get_aiida_worker_client() -> AiiDAWorkerClient:
 
 
 aiida_worker_client = get_aiida_worker_client()
-# Backward-compatible singleton name consumed by router and other call-sites.
-bridge_service = aiida_worker_client
 
 
 def bridge_url() -> str:
@@ -1248,10 +1157,8 @@ __all__ = [
     "BridgeResourceCounts",
     "BridgeSnapshot",
     "AiiDAWorkerClient",
-    "AiiDABridgeService",
     "get_aiida_worker_client",
     "aiida_worker_client",
-    "bridge_service",
     "bridge_url",
     "bridge_endpoint",
     "set_bridge_call_listener",

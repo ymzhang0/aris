@@ -124,7 +124,7 @@ def test_normalize_chat_session_snapshot_cleans_context_and_preferences() -> Non
     }
 
 
-def test_chat_service_preserves_normalization_compatibility_exports() -> None:
+def test_chat_service_delegates_session_normalization() -> None:
     assert chat_service._normalize_chat_messages is normalize_chat_messages
     assert chat_service._normalize_chat_session_snapshot is normalize_chat_session_snapshot
     assert chat_service._normalize_chat_session_tags is normalize_chat_session_tags

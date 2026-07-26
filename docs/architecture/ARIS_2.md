@@ -1,7 +1,7 @@
 # ARIS 2.0 Architecture
 
-This document defines the target architecture for ARIS and the migration rules
-used to reach it without replacing working product behavior all at once.
+This document defines the current ARIS architecture and its next evolution
+points.
 
 ## Goals
 
@@ -52,15 +52,14 @@ contain provider-specific model construction.
 
 Session persistence is accessed through `ChatSessionRepository`. The current
 `JsonChatSessionRepository` preserves the existing memory index plus
-`sessions/*.json` files, performs atomic session-file replacement, migrates the
-legacy index key, and removes orphaned files. A repository can be injected on
+`sessions/*.json` files, performs atomic session-file replacement, and removes
+orphaned files. A repository can be injected on
 the application state, so a future SQLite or PostgreSQL adapter does not require
 changes to chat behavior.
 
 Persisted message, tag, and session-snapshot shapes are normalized by the pure
 `chat.session_models` module. It has no filesystem, AiiDA, or model-runtime
-dependencies; the chat service keeps compatibility aliases while delegating
-these transformations to that module.
+dependencies; the chat service delegates these transformations to that module.
 
 Session naming is separated into `chat.title_rules`: title sanitization, slug
 generation, context fingerprints, prompt construction, and lifecycle scheduling
@@ -69,8 +68,8 @@ persistence, and workspace/group renaming remain in the chat service.
 
 Project filesystem behavior is owned by `ChatWorkspaceManager`. It defines the
 shared `codes/` and `data/` layout, validates file targets against path and
-symlink escapes, migrates empty legacy `sessions/<slug>` directories, and only
-removes an entire project root when that root is ARIS-managed. Chat sessions
+symlink escapes, and only removes an entire project root when that root is
+ARIS-managed. Chat sessions
 share their project root rather than creating a second nested workspace.
 
 AiiDA group access is routed through `ChatGroupGateway`. The default
@@ -95,9 +94,8 @@ Submission topology is controlled by explicit protocol values:
 - `task_mode="single"`: one runnable preview
 - `task_mode="batch"`: multiple structures, a parameter grid, or throughput work
 
-Text markers such as `[SUBMISSION_DRAFT]` remain compatibility transport, not a
-replacement for the structured protocol. Domain phrases must not be used to
-infer topology.
+Submission previews travel only through structured message payloads. Domain
+phrases must not be used to infer topology.
 
 ### AiiDA Capability
 
@@ -155,22 +153,19 @@ The repository may become a monorepo, but runtime environments remain separate:
 
 Sharing a repository does not imply sharing a Python virtual environment.
 
-## Migration sequence
+## Next architecture steps
 
-1. Introduce typed protocols and remove superseded compatibility transports.
-2. Move provider-specific model invocation behind `AgentRuntime`.
-3. Extract pure submission rules from the chat service.
-4. Route application code through `AiiDACapability`.
-5. Add an MCP facade for agent-facing AiiDA capabilities.
-6. Consolidate repositories only after service boundaries are stable.
-7. Evaluate an OpenAI Agents SDK adapter after the provider-neutral contract is
+1. Add an MCP facade for agent-facing AiiDA capabilities.
+2. Replace JSON session persistence with a transactional repository.
+3. Unify retries, runtime selection, and recovery in an explicit state machine.
+4. Consolidate repositories only after service boundaries are stable.
+5. Evaluate an OpenAI Agents SDK adapter after the provider-neutral contract is
    exercised by the current implementation.
 
 ## Change rules
 
 - Protocol changes update schema, parser/handler, and regression tests together.
-- New AI-driven UI branches require explicit structured fields or markers.
-- Domain services consume typed protocol values rather than compatibility
-  payloads.
+- New AI-driven UI branches require explicit structured fields.
+- Domain services consume typed protocol values.
 - Provider-specific errors and settings stay inside provider/runtime adapters.
-- A migration step must leave the application runnable and testable.
+- Every architecture step must leave the application runnable and testable.

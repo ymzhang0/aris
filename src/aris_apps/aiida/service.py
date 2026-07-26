@@ -18,13 +18,13 @@ from src.aris_core.config import settings
 from src.aris_core.logging import log_event
 
 from .client import (
-    AiiDABridgeService,
+    AiiDAWorkerClient,
     BridgeAPIError,
     BridgeConnectionState,
     BridgeOfflineError,
     BridgeResourceCounts,
     BridgeSnapshot,
-    bridge_service,
+    aiida_worker_client,
 )
 from .frontend_bridge import (
     add_nodes_to_group,
@@ -114,7 +114,7 @@ def _default_infrastructure_capabilities() -> dict[str, Any]:
 
 async def _get_infrastructure_capabilities() -> dict[str, Any]:
     try:
-        payload = await bridge_service.get_infrastructure_capabilities()
+        payload = await aiida_worker_client.get_infrastructure_capabilities()
     except Exception as error:  # noqa: BLE001
         logger.warning(log_event("aiida.service.infrastructure_capabilities.fallback", error=str(error)))
         return _default_infrastructure_capabilities()
@@ -371,7 +371,7 @@ def _validate_computer_payload(computer: dict[str, Any], capabilities: dict[str,
                 status_code=422,
                 detail=(
                     "Transport `core.ssh_async` uses SSH-config based authentication. "
-                    f"Remove legacy SSH fields: {', '.join(unsupported)}. "
+                    f"Remove core.ssh-only fields: {', '.join(unsupported)}. "
                     "Use `host`, `max_io_allowed`, `authentication_script`, `backend`, "
                     "`use_login_shell`, and `safe_interval` instead."
                 ),
@@ -611,11 +611,11 @@ async def parse_infrastructure_via_ai(text: str, ssh_host_details: dict[str, Any
 
 
 __all__ = [
-    "AiiDABridgeService",
+    "AiiDAWorkerClient",
     "BridgeConnectionState",
     "BridgeResourceCounts",
     "BridgeSnapshot",
-    "bridge_service",
+    "aiida_worker_client",
     "AiiDAHub",
     "hub",
     "add_nodes_to_group",

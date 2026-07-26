@@ -55,12 +55,6 @@ type SubmissionDraftPreview = {
   approvalRequest: SubmissionApprovalRequest | null;
 };
 
-type SubmissionDraftTagParseResult = {
-  preview: SubmissionDraftPreview | null;
-  cleanText: string;
-  bufferedFragment: string | null;
-};
-
 type SubmittedPreviewSummary = {
   processLabel: string;
   processPks: number[];
@@ -114,8 +108,6 @@ type AssistantContentBlock = {
   language: string | null;
 };
 
-const SUBMISSION_DRAFT_TAG = "[SUBMISSION_DRAFT]";
-const SUBMISSION_DRAFT_JSON_GLOBAL_REGEX = /(?:\[SUBMISSION_DRAFT\])\s*(?:```(?:json)?\s*)?(\{[\s\S]*?\})(?:\s*```)?/gis;
 const CONTEXT_NODE_DRAG_MIME = "application/x-aris-context-node";
 const RESOURCE_ATTACHMENT_DRAG_MIME = "application/x-aris-resource-attachment";
 
@@ -523,21 +515,6 @@ function extractRecoveryPlanState(payload: Record<string, unknown> | null | unde
   return { status, nextStep, plan };
 }
 
-function mergeSubmissionDraftBuffer(previous: string | undefined, fragment: string): string {
-  const next = fragment.trimStart();
-  if (!previous || !previous.trim()) {
-    return next;
-  }
-  const current = previous.trimStart();
-  if (next.startsWith(current)) {
-    return next;
-  }
-  if (current.startsWith(next)) {
-    return current;
-  }
-  return `${current}\n${next}`;
-}
-
 function mergeTurnTextBuffer(previous: string | undefined, incoming: string): string {
   const next = incoming ?? "";
   if (!next.trim()) {
@@ -556,161 +533,8 @@ function mergeTurnTextBuffer(previous: string | undefined, incoming: string): st
   return `${current}\n${next}`;
 }
 
-function extractBalancedJsonObject(fragment: string): { jsonText: string | null; remainder: string; incomplete: boolean } {
-  const start = fragment.indexOf("{");
-  if (start < 0) {
-    return { jsonText: null, remainder: fragment, incomplete: true };
-  }
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < fragment.length; index += 1) {
-    const char = fragment[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === "\"") {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === "\"") {
-      inString = true;
-      continue;
-    }
-    if (char === "{") {
-      depth += 1;
-      continue;
-    }
-    if (char !== "}") {
-      continue;
-    }
-
-    depth -= 1;
-    if (depth === 0) {
-      return {
-        jsonText: fragment.slice(start, index + 1),
-        remainder: fragment.slice(index + 1),
-        incomplete: false,
-      };
-    }
-  }
-
-  return { jsonText: fragment.slice(start), remainder: "", incomplete: true };
-}
-
-function parseSubmissionDraftTag(
-  text: string,
-  previousBufferedFragment?: string,
-): SubmissionDraftTagParseResult {
-  const rawText = text ?? "";
-  const tagIndex = rawText.toUpperCase().lastIndexOf(SUBMISSION_DRAFT_TAG);
-  if (tagIndex < 0) {
-    return {
-      preview: null,
-      cleanText: rawText,
-      bufferedFragment:
-        previousBufferedFragment && previousBufferedFragment.trim().length > 0
-          ? previousBufferedFragment
-          : null,
-    };
-  }
-
-  const regexMatches = [...rawText.matchAll(SUBMISSION_DRAFT_JSON_GLOBAL_REGEX)];
-  for (let index = regexMatches.length - 1; index >= 0; index -= 1) {
-    const regexMatch = regexMatches[index];
-    if (!regexMatch || typeof regexMatch.index !== "number") {
-      continue;
-    }
-    const regexJsonText = regexMatch[1];
-    try {
-      const parsed = asRecord(JSON.parse(regexJsonText));
-      const rawSubmissionDraft = asRecord(parsed?.submission_draft) ?? parsed;
-      const preview = normalizeSubmissionDraftPreview(rawSubmissionDraft);
-      const regexBeforeTag = rawText.slice(0, regexMatch.index).trimEnd();
-      const trailingText = rawText
-        .slice(regexMatch.index + regexMatch[0].length)
-        .replace(/^\s*```(?:json)?/i, "")
-        .replace(/```\s*$/i, "")
-        .trim();
-      const cleanText = [regexBeforeTag, trailingText].filter(Boolean).join("\n\n");
-      return {
-        preview,
-        cleanText,
-        bufferedFragment: null,
-      };
-    } catch {
-      // Continue scanning older matches if the latest is malformed/incomplete.
-    }
-  }
-
-  const beforeTag = rawText.slice(0, tagIndex).trimEnd();
-  const fragment = rawText.slice(tagIndex + SUBMISSION_DRAFT_TAG.length);
-  const mergedFragment = mergeSubmissionDraftBuffer(previousBufferedFragment, fragment);
-  const { jsonText, remainder, incomplete } = extractBalancedJsonObject(mergedFragment);
-  if (!jsonText || incomplete) {
-    return {
-      preview: null,
-      cleanText: beforeTag,
-      bufferedFragment: mergedFragment,
-    };
-  }
-
-  let preview: SubmissionDraftPreview | null = null;
-  try {
-    const parsed = asRecord(JSON.parse(jsonText));
-    const rawSubmissionDraft = asRecord(parsed?.submission_draft) ?? parsed;
-    preview = normalizeSubmissionDraftPreview(rawSubmissionDraft);
-  } catch (error) {
-    console.error("Failed to parse [SUBMISSION_DRAFT] JSON block.", {
-      error,
-      jsonText,
-      rawText: rawText.slice(Math.max(0, tagIndex), tagIndex + 1200),
-    });
-    return {
-      preview: null,
-      cleanText: beforeTag,
-      bufferedFragment: mergedFragment,
-    };
-  }
-
-  const trailingText = remainder.replace(/^\s*```(?:json)?/i, "").replace(/```\s*$/i, "").trim();
-  const cleanText = [beforeTag, trailingText].filter(Boolean).join("\n\n");
-  return {
-    preview,
-    cleanText,
-    bufferedFragment: null,
-  };
-}
-
-function stripSubmissionDraftBlocks(text: string): string {
-  let clean = text ?? "";
-  for (let pass = 0; pass < 4; pass += 1) {
-    if (!clean.toUpperCase().includes(SUBMISSION_DRAFT_TAG)) {
-      break;
-    }
-    const parsed = parseSubmissionDraftTag(clean);
-    if (parsed.cleanText === clean) {
-      clean = clean.replace(/\[SUBMISSION_DRAFT\][\s\S]*$/gi, "").trimEnd();
-      break;
-    }
-    clean = parsed.cleanText;
-  }
-  return clean;
-}
-
-function resolveTurnSubmissionDraft(
-  turn: ChatTurn,
-  bufferedFragment?: string,
-): SubmissionDraftPreview | null {
-  return (
-    extractSubmissionDraft(turn.assistantPayload) ??
-    parseSubmissionDraftTag(turn.assistantText ?? "", bufferedFragment).preview
-  );
+function resolveTurnSubmissionDraft(turn: ChatTurn): SubmissionDraftPreview | null {
+  return extractSubmissionDraft(turn.assistantPayload);
 }
 
 function submissionDraftSignature(preview: SubmissionDraftPreview): string {
@@ -1048,24 +872,6 @@ function areProcessLogsEqual(
       ) {
         return false;
       }
-    }
-  }
-  return true;
-}
-
-function areSubmissionBuffersEqual(
-  current: Record<number, string>,
-  next: Record<number, string>,
-): boolean {
-  const currentKeys = Object.keys(current);
-  const nextKeys = Object.keys(next);
-  if (currentKeys.length !== nextKeys.length) {
-    return false;
-  }
-  for (const key of nextKeys) {
-    const turnId = Number.parseInt(key, 10);
-    if ((current[turnId] ?? "") !== (next[turnId] ?? "")) {
-      return false;
     }
   }
   return true;
@@ -1774,7 +1580,6 @@ export function ChatPanel({
   const [currentStep, setCurrentStep] = useState("");
   const [currentStepTurnId, setCurrentStepTurnId] = useState<number | null>(null);
   const [processLogByTurn, setProcessLogByTurn] = useState<Record<number, ProcessLogEntry[]>>({});
-  const [submissionDraftBufferByTurn, setSubmissionDraftBufferByTurn] = useState<Record<number, string>>({});
   const [turnTextBufferByTurn, setTurnTextBufferByTurn] = useState<Record<number, string>>({});
   const [stableThinkingTextByTurn, setStableThinkingTextByTurn] = useState<Record<number, string>>({});
   const [stableAssistantTextByTurn, setStableAssistantTextByTurn] = useState<Record<number, string>>({});
@@ -2114,10 +1919,8 @@ export function ChatPanel({
       const next = { ...current };
       let changed = false;
       turns.forEach((turn) => {
-        const assistantText = turnTextBufferByTurn[turn.turnId] ?? turn.assistantText ?? "";
-        const hasSubmissionTag = assistantText.toUpperCase().includes(SUBMISSION_DRAFT_TAG);
         const hasSubmissionPayload = Boolean(extractSubmissionDraft(turn.assistantPayload));
-        const hasSubmissionSignal = hasSubmissionTag || hasSubmissionPayload || Boolean(stableSubmissionDraftByTurn[turn.turnId]);
+        const hasSubmissionSignal = hasSubmissionPayload || Boolean(stableSubmissionDraftByTurn[turn.turnId]);
         if (!hasSubmissionSignal || Object.prototype.hasOwnProperty.call(next, turn.turnId)) {
           return;
         }
@@ -2168,20 +1971,6 @@ export function ChatPanel({
   }, [turns]);
 
   useEffect(() => {
-    setSubmissionDraftBufferByTurn((current) => {
-      const next: Record<number, string> = {};
-      turns.forEach((turn) => {
-        const sourceText = turnTextBufferByTurn[turn.turnId] ?? turn.assistantText ?? "";
-        const parsed = parseSubmissionDraftTag(sourceText, current[turn.turnId]);
-        if (parsed.bufferedFragment) {
-          next[turn.turnId] = parsed.bufferedFragment;
-        }
-      });
-      return areSubmissionBuffersEqual(current, next) ? current : next;
-    });
-  }, [turnTextBufferByTurn, turns]);
-
-  useEffect(() => {
     const turnIds = new Set(turns.map((turn) => turn.turnId));
     setStableThinkingTextByTurn((current) => {
       const next: Record<number, string> = {};
@@ -2208,13 +1997,8 @@ export function ChatPanel({
       const next: Record<number, string> = {};
       turns.forEach((turn) => {
         const sourceText = turnTextBufferByTurn[turn.turnId] ?? turn.assistantText ?? "";
-        const parsed = parseSubmissionDraftTag(
-          sourceText,
-          submissionDraftBufferByTurn[turn.turnId],
-        );
-        const clean = parsed.cleanText ?? "";
-        if (clean.trim()) {
-          next[turn.turnId] = clean;
+        if (sourceText.trim()) {
+          next[turn.turnId] = sourceText;
           return;
         }
         if (current[turn.turnId]) {
@@ -2233,11 +2017,7 @@ export function ChatPanel({
     setStableSubmissionDraftByTurn((current) => {
       const next: Record<number, SubmissionDraftPreview> = {};
       turns.forEach((turn) => {
-        const sourceText = turnTextBufferByTurn[turn.turnId] ?? turn.assistantText ?? "";
-        const preview = resolveTurnSubmissionDraft(
-          { ...turn, assistantText: sourceText },
-          submissionDraftBufferByTurn[turn.turnId],
-        );
+        const preview = resolveTurnSubmissionDraft(turn);
         if (preview) {
           next[turn.turnId] = preview;
           return;
@@ -2254,7 +2034,7 @@ export function ChatPanel({
       }
       return arePreviewMapsEqual(current, next) ? current : next;
     });
-  }, [submissionDraftBufferByTurn, turnTextBufferByTurn, turns]);
+  }, [turnTextBufferByTurn, turns]);
 
   useEffect(() => {
     const thinkingTurnId = activeTurnId ?? latestTurnId;
@@ -2299,27 +2079,22 @@ export function ChatPanel({
     }
 
     const latestTurn = turns[turns.length - 1];
-    const assistantStreamText = turnTextBufferByTurn[latestTurn.turnId] ?? latestTurn.assistantText ?? "";
-    const taggedSubmissionDraft = parseSubmissionDraftTag(
-      assistantStreamText,
-      submissionDraftBufferByTurn[latestTurn.turnId],
-    );
     const assistantText =
-      taggedSubmissionDraft.cleanText.trim().length > 0
-        ? taggedSubmissionDraft.cleanText
-        : (stableAssistantTextByTurn[latestTurn.turnId] ?? taggedSubmissionDraft.cleanText);
-    const visibleAssistantText = stripSubmissionDraftBlocks(assistantText);
+      turnTextBufferByTurn[latestTurn.turnId] ??
+      latestTurn.assistantText ??
+      stableAssistantTextByTurn[latestTurn.turnId] ??
+      "";
     const hasFinalAssistantState =
       Boolean(latestTurn.assistantStatus) &&
       latestTurn.assistantStatus !== "thinking" &&
-      Boolean(visibleAssistantText.trim());
+      Boolean(assistantText.trim());
 
     if (!hasFinalAssistantState) {
       return;
     }
 
     const scriptArtifact = extractAssistantScriptArtifact({
-      text: visibleAssistantText,
+      text: assistantText,
       intent: latestTurn.userText ?? currentSessionName,
       projectPath: activeProject.root_path,
     });
@@ -2402,7 +2177,6 @@ export function ChatPanel({
     activeProject,
     currentSessionName,
     stableAssistantTextByTurn,
-    submissionDraftBufferByTurn,
     turnTextBufferByTurn,
     turns,
   ]);
@@ -2871,23 +2645,18 @@ export function ChatPanel({
             const thinkingText = (turn.thinkingText ?? "").trim()
               ? (turn.thinkingText ?? "")
               : (stableThinkingTextByTurn[turn.turnId] ?? "");
-            const taggedSubmissionDraft = parseSubmissionDraftTag(
-              assistantStreamText,
-              submissionDraftBufferByTurn[turn.turnId],
-            );
             const assistantSubmissionDraft = extractSubmissionDraft(turn.assistantPayload);
             const submissionDraft =
               assistantSubmissionDraft ??
-              taggedSubmissionDraft.preview ??
               stableSubmissionDraftByTurn[turn.turnId] ??
               null;
             const recovery = extractRecoveryPlanState(turn.assistantPayload);
             const hasRecoverySignal = Boolean(recovery.plan) || Boolean(recovery.nextStep);
             const assistantText =
-              taggedSubmissionDraft.cleanText.trim().length > 0
-                ? taggedSubmissionDraft.cleanText
-                : (stableAssistantTextByTurn[turn.turnId] ?? taggedSubmissionDraft.cleanText);
-            const visibleAssistantText = stripSubmissionDraftBlocks(assistantText);
+              assistantStreamText.trim().length > 0
+                ? assistantStreamText
+                : (stableAssistantTextByTurn[turn.turnId] ?? "");
+            const visibleAssistantText = assistantText;
             const hasAssistantText = Boolean(visibleAssistantText.trim());
             const hasFinalAssistantState =
               Boolean(turn.assistantStatus) &&

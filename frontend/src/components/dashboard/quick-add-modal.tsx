@@ -411,7 +411,7 @@ export function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddModalProps
             return;
         }
         if (transportType === ASYNC_SSH_TRANSPORT) {
-            const legacyFields = [
+            const unsupportedFields = [
                 "username",
                 "port",
                 "look_for_keys",
@@ -432,9 +432,9 @@ export function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddModalProps
                     const value = (parseResult.computer as Record<string, unknown>)[field];
                     return value !== null && value !== undefined && value !== "";
                 });
-            if (legacyFields.length > 0) {
+            if (unsupportedFields.length > 0) {
                 setError(
-                    `core.ssh_async does not accept core.ssh-only fields: ${legacyFields.join(", ")}. Use host, backend, authentication script, and max I/O instead.`,
+                    `core.ssh_async does not accept core.ssh-only fields: ${unsupportedFields.join(", ")}. Use host, backend, authentication script, and max I/O instead.`,
                 );
                 return;
             }

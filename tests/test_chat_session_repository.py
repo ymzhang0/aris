@@ -5,7 +5,6 @@ from pathlib import Path
 
 from src.aris_apps.aiida.chat.session_repository import (
     CHAT_SESSIONS_KV_KEY,
-    LEGACY_CHAT_SESSIONS_KV_KEY,
     JsonChatSessionRepository,
 )
 from src.aris_apps.aiida.chat import service as chat_service
@@ -22,18 +21,9 @@ class MemoryStub:
         self.values[key] = value
 
 
-def test_repository_loads_legacy_index_when_current_key_is_missing(tmp_path: Path) -> None:
-    memory = MemoryStub()
-    memory.values[LEGACY_CHAT_SESSIONS_KV_KEY] = {"version": 3}
-    repository = JsonChatSessionRepository(lambda: tmp_path)
-
-    assert repository.load_index(memory) == {"version": 3}
-
-
-def test_repository_prefers_current_index_over_legacy(tmp_path: Path) -> None:
+def test_repository_loads_current_index(tmp_path: Path) -> None:
     memory = MemoryStub()
     memory.values[CHAT_SESSIONS_KV_KEY] = {"version": 4}
-    memory.values[LEGACY_CHAT_SESSIONS_KV_KEY] = {"version": 3}
     repository = JsonChatSessionRepository(lambda: tmp_path)
 
     assert repository.load_index(memory) == {"version": 4}

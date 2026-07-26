@@ -45,7 +45,7 @@ class ARISResponse(BaseModel):
             if word_count > 5:
                 raise ValueError(
                     f"Suggestion '{item}' is too long ({word_count} words). "
-                    "Keep it under 5 words for UI compatibility."
+                    "Keep it under 5 words for the compact action UI."
                 )
         return value
 

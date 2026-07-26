@@ -15,7 +15,6 @@ from loguru import logger
 from src.aris_core.logging import log_event
 
 CHAT_SESSIONS_KV_KEY = "frontend_chat_sessions_v2"
-LEGACY_CHAT_SESSIONS_KV_KEY = "frontend_chat_sessions_v1"
 SESSIONS_DIRNAME = "sessions"
 
 
@@ -58,10 +57,7 @@ class JsonChatSessionRepository:
         getter = getattr(memory, "get_kv", None)
         if not callable(getter):
             return None
-        raw_store = getter(CHAT_SESSIONS_KV_KEY)
-        if raw_store is None:
-            raw_store = getter(LEGACY_CHAT_SESSIONS_KV_KEY)
-        return raw_store
+        return getter(CHAT_SESSIONS_KV_KEY)
 
     def load_session(self, session_id: str) -> dict[str, Any] | None:
         target = self._session_file_path(session_id)
@@ -120,7 +116,5 @@ __all__ = [
     "CHAT_SESSIONS_KV_KEY",
     "ChatSessionRepository",
     "JsonChatSessionRepository",
-    "LEGACY_CHAT_SESSIONS_KV_KEY",
     "SESSIONS_DIRNAME",
 ]
-

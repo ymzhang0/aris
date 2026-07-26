@@ -8,7 +8,6 @@ from src.aris_apps.aiida.chat.title_rules import (
     TITLE_STAGE_INITIAL,
     build_title_context_key,
     build_title_generation_prompt,
-    looks_like_session_identifier_title,
     normalize_session_title,
     normalize_title_state,
     sanitize_generated_title,
@@ -42,17 +41,6 @@ def test_title_text_normalization_and_slugging_are_provider_independent() -> Non
     assert normalize_session_title("硅能带") == DEFAULT_SESSION_TITLE
     assert slugify_session_name("GaAs Étude") == "gaas-etude"
     assert len(sanitize_generated_title("A deliberately verbose research title", "Fallback")) <= 12
-
-
-def test_identifier_titles_are_detected_for_legacy_migration() -> None:
-    session_id = "6b1499a6d6ac4f12a3f86d164b37d53e"
-
-    assert looks_like_session_identifier_title(session_id, session_id)
-    assert looks_like_session_identifier_title(
-        "6b1499a6-d6ac-4f12-a3f8-6d164b37d53e",
-        "different",
-    )
-    assert not looks_like_session_identifier_title("Si Bands", session_id)
 
 
 def test_title_context_key_is_stable_and_changes_with_research_context() -> None:
@@ -137,7 +125,7 @@ def test_pending_or_manual_title_does_not_schedule_generation() -> None:
     assert should_schedule_title_generation(session, 1) is None
 
 
-def test_chat_service_preserves_title_rule_compatibility_aliases() -> None:
+def test_chat_service_delegates_to_title_rules() -> None:
     assert chat_service._build_title_context_key is build_title_context_key
     assert chat_service._build_title_generation_prompt is build_title_generation_prompt
     assert chat_service._normalize_session_title is normalize_session_title

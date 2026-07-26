@@ -1,5 +1,0 @@
-# Base presets should stay plugin-agnostic.
-# Put plugin- or site-specific preset bundles in a separate file and point
-# ARIS_AIIDA_PRESETS_FILE to it when you explicitly want that specialization.
-
-presets: {}

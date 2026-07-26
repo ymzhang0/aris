@@ -24,7 +24,7 @@ from src.aris_core.schema import ARISResponse, Action, Observation
 def test_aris_core_surface_is_available() -> None:
     assert aris_core.Settings is Settings
     assert settings.FRONTEND_INDEX_FILE
-    assert Path(settings.FRONTEND_INDEX_FILE).as_posix().endswith("apps/web/dist/index.html")
+    assert Path(settings.FRONTEND_INDEX_FILE).as_posix().endswith("frontend/dist/index.html")
     assert Path(settings.ARIS_RUNTIME_ROOT).as_posix().endswith(".aris")
     assert settings.ARIS_MEMORY_DIR
     assert Path(settings.ARIS_MEMORY_DIR).is_absolute()
@@ -78,9 +78,9 @@ def test_aris_aiida_surface_is_available() -> None:
 
 def test_api_entrypoints_import_with_aris_paths() -> None:
     from apps.api.main import app as api_app
-    from src.app_api import app as legacy_api_app
+    from src.app_api import app as source_app
 
-    assert api_app is legacy_api_app
+    assert api_app is source_app
     assert api_app.title == "ARIS Central Hub"
 
 
@@ -102,44 +102,6 @@ def test_json_memory_uses_canonical_namespace_state(tmp_path) -> None:
 
     assert reloaded.file_path.endswith("history_aris_v2_global.json")
     assert reloaded.get_kv("migrated") is True
-
-
-def test_runtime_env_values_are_normalized_to_runtime_root(monkeypatch) -> None:
-    monkeypatch.setenv("ARIS_RUNTIME_ROOT", "runtime")
-    monkeypatch.setenv("ARIS_MEMORY_DIR", "engines/aiida/data/memories")
-    monkeypatch.setenv("ARIS_PROJECTS_ROOT", "data/projects")
-    monkeypatch.setenv("ARIS_SCRIPT_ARCHIVE_DIR", "engines/aiida/data/scripts")
-
-    config = Settings(_env_file=None)
-
-    assert Path(config.ARIS_RUNTIME_ROOT).as_posix().endswith(".aris")
-    assert Path(config.ARIS_MEMORY_DIR).as_posix().endswith(".aris/memories")
-    assert Path(config.ARIS_PROJECTS_ROOT).as_posix().endswith(".aris/projects")
-    assert Path(config.ARIS_SCRIPT_ARCHIVE_DIR).as_posix().endswith(".aris/scripts")
-
-
-def test_migrate_runtime_layout_moves_legacy_history_into_home_root(tmp_path, monkeypatch) -> None:
-    repo_root = tmp_path / "repo"
-    legacy_memory_dir = repo_root / "runtime" / "memories"
-    legacy_memory_dir.mkdir(parents=True)
-    legacy_file = legacy_memory_dir / "history_aris_v2_global.json"
-    legacy_file.write_text('{"summary": "", "turns": [], "action_history": [], "kv_store": {}}', encoding="utf-8")
-
-    home_root = tmp_path / ".aris"
-    fake_settings = SimpleNamespace(
-        ARIS_RUNTIME_ROOT=str(home_root),
-        ARIS_MEMORY_DIR=str(home_root / "memories"),
-        ARIS_PROJECTS_ROOT=str(home_root / "projects"),
-        ARIS_SCRIPT_ARCHIVE_DIR=str(home_root / "scripts"),
-    )
-
-    monkeypatch.setattr(runtime_config, "_REPO_ROOT", repo_root)
-
-    migrated = runtime_config.migrate_runtime_layout(fake_settings)
-
-    assert migrated
-    assert not legacy_file.exists()
-    assert (home_root / "memories" / "history_aris_v2_global.json").is_file()
 
 
 def test_bootstrap_home_config_copies_repo_defaults(tmp_path, monkeypatch) -> None:

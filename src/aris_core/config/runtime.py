@@ -5,13 +5,7 @@ import shutil
 from contextlib import suppress
 from pathlib import Path
 
-_REPO_ROOT = Path.cwd()
-_LEGACY_RUNTIME_PATHS = (
-    "default",
-    "data/memories",
-    "data/projects",
-    "engines/aiida/data/memories",
-)
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _expand_exclude(raw_path: str) -> list[str]:
@@ -40,7 +34,6 @@ def collect_reload_excludes(settings: object) -> list[str]:
         getattr(settings, "ARIS_MEMORY_DIR", ""),
         getattr(settings, "ARIS_PROJECTS_ROOT", ""),
         getattr(settings, "ARIS_SCRIPT_ARCHIVE_DIR", ""),
-        *_LEGACY_RUNTIME_PATHS,
     ]
 
     for candidate in candidates:
@@ -51,49 +44,6 @@ def collect_reload_excludes(settings: object) -> list[str]:
             excludes.append(expanded)
 
     return excludes
-
-
-def _merge_runtime_path(source: Path, target: Path) -> list[dict[str, str]]:
-    if not source.exists():
-        return []
-
-    with suppress(OSError):
-        if source.resolve(strict=False) == target.resolve(strict=False):
-            return []
-
-    if source.is_file():
-        if target.exists():
-            return []
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source), str(target))
-        return [{"source": str(source), "target": str(target)}]
-
-    target.mkdir(parents=True, exist_ok=True)
-    migrated: list[dict[str, str]] = []
-    for child in sorted(source.iterdir(), key=lambda item: item.name):
-        destination = target / child.name
-        if child.is_dir():
-            migrated.extend(_merge_runtime_path(child, destination))
-            with suppress(OSError):
-                child.rmdir()
-            continue
-
-        if child.name in {".gitkeep", ".gitignore"}:
-            continue
-
-        if destination.exists():
-            with suppress(OSError):
-                if child.read_bytes() == destination.read_bytes():
-                    child.unlink()
-            continue
-
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(child), str(destination))
-        migrated.append({"source": str(child), "target": str(destination)})
-
-    with suppress(OSError):
-        source.rmdir()
-    return migrated
 
 
 def _bootstrap_config_path(source: Path, target: Path) -> list[dict[str, str]]:
@@ -109,35 +59,6 @@ def _bootstrap_config_path(source: Path, target: Path) -> list[dict[str, str]]:
     for child in sorted(source.iterdir(), key=lambda item: item.name):
         copied.extend(_bootstrap_config_path(child, target / child.name))
     return copied
-
-
-def migrate_runtime_layout(settings: object) -> list[dict[str, str]]:
-    runtime_root = Path(str(getattr(settings, "ARIS_RUNTIME_ROOT", "") or "")).expanduser()
-    memory_dir = Path(str(getattr(settings, "ARIS_MEMORY_DIR", "") or "")).expanduser()
-    projects_root = Path(str(getattr(settings, "ARIS_PROJECTS_ROOT", "") or "")).expanduser()
-    script_dir = Path(str(getattr(settings, "ARIS_SCRIPT_ARCHIVE_DIR", "") or "")).expanduser()
-
-    mappings = [
-        (_REPO_ROOT / "runtime" / "memories", memory_dir),
-        (_REPO_ROOT / "runtime" / "scripts", script_dir),
-        (_REPO_ROOT / "runtime" / "projects", projects_root),
-        (_REPO_ROOT / "runtime" / "cache", runtime_root / "cache"),
-        (_REPO_ROOT / "runtime" / "uploads", runtime_root / "uploads"),
-        (_REPO_ROOT / "data" / "memories", memory_dir),
-        (_REPO_ROOT / "data" / "projects", projects_root),
-        (_REPO_ROOT / "engines" / "aiida" / "data" / "memories", memory_dir),
-        (_REPO_ROOT / "engines" / "aiida" / "data" / "scripts", script_dir),
-    ]
-
-    migrated: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for source, target in mappings:
-        key = (str(source), str(target))
-        if key in seen:
-            continue
-        seen.add(key)
-        migrated.extend(_merge_runtime_path(source, target))
-    return migrated
 
 
 def bootstrap_home_config(settings: object) -> list[dict[str, str]]:

@@ -35,16 +35,6 @@ def test_enrich_submission_draft_keeps_cutoffs_under_parameters() -> None:
 
 
 def test_enrich_submission_draft_adds_available_codes_metadata(monkeypatch) -> None:
-    fake_port_spec = {
-        "entry_point": "quantumespresso.pw.relax",
-        "namespaces": ["base", "base.pw", "base.pw.parameters", "base_final", "base_final.pw"],
-        "ports": [
-            {"path": "code", "kind": "code", "required": False},
-            {"path": "base.pw.code", "kind": "code", "required": True},
-            {"path": "base_final.pw.code", "kind": "code", "required": False},
-        ],
-        "code_paths": ["code", "base.pw.code", "base_final.pw.code"],
-    }
     fake_codes = [
         {
             "value": "pw@localhost",
@@ -56,7 +46,6 @@ def test_enrich_submission_draft_adds_available_codes_metadata(monkeypatch) -> N
         }
     ]
 
-    monkeypatch.setattr(workflow_view, "_load_workflow_port_spec", lambda _entry_points: fake_port_spec)
     monkeypatch.setattr(workflow_view, "_query_available_codes", lambda _required_plugin: fake_codes)
 
     payload = {
@@ -64,6 +53,7 @@ def test_enrich_submission_draft_adds_available_codes_metadata(monkeypatch) -> N
         "inputs": {
             "base": {
                 "pw": {
+                    "code": "pw@localhost",
                     "parameters": {"SYSTEM": {"ecutwfc": 60}},
                 }
             }
@@ -77,13 +67,12 @@ def test_enrich_submission_draft_adds_available_codes_metadata(monkeypatch) -> N
     assert meta["required_code_plugin"] == "quantumespresso.pw"
     assert meta["available_codes"] == fake_codes
     port_spec = meta["port_spec"]
-    assert set(fake_port_spec["namespaces"]).issubset(set(port_spec["namespaces"]))
-    assert set(fake_port_spec["code_paths"]).issubset(set(port_spec["code_paths"]))
+    assert {"base", "base.pw", "base.pw.parameters"}.issubset(set(port_spec["namespaces"]))
+    assert port_spec["code_paths"] == ["base.pw.code"]
     assert meta["workchain_entry_point"] == "quantumespresso.pw.relax"
 
 
-def test_enrich_submission_draft_builds_fallback_port_spec_and_codes(monkeypatch) -> None:
-    monkeypatch.setattr(workflow_view, "_load_workflow_port_spec", lambda _entry_points: None)
+def test_enrich_submission_draft_builds_input_port_spec_and_codes(monkeypatch) -> None:
     monkeypatch.setattr(workflow_view, "_query_available_codes", lambda _required_plugin: [])
 
     payload = {
@@ -221,7 +210,7 @@ def test_enrich_submission_draft_prefers_builder_inputs_over_raw_node_envelopes(
     assert all_inputs["settings.SYSTEM.ecutwfc"]["value"] == 60
 
 
-def test_query_available_codes_uses_bridge_resources_fallback(monkeypatch) -> None:
+def test_query_available_codes_uses_worker_resources(monkeypatch) -> None:
     from src.aris_apps.aiida import client as aiida_client
 
     def fake_request_json_sync(method: str, path: str, **kwargs):
@@ -241,12 +230,12 @@ def test_query_available_codes_uses_bridge_resources_fallback(monkeypatch) -> No
                     "default_plugin": "quantumespresso.ph",
                 },
                 {
-                    "value": "qe-legacy@lucia",
+                    "value": "qe-alt@lucia",
                 },
             ]
         }
 
-    monkeypatch.setattr(aiida_client.bridge_service, "request_json_sync", fake_request_json_sync)
+    monkeypatch.setattr(aiida_client.aiida_worker_client, "request_json_sync", fake_request_json_sync)
 
     codes = workflow_view._query_available_codes("quantumespresso.pw")
     codes_by_value = {str(item.get("value")): item for item in codes}
@@ -254,4 +243,4 @@ def test_query_available_codes_uses_bridge_resources_fallback(monkeypatch) -> No
     assert "qe-750-pw@lucia" in codes_by_value
     assert codes_by_value["qe-750-pw@lucia"]["is_compatible"] is True
     assert "qe-750-ph@lucia" in codes_by_value
-    assert "qe-legacy@lucia" in codes_by_value
+    assert "qe-alt@lucia" in codes_by_value

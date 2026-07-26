@@ -111,6 +111,6 @@ def test_chat_service_uses_injected_gateway_for_session_group_rename() -> None:
     ]
 
 
-def test_chat_service_preserves_group_label_compatibility_aliases() -> None:
+def test_chat_service_delegates_group_label_construction() -> None:
     assert chat_service._build_project_group_label is build_project_group_label
     assert chat_service._build_session_group_label is build_session_group_label
