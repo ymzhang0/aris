@@ -46,6 +46,12 @@ from src.aris_apps.aiida.chat.context import (
     _strip_auto_environment_prompt,
     normalize_context_node_ids,
 )
+from src.aris_apps.aiida.chat.group_gateway import (
+    ChatGroupGateway,
+    FrontendBridgeGroupGateway,
+    build_project_group_label as _build_project_group_label,
+    build_session_group_label as _build_session_group_label,
+)
 from src.aris_apps.aiida.chat.message_payloads import (
     _is_status_only_text,
     _merge_message_payload,
@@ -88,7 +94,6 @@ from src.aris_apps.aiida.chat.title_rules import (
     slugify_session_name as _slugify_session_name,
 )
 from src.aris_apps.aiida.chat.workspace_manager import ChatWorkspaceManager
-from src.aris_apps.aiida.frontend_bridge import inspect_group, list_groups, rename_group
 from src.aris_apps.aiida.presenters.workflow_view import enrich_submission_draft_payload
 from src.aris_apps.aiida.domain.submissions import (
     extract_recovery_plan as _domain_extract_recovery_plan,
@@ -133,6 +138,7 @@ _CHAT_SESSION_REPOSITORY = JsonChatSessionRepository(
 _CHAT_WORKSPACE_MANAGER = ChatWorkspaceManager(
     lambda: settings.ARIS_PROJECTS_ROOT,
 )
+_CHAT_GROUP_GATEWAY: ChatGroupGateway = FrontendBridgeGroupGateway()
 _managed_project_root = _CHAT_WORKSPACE_MANAGER.managed_project_root
 _project_root_path = _CHAT_WORKSPACE_MANAGER.project_root_path
 _project_sessions_root_path = _CHAT_WORKSPACE_MANAGER.project_sessions_root_path
@@ -208,11 +214,6 @@ async def _prepare_structured_submission_request(
     )
 
 
-def _normalize_group_label_segment(value: Any, *, fallback: str) -> str:
-    text = " ".join(str(value or "").split()).replace("/", "_").strip()
-    return text or fallback
-
-
 def _resolve_unique_session_slug(
     store: dict[str, Any],
     project_id: str,
@@ -246,35 +247,30 @@ def _desired_session_slug(store: dict[str, Any], session: dict[str, Any], title:
     return _resolve_unique_session_slug(store, project_id, title_slug, session_id=str(session.get("id") or ""))
 
 
-def _rename_session_group_label_if_needed(store: dict[str, Any], session: dict[str, Any], old_slug: str | None) -> None:
+def _get_chat_group_gateway(state: Any) -> ChatGroupGateway:
+    gateway = getattr(state, "chat_group_gateway", None)
+    if (
+        callable(getattr(gateway, "inspect_group", None))
+        and callable(getattr(gateway, "rename_group_label_if_available", None))
+    ):
+        return gateway
+    return _CHAT_GROUP_GATEWAY
+
+
+def _rename_session_group_label_if_needed(
+    state: Any,
+    store: dict[str, Any],
+    session: dict[str, Any],
+    old_slug: str | None,
+) -> None:
     project = _get_store_project(store, str(session.get("project_id") or ""))
     project_name = str(project.get("name") or _DEFAULT_PROJECT_NAME)
     old_group_label = _build_session_group_label(project_name, old_slug or "session")
     new_group_label = _build_session_group_label(project_name, _get_session_slug(session))
-    if old_group_label == new_group_label:
-        return
-
-    with suppress(Exception):
-        existing_new = next(
-            (group for group in list_groups() if str(group.get("label") or "").strip() == new_group_label),
-            None,
-        )
-        existing_old = next(
-            (group for group in list_groups() if str(group.get("label") or "").strip() == old_group_label),
-            None,
-        )
-        if existing_old and not existing_new:
-            rename_group(int(existing_old.get("pk") or 0), new_group_label)
-
-
-def _build_project_group_label(project_name: Any) -> str:
-    return _normalize_group_label_segment(project_name, fallback=_DEFAULT_PROJECT_NAME)
-
-
-def _build_session_group_label(project_name: Any, session_name: Any) -> str:
-    project_group_label = _build_project_group_label(project_name)
-    session_segment = _normalize_group_label_segment(session_name, fallback="session")
-    return f"{project_group_label}/{session_segment}"
+    _get_chat_group_gateway(state).rename_group_label_if_available(
+        old_group_label,
+        new_group_label,
+    )
 
 
 def _build_chat_session_storage_payload(session: dict[str, Any]) -> dict[str, Any]:
@@ -825,7 +821,10 @@ def get_chat_session_batch_progress(state: Any, session_id: str) -> dict[str, An
     project = _get_store_project(store, str(session.get("project_id") or ""))
     project_name = str(project.get("name") or _DEFAULT_PROJECT_NAME)
     session_group_label = _build_session_group_label(project_name, _get_session_slug(session))
-    group_payload = inspect_group(session_group_label, limit=500)
+    group_payload = _get_chat_group_gateway(state).inspect_group(
+        session_group_label,
+        limit=500,
+    )
     if not isinstance(group_payload, dict):
         return None
 
@@ -1211,7 +1210,7 @@ def update_chat_session(
             session["title_last_generated_turn"] = 0
             session["title_last_context_key"] = None
         _ensure_session_workspace_dir(store, session)
-        _rename_session_group_label_if_needed(store, session, old_slug)
+        _rename_session_group_label_if_needed(state, store, session, old_slug)
         changed = True
     if tags is not _UNSET:
         session["tags"] = _normalize_chat_session_tags(tags)
@@ -2635,7 +2634,7 @@ def _finalize_auto_title_update(
     session["title_last_context_key"] = context_key or None
     session["updated_at"] = _now_iso()
     _ensure_session_workspace_dir(store, session)
-    _rename_session_group_label_if_needed(store, session, old_slug)
+    _rename_session_group_label_if_needed(state, store, session, old_slug)
     _touch_chat_sessions(state)
     _persist_chat_session_store(state)
 

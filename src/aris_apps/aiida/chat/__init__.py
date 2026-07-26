@@ -25,12 +25,14 @@ from .service import (
     update_chat_session,
     write_chat_project_file,
 )
+from .group_gateway import ChatGroupGateway, FrontendBridgeGroupGateway
 from .session_repository import ChatSessionRepository, JsonChatSessionRepository
 from .workspace_manager import ChatWorkspaceManager
 
 __all__ = [
     "activate_chat_session",
     "build_chat_project_worker_headers",
+    "ChatGroupGateway",
     "ChatSessionRepository",
     "ChatWorkspaceManager",
     "cancel_chat_turn",
@@ -46,6 +48,7 @@ __all__ = [
     "get_chat_session_workspace_path",
     "get_chat_session_detail",
     "get_chat_snapshot",
+    "FrontendBridgeGroupGateway",
     "list_chat_projects",
     "list_chat_project_workspace_files",
     "list_chat_session_workspace_files",

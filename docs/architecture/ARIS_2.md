@@ -73,6 +73,13 @@ symlink escapes, migrates empty legacy `sessions/<slug>` directories, and only
 removes an entire project root when that root is ARIS-managed. Chat sessions
 share their project root rather than creating a second nested workspace.
 
+AiiDA group access is routed through `ChatGroupGateway`. The default
+`FrontendBridgeGroupGateway` owns bridge-specific inspection and rename calls,
+prevents a session rename from overwriting an existing group, and tolerates an
+offline bridge during best-effort title/group synchronization. A gateway can be
+injected on application state for tests or a future MCP-backed implementation;
+group-label construction remains deterministic and provider-independent.
+
 ### Agent Runtime
 
 Application code calls an `AgentRuntime` protocol with an `AgentRunRequest`.

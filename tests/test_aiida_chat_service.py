@@ -395,7 +395,7 @@ def test_summarize_chat_session_batch_progress_counts_terminal_and_active_jobs()
     assert summary["failed"] == 1
 
 
-def test_get_chat_session_batch_progress_reads_session_group(monkeypatch) -> None:
+def test_get_chat_session_batch_progress_reads_session_group() -> None:
     state = _make_chat_state()
     session = chat_service.create_chat_session(state, title="Si Thermal Expansion", activate=True)
     captured: dict[str, object] = {}
@@ -410,7 +410,10 @@ def test_get_chat_session_batch_progress_reads_session_group(monkeypatch) -> Non
             ]
         }
 
-    monkeypatch.setattr(chat_service, "inspect_group", _fake_inspect_group)
+    state.chat_group_gateway = SimpleNamespace(
+        inspect_group=_fake_inspect_group,
+        rename_group_label_if_available=lambda _old, _new: False,
+    )
 
     summary = chat_service.get_chat_session_batch_progress(state, session["id"])
 
