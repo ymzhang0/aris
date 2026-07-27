@@ -282,6 +282,11 @@ def _get_frontend_groups() -> list[dict[str, Any]]:
     return list_groups()
 
 
+async def _get_frontend_groups_async() -> list[dict[str, Any]]:
+    payload = await aiida_worker_client.request_json("GET", "/management/groups")
+    return payload.get("items", []) if isinstance(payload, dict) else []
+
+
 def _get_frontend_nodes(
     limit: int = 15,
     group_label: str | None = None,
@@ -292,6 +297,22 @@ def _get_frontend_nodes(
     if not hub.current_profile:
         hub.start()
     return get_recent_nodes(limit=limit, group_label=group_label, node_type=node_type, root_only=root_only)
+
+
+async def _get_frontend_nodes_async(
+    limit: int = 15,
+    group_label: str | None = None,
+    node_type: str | None = None,
+    *,
+    root_only: bool = True,
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"limit": limit, "root_only": root_only}
+    if group_label:
+        params["group_label"] = group_label
+    if node_type:
+        params["node_type"] = node_type
+    payload = await aiida_worker_client.request_json("GET", "/management/recent-nodes", params=params)
+    return payload.get("items", []) if isinstance(payload, dict) else []
 
 
 def _coerce_text_value(value: Any) -> str | None:
@@ -1822,13 +1843,13 @@ async def proxy_import_data(
 async def frontend_bootstrap(request: Request):
     state = request.app.state
     try:
-        processes = _get_frontend_nodes(limit=15)
+        processes = await _get_frontend_nodes_async(limit=15)
     except Exception as error:  # noqa: BLE001
         logger.exception(log_event("aiida.frontend.bootstrap.processes.failed", error=str(error)))
         processes = []
 
     try:
-        groups = _get_frontend_groups()
+        groups = await _get_frontend_groups_async()
     except Exception as error:  # noqa: BLE001
         logger.exception(log_event("aiida.frontend.bootstrap.groups.failed", error=str(error)))
         groups = []

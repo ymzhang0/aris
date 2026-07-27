@@ -50,10 +50,15 @@ class WorkerProcessManager:
         self._lock = asyncio.Lock()
         self._restart_count = 0
         self._last_error: str | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def is_running(self) -> bool:
         return self._process is not None and self._process.returncode is None
+
+    @property
+    def loop(self) -> asyncio.AbstractEventLoop | None:
+        return self._loop
 
     def snapshot(self) -> WorkerProcessSnapshot:
         return WorkerProcessSnapshot(
@@ -66,6 +71,7 @@ class WorkerProcessManager:
         )
 
     async def start(self) -> dict[str, Any]:
+        self._loop = asyncio.get_running_loop()
         async with self._lock:
             await self._ensure_started_locked()
             return await self._exchange_locked("runtime.status", {})

@@ -172,16 +172,31 @@ def _merge_request_headers(headers: Mapping[str, Any] | None = None) -> dict[str
 
 
 def _run_async_from_sync(coro: Any, timeout: float = 10.0) -> Any:
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+    manager = get_worker_process_manager()
+    loop = manager.loop if manager is not None else None
 
     if loop is None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+    if loop is None or not loop.is_running():
         return asyncio.run(coro)
 
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return future.result(timeout=timeout)
+    import concurrent.futures
+    import threading
+
+    if threading.current_thread() is not threading.main_thread():
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=timeout)
+
+    def _run_in_thread() -> Any:
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=timeout)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(_run_in_thread).result(timeout=timeout)
 
 
 def _map_http_request_to_rpc(
