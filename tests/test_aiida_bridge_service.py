@@ -55,3 +55,23 @@ def test_missing_canonical_status_marks_bridge_offline() -> None:
 
     assert calls == ["/status"]
     assert snapshot.status == "offline"
+
+
+def test_explicit_offline_status_is_cached_as_authoritative() -> None:
+    service = AiiDAWorkerClient(
+        bridge_url="http://127.0.0.1:8001",
+        cache_ttl_seconds=60.0,
+    )
+
+    async def fake_fetch_json(path: str, **_: object) -> object:
+        assert path == "/status"
+        return {"status": "offline", "mode": "core-injected-executor"}
+
+    service._fetch_json = fake_fetch_json  # type: ignore[method-assign]
+
+    first = asyncio.run(service.get_status(force_refresh=True))
+    second = asyncio.run(service.get_status(force_refresh=False))
+
+    assert first.status == "offline"
+    assert second.status == "offline"
+    assert service._snapshot.checked_at > 0  # noqa: SLF001

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import time
+
+import httpx
 import pytest
 
 from src.aris_apps.aiida.client import (
     AiiDAWorkerClient,
+    BridgeAPIError,
     PROJECT_ID_HEADER,
     SESSION_ID_HEADER,
     WORKSPACE_PATH_HEADER,
@@ -58,6 +62,62 @@ def test_worker_client_is_connected_property_tracks_status() -> None:
     assert client.is_connected is True
     client._mark_offline()  # noqa: SLF001
     assert client.is_connected is False
+
+
+def test_non_status_request_failure_does_not_poison_connection_state() -> None:
+    client = AiiDAWorkerClient(bridge_url="http://127.0.0.1:8001")
+    client._mark_online()  # noqa: SLF001
+
+    client._record_status_failure("/resources")  # noqa: SLF001
+
+    assert client.is_connected is True
+
+
+def test_non_status_request_success_does_not_override_offline_probe() -> None:
+    client = AiiDAWorkerClient(bridge_url="http://127.0.0.1:8001")
+    client._mark_offline()  # noqa: SLF001
+
+    client._record_status_success("/resources")  # noqa: SLF001
+
+    assert client.is_connected is False
+
+
+def test_only_status_probe_changes_connection_state() -> None:
+    client = AiiDAWorkerClient(bridge_url="http://127.0.0.1:8001")
+
+    client._record_status_success("/status")  # noqa: SLF001
+    assert client.is_connected is True
+
+    client._record_status_failure("/status")  # noqa: SLF001
+    assert client.is_connected is False
+
+
+@pytest.mark.anyio
+async def test_non_status_timeout_keeps_last_confirmed_online_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _TimeoutClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def request(self, *_: object, **__: object):
+            raise httpx.TimeoutException("slow detail request")
+
+    client = AiiDAWorkerClient(bridge_url="http://127.0.0.1:8001")
+    client._mark_online()  # noqa: SLF001
+    client._snapshot.checked_at = time.monotonic()  # noqa: SLF001
+    monkeypatch.setattr("src.aris_apps.aiida.client.httpx.AsyncClient", _TimeoutClient)
+
+    with pytest.raises(BridgeAPIError):
+        await client.request_json("GET", "/resources", retries=0)
+
+    assert client.is_connected is True
 
 
 @pytest.mark.anyio

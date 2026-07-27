@@ -167,6 +167,14 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
 
   const status = statusQuery.data?.status ?? "offline";
   const isConnecting = statusQuery.isPending && !statusQuery.data;
+  const isReconnecting = statusQuery.isError && Boolean(statusQuery.data) && status === "online";
+  const statusLabel = isConnecting
+    ? "Connecting…"
+    : isReconnecting
+      ? "Reconnecting…"
+      : status === "online"
+        ? "Ready"
+        : "Unavailable";
   const environmentInspection = environmentState.inspection;
   const environmentReady = environmentState.inspectionStatus === "ready" && environmentInspection !== null;
   const environmentProfileName = normalizeProfileName(environmentInspection?.profile);
@@ -269,15 +277,21 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
             <span
               className={cn(
                 "absolute inline-flex h-4 w-4 rounded-full",
-                isOnline ? "animate-ping bg-emerald-500/35" : "animate-pulse bg-rose-500/35",
+                isReconnecting
+                  ? "animate-ping bg-amber-500/35"
+                  : isOnline
+                    ? "animate-ping bg-emerald-500/35"
+                    : "animate-pulse bg-rose-500/35",
               )}
             />
             <span
               className={cn(
                 "relative inline-flex h-2.5 w-2.5 rounded-full",
-                isOnline
-                  ? "bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.85)]"
-                  : "bg-rose-500 shadow-[0_0_12px_rgba(239,68,68,0.8)]",
+                isReconnecting
+                  ? "bg-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.75)]"
+                  : isOnline
+                    ? "bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.85)]"
+                    : "bg-rose-500 shadow-[0_0_12px_rgba(239,68,68,0.8)]",
               )}
             />
           </span>
@@ -287,7 +301,7 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
               Compute Environment
             </p>
             <div className="flex items-center gap-2 truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">
-              {isConnecting ? "Connecting…" : status === "online" ? "Ready" : "Needs attention"}
+              {statusLabel}
               {isOnline && (
                 <button
                   onClick={onInfrastructureClick}
@@ -305,7 +319,7 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
         <PlugZap
           className={cn(
             "h-4 w-4 shrink-0 transition-colors duration-200",
-            isOnline ? "text-emerald-500" : "text-rose-500",
+            isReconnecting ? "text-amber-500" : isOnline ? "text-emerald-500" : "text-rose-500",
           )}
         />
       </div>
@@ -359,10 +373,15 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
         ) : null}
 
       </div>
-      {!isOnline && !isConnecting ? (
+      {isReconnecting ? (
+        <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-300">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          The latest health check was interrupted. Keeping the last confirmed online state.
+        </p>
+      ) : !isOnline && !isConnecting ? (
         <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-rose-600 dark:text-rose-300">
           <AlertTriangle className="h-3.5 w-3.5" />
-          ARIS is reconnecting to the local compute environment.
+          The local compute runtime is unavailable. ARIS will keep retrying.
         </p>
       ) : null}
     </section>

@@ -244,19 +244,19 @@ class AiiDAWorkerClient:
                         headers=request_headers,
                     )
             except httpx.ConnectError as exc:
-                self._mark_offline()
+                self._record_status_failure(normalized_path)
                 if attempt < retry_budget:
                     await self._sleep_for_retry(attempt)
                     continue
                 raise BridgeOfflineError() from exc
             except httpx.TimeoutException as exc:
-                self._mark_offline()
+                self._record_status_failure(normalized_path)
                 if attempt < retry_budget:
                     await self._sleep_for_retry(attempt)
                     continue
                 raise BridgeAPIError(status_code=0, message=str(exc), payload={"error": str(exc)}) from exc
             except httpx.RequestError as exc:
-                self._mark_offline()
+                self._record_status_failure(normalized_path)
                 if attempt < retry_budget:
                     await self._sleep_for_retry(attempt)
                     continue
@@ -271,7 +271,7 @@ class AiiDAWorkerClient:
                 message, payload = _extract_error_payload(response)
                 raise BridgeAPIError(status_code=response.status_code, message=message, payload=payload)
 
-            self._mark_online()
+            self._record_status_success(normalized_path)
             try:
                 return response.json()
             except ValueError as exc:
@@ -308,17 +308,14 @@ class AiiDAWorkerClient:
                     headers=request_headers,
                 )
         except httpx.ConnectError as exc:
-            self._mark_offline()
             raise BridgeOfflineError() from exc
         except httpx.RequestError as exc:
-            self._mark_offline()
             raise BridgeAPIError(status_code=0, message=str(exc), payload={"error": str(exc)}) from exc
 
         if response.status_code >= 400:
             message, payload = _extract_error_payload(response)
             raise BridgeAPIError(status_code=response.status_code, message=message, payload=payload)
 
-        self._mark_online()
         try:
             return response.json()
         except ValueError as exc:
@@ -360,19 +357,19 @@ class AiiDAWorkerClient:
                         headers=request_headers,
                     )
             except httpx.ConnectError as exc:
-                self._mark_offline()
+                self._record_status_failure(normalized_path)
                 if attempt < retry_budget:
                     self._sleep_for_retry_sync(attempt)
                     continue
                 raise BridgeOfflineError() from exc
             except httpx.TimeoutException as exc:
-                self._mark_offline()
+                self._record_status_failure(normalized_path)
                 if attempt < retry_budget:
                     self._sleep_for_retry_sync(attempt)
                     continue
                 raise BridgeAPIError(status_code=0, message=str(exc), payload={"error": str(exc)}) from exc
             except httpx.RequestError as exc:
-                self._mark_offline()
+                self._record_status_failure(normalized_path)
                 if attempt < retry_budget:
                     self._sleep_for_retry_sync(attempt)
                     continue
@@ -387,7 +384,7 @@ class AiiDAWorkerClient:
                 message, payload = _extract_error_payload(response)
                 raise BridgeAPIError(status_code=response.status_code, message=message, payload=payload)
 
-            self._mark_online()
+            self._record_status_success(normalized_path)
             try:
                 return response.json()
             except ValueError as exc:
@@ -427,19 +424,16 @@ class AiiDAWorkerClient:
                         headers=request_headers,
                     )
             except httpx.ConnectError as exc:
-                self._mark_offline()
                 if attempt < retry_budget:
                     self._sleep_for_retry_sync(attempt)
                     continue
                 raise BridgeOfflineError() from exc
             except httpx.TimeoutException as exc:
-                self._mark_offline()
                 if attempt < retry_budget:
                     self._sleep_for_retry_sync(attempt)
                     continue
                 raise BridgeAPIError(status_code=0, message=str(exc), payload={"error": str(exc)}) from exc
             except httpx.RequestError as exc:
-                self._mark_offline()
                 if attempt < retry_budget:
                     self._sleep_for_retry_sync(attempt)
                     continue
@@ -453,7 +447,6 @@ class AiiDAWorkerClient:
                 message, payload = _extract_error_payload(response)
                 raise BridgeAPIError(status_code=response.status_code, message=message, payload=payload)
 
-            self._mark_online()
             return BridgeBinaryResponse(
                 content=response.content,
                 headers=dict(response.headers),
@@ -651,17 +644,17 @@ class AiiDAWorkerClient:
             return
 
         normalized = self._normalize_status_payload(payload)
+        self._snapshot.status = normalized["status"]
+        self._snapshot.checked_at = checked_at
         if normalized["status"] == "online":
             if normalized["resources"].workchains == 0 and normalized["plugins"]:
                 normalized["resources"].workchains = len(normalized["plugins"])
-            self._snapshot.status = normalized["status"]
             self._snapshot.environment = normalized["environment"]
             self._snapshot.mode = normalized["mode"]
             self._snapshot.profile = normalized["profile"]
             self._snapshot.daemon_status = normalized["daemon_status"]
             self._snapshot.resources = normalized["resources"]
             self._snapshot.plugins = normalized["plugins"]
-            self._snapshot.checked_at = checked_at
 
         if not self._logged_first_handshake:
             logger.info(f"[AiiDA Bridge] Connected to worker at {self._worker_target}")
@@ -723,6 +716,14 @@ class AiiDAWorkerClient:
 
     def _mark_offline(self) -> None:
         self._snapshot.status = "offline"
+
+    def _record_status_success(self, path: str) -> None:
+        if path == "/status":
+            self._mark_online()
+
+    def _record_status_failure(self, path: str) -> None:
+        if path == "/status":
+            self._mark_offline()
 
     @property
     def _worker_target(self) -> str:

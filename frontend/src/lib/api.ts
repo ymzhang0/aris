@@ -778,21 +778,6 @@ export async function cancelPendingSubmission(): Promise<{ status: string }> {
   return data;
 }
 
-const DEFAULT_BRIDGE_STATUS: BridgeStatusResponse = {
-  status: "offline",
-  url: "http://127.0.0.1:8001",
-  environment: "Remote Bridge",
-  worker_mode: null,
-  profile: "unknown",
-  daemon_status: false,
-  resources: {
-    computers: 0,
-    codes: 0,
-    workchains: 0,
-  },
-  plugins: [],
-};
-
 const DEFAULT_BRIDGE_PROFILES: BridgeProfilesResponse = {
   current_profile: null,
   default_profile: null,
@@ -805,12 +790,8 @@ const DEFAULT_BRIDGE_RESOURCES: BridgeResourcesResponse = {
 };
 
 export async function getBridgeStatus(): Promise<BridgeStatusResponse> {
-  try {
-    const { data } = await aiidaApi.get<BridgeStatusResponse>("/status");
-    return data;
-  } catch {
-    return DEFAULT_BRIDGE_STATUS;
-  }
+  const { data } = await aiidaApi.get<BridgeStatusResponse>("/status");
+  return data;
 }
 
 export async function getBridgeProfiles(): Promise<BridgeProfilesResponse> {
