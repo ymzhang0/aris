@@ -19,6 +19,7 @@ import httpx
 from loguru import logger
 
 from src.aris_core.logging import log_event
+from src.aris_core.runtime import get_worker_process_manager
 from src.aris_apps.aiida.config import aiida_engine_settings
 from .schemas import CodeSetupRequest
 
@@ -478,6 +479,9 @@ class AiiDAWorkerClient:
         return snapshot.plugins
 
     async def get_system_info(self) -> dict[str, Any]:
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            return await manager.request("system.info", {})
         payload = await self._fetch_json("/system/info", timeout_seconds=max(8.0, self._request_timeout_seconds))
         return payload if isinstance(payload, dict) else {}
 
@@ -486,12 +490,18 @@ class AiiDAWorkerClient:
         return payload if isinstance(payload, dict) else {}
 
     async def get_profiles(self) -> dict[str, Any]:
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            return await manager.request("profile.list", {})
         payload = await self._fetch_json("/management/profiles", timeout_seconds=max(8.0, self._request_timeout_seconds))
         if not isinstance(payload, dict):
             return {"current_profile": None, "default_profile": None, "profiles": []}
         return payload
 
     async def get_current_user_info(self) -> dict[str, Any]:
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            return await manager.request("profile.current_user", {})
         payload = await self._fetch_json(
             "/management/profiles/current-user-info",
             timeout_seconds=max(5.0, self._request_timeout_seconds),
@@ -499,6 +509,9 @@ class AiiDAWorkerClient:
         return payload if isinstance(payload, dict) else {}
 
     async def setup_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            return await manager.request("profile.setup", payload, timeout=30.0)
         return await self._post_json(
             "/management/profiles/setup",
             payload=payload,
@@ -506,6 +519,11 @@ class AiiDAWorkerClient:
         )
 
     async def switch_profile(self, profile: str) -> dict[str, Any]:
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            res = await manager.request("profile.switch", {"profile": profile}, timeout=8.0)
+            await self.get_status(force_refresh=True)
+            return res
         payload = await self._post_json(
             "/management/profiles/switch",
             payload={"profile": profile},
@@ -565,10 +583,18 @@ class AiiDAWorkerClient:
 
     async def inspect_infrastructure_v2(self) -> list[dict[str, Any]]:
         """Fetch nested infrastructure (Computers -> Codes)."""
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            res = await manager.request("infrastructure.inspect_v2", {})
+            infra = res.get("infrastructure")
+            return infra if isinstance(infra, list) else []
         payload = await self._fetch_json("/management/infrastructure", timeout_seconds=max(8.0, self._request_timeout_seconds))
         return payload if isinstance(payload, list) else []
 
     async def get_infrastructure_capabilities(self) -> dict[str, Any]:
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            return await manager.request("infrastructure.capabilities", {})
         payload = await self._fetch_json(
             "/management/infrastructure/capabilities",
             timeout_seconds=max(5.0, self._request_timeout_seconds),
@@ -576,6 +602,9 @@ class AiiDAWorkerClient:
         return payload if isinstance(payload, dict) else {}
 
     async def setup_infrastructure(self, config: dict[str, Any]) -> dict[str, Any]:
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            return await manager.request("infrastructure.setup", config, timeout=10.0)
         return await self._post_json(
             "/management/infrastructure/setup",
             payload=config,
@@ -584,6 +613,9 @@ class AiiDAWorkerClient:
 
     async def setup_code(self, payload: CodeSetupRequest) -> dict[str, Any]:
         """Create a new code on a computer."""
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            return await manager.request("infrastructure.setup_code", payload.model_dump(), timeout=10.0)
         return await self._post_json(
             "/management/infrastructure/setup-code",
             payload=payload.model_dump(),
@@ -592,6 +624,11 @@ class AiiDAWorkerClient:
 
     async def get_computer_codes(self, computer_label: str) -> list[dict[str, Any]]:
         """Fetch detailed codes for a specific computer."""
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            res = await manager.request("infrastructure.computer_codes", {"computer_label": computer_label})
+            codes = res.get("codes")
+            return codes if isinstance(codes, list) else []
         payload = await self._fetch_json(
             f"/management/infrastructure/computer/{computer_label}/codes",
             timeout_seconds=max(8.0, self._request_timeout_seconds),
@@ -600,6 +637,10 @@ class AiiDAWorkerClient:
 
     async def get_ssh_config(self) -> list[dict[str, Any]]:
         """Fetch parsed SSH hosts from ~/.ssh/config via aiida-worker."""
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            res = await manager.request("infrastructure.ssh_config", {})
+            return res.get("hosts", []) if isinstance(res, dict) else []
         payload = await self._fetch_json(
             "/management/infrastructure/ssh-config",
             timeout_seconds=max(5.0, self._request_timeout_seconds),
