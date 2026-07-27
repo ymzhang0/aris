@@ -26,6 +26,14 @@ from .service import (
     write_chat_project_file,
 )
 from .group_gateway import ChatGroupGateway, FrontendBridgeGroupGateway
+from .session_application_service import (
+    ChatSessionApplicationDependencies,
+    ChatSessionApplicationService,
+)
+from .session_query_service import (
+    ChatSessionQueryDependencies,
+    ChatSessionQueryService,
+)
 from .session_repository import ChatSessionRepository, JsonChatSessionRepository
 from .submission_preview_service import (
     SubmissionPreviewRules,
@@ -37,6 +45,10 @@ __all__ = [
     "activate_chat_session",
     "build_chat_project_worker_headers",
     "ChatGroupGateway",
+    "ChatSessionApplicationDependencies",
+    "ChatSessionApplicationService",
+    "ChatSessionQueryDependencies",
+    "ChatSessionQueryService",
     "ChatSessionRepository",
     "ChatWorkspaceManager",
     "cancel_chat_turn",

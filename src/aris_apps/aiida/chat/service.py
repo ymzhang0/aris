@@ -55,6 +55,15 @@ from src.aris_apps.aiida.chat.session_models import (
     serialize_chat_history,
     trim_text as _trim_text,
 )
+from src.aris_apps.aiida.chat.session_application_service import (
+    SESSION_FIELD_UNSET,
+    ChatSessionApplicationDependencies,
+    ChatSessionApplicationService,
+)
+from src.aris_apps.aiida.chat.session_query_service import (
+    ChatSessionQueryDependencies,
+    ChatSessionQueryService,
+)
 from src.aris_apps.aiida.chat.session_repository import (
     CHAT_SESSIONS_KV_KEY as _CHAT_SESSIONS_KV_KEY,
     ChatSessionRepository,
@@ -119,6 +128,8 @@ _CRITICAL_ADVANCED_KEYS = {
     *_KNOWN_PARALLEL_KEYS,
 }
 _UNSET = object()
+_SESSION_QUERY_SERVICE: ChatSessionQueryService | None = None
+_SESSION_APPLICATION_SERVICE: ChatSessionApplicationService | None = None
 _CHAT_SESSION_REPOSITORY = JsonChatSessionRepository(
     lambda: settings.ARIS_MEMORY_DIR,
 )
@@ -692,43 +703,80 @@ def _serialize_chat_session_detail(session: dict[str, Any], store: dict[str, Any
     return detail
 
 
+def _get_session_query_service() -> ChatSessionQueryService:
+    global _SESSION_QUERY_SERVICE
+    if _SESSION_QUERY_SERVICE is None:
+        _SESSION_QUERY_SERVICE = ChatSessionQueryService(
+            ChatSessionQueryDependencies(
+                get_store=_get_chat_session_store,
+                find_session=_find_chat_session,
+                serialize_project=_serialize_chat_project_summary,
+                serialize_session=_serialize_chat_session_summary,
+                serialize_session_detail=_serialize_chat_session_detail,
+                serialize_snapshot=_serialize_chat_session_snapshot,
+                serialize_history=serialize_chat_history,
+            )
+        )
+    return _SESSION_QUERY_SERVICE
+
+
+def _get_session_application_service() -> ChatSessionApplicationService:
+    global _SESSION_APPLICATION_SERVICE
+    if _SESSION_APPLICATION_SERVICE is None:
+        _SESSION_APPLICATION_SERVICE = ChatSessionApplicationService(
+            ChatSessionApplicationDependencies(
+                get_store=_get_chat_session_store,
+                find_session=_find_chat_session,
+                trim_text=_trim_text,
+                sanitize_title=_sanitize_session_title_text,
+                normalize_tags=_normalize_chat_session_tags,
+                normalize_snapshot=_normalize_chat_session_snapshot,
+                normalize_identifier_list=_normalize_identifier_list,
+                validate_project_root=_validate_new_project_root_path,
+                ensure_project_workspace=_ensure_project_workspace_dir,
+                ensure_session_workspace=_ensure_session_workspace_dir,
+                cleanup_project_workspace=_cleanup_project_workspace_dir,
+                resolve_project_id=_resolve_new_chat_session_project_id,
+                resolve_session_slug=_resolve_unique_session_slug,
+                desired_session_slug=_desired_session_slug,
+                slugify_session_name=_slugify_session_name,
+                get_session_slug=_get_session_slug,
+                rename_session_group=_rename_session_group_label_if_needed,
+                serialize_project=_serialize_chat_project_summary,
+                serialize_session_detail=_serialize_chat_session_detail,
+                reconcile_active_targets=_reconcile_active_chat_targets,
+                persist_store=_persist_chat_session_store,
+                touch_sessions=_touch_chat_sessions,
+                touch_chat=touch_chat,
+                get_active_session_id=get_active_chat_session_id,
+                now_iso=_now_iso,
+                default_session_title=_DEFAULT_SESSION_TITLE,
+                title_state_ready=_TITLE_STATE_READY,
+                title_state_idle=_TITLE_STATE_IDLE,
+                max_sessions=_MAX_CHAT_SESSIONS,
+            )
+        )
+    return _SESSION_APPLICATION_SERVICE
+
+
 def list_chat_projects(state: Any) -> list[dict[str, Any]]:
-    store = _get_chat_session_store(state)
-    projects = sorted(
-        store["projects"],
-        key=lambda project: _serialize_chat_project_summary(project, store)["updated_at"],
-        reverse=True,
-    )
-    return [_serialize_chat_project_summary(project, store) for project in projects]
+    return _get_session_query_service().list_projects(state)
 
 
 def list_chat_sessions(state: Any) -> list[dict[str, Any]]:
-    store = _get_chat_session_store(state)
-    sessions = sorted(
-        store["sessions"],
-        key=lambda session: str(session.get("updated_at") or session.get("created_at") or ""),
-        reverse=True,
-    )
-    return [_serialize_chat_session_summary(session, store) for session in sessions]
+    return _get_session_query_service().list_sessions(state)
 
 
 def get_active_chat_project_id(state: Any) -> str | None:
-    store = _get_chat_session_store(state)
-    active_project_id = store.get("active_project_id")
-    return str(active_project_id) if isinstance(active_project_id, str) and active_project_id else None
+    return _get_session_query_service().get_active_project_id(state)
 
 
 def get_active_chat_session_id(state: Any) -> str | None:
-    store = _get_chat_session_store(state)
-    active_session_id = store.get("active_session_id")
-    return str(active_session_id) if isinstance(active_session_id, str) and active_session_id else None
+    return _get_session_query_service().get_active_session_id(state)
 
 
 def get_chat_session_detail(state: Any, session_id: str) -> dict[str, Any] | None:
-    session, store = _find_chat_session(state, session_id)
-    if session is None:
-        return None
-    return _serialize_chat_session_detail(session, store, state)
+    return _get_session_query_service().get_session_detail(state, session_id)
 
 
 def get_chat_session_batch_progress(state: Any, session_id: str) -> dict[str, Any] | None:
@@ -957,38 +1005,14 @@ def write_chat_project_file(
 
 
 def get_chat_snapshot(state: Any) -> dict[str, Any]:
-    session, _store = _find_chat_session(state, None)
-    return {
-        "version": int(getattr(state, "chat_version", 0)),
-        "session_id": session["id"] if isinstance(session, dict) else None,
-        "messages": serialize_chat_history(session.get("messages", []) if isinstance(session, dict) else []),
-        "snapshot": _serialize_chat_session_snapshot(session),
-    }
+    return _get_session_query_service().get_snapshot(state)
 
 
 def archive_chat_session(state: Any, session_id: str) -> dict[str, Any] | None:
-    session, store = _find_chat_session(state, session_id)
-    if session is None:
-        return None
-
-    changed = False
-    if not bool(session.get("is_archived", False)):
-        session["is_archived"] = True
-        changed = True
-
-    if store.get("active_session_id") == session["id"]:
-        store["active_session_id"] = None
-        state.active_chat_session_id = None
-        touch_chat(state)
-        changed = True
-
-    if not changed:
-        return _serialize_chat_session_detail(session, store, state)
-
-    session["updated_at"] = _now_iso()
-    _touch_chat_sessions(state)
-    _persist_chat_session_store(state)
-    return _serialize_chat_session_detail(session, store, state)
+    return _get_session_application_service().archive_session(
+        state,
+        session_id,
+    )
 
 
 def create_chat_project(
@@ -998,32 +1022,12 @@ def create_chat_project(
     root_path: str | None = None,
     activate: bool = True,
 ) -> dict[str, Any]:
-    cleaned_name = _trim_text(name or "", limit=80)
-    if not cleaned_name:
-        raise ValueError("Project name is required")
-
-    store = _get_chat_session_store(state)
-    project_id = uuid4().hex
-    normalized_root_path = _validate_new_project_root_path(root_path, project_id=project_id)
-    if any(str(project.get("root_path") or "") == normalized_root_path for project in store.get("projects", [])):
-        raise ValueError("A project with the same disk path already exists")
-
-    now = _now_iso()
-    project = {
-        "id": project_id,
-        "name": cleaned_name,
-        "root_path": normalized_root_path,
-        "created_at": now,
-        "updated_at": now,
-    }
-    store["projects"].append(project)
-    _ensure_project_workspace_dir(project)
-    if activate:
-        store["active_project_id"] = project_id
-        state.active_chat_project_id = project_id
-    _touch_chat_sessions(state)
-    _persist_chat_session_store(state)
-    return _serialize_chat_project_summary(project, store)
+    return _get_session_application_service().create_project(
+        state,
+        name=name,
+        root_path=root_path,
+        activate=activate,
+    )
 
 
 def create_chat_session(
@@ -1035,72 +1039,21 @@ def create_chat_session(
     archive_session_id: str | None = None,
     project_id: str | None = None,
 ) -> dict[str, Any]:
-    store = _get_chat_session_store(state)
-    if isinstance(archive_session_id, str) and archive_session_id.strip():
-        archive_chat_session(state, archive_session_id.strip())
-        store = _get_chat_session_store(state)
-    now = _now_iso()
-    cleaned_title = _sanitize_session_title_text(title or "")[:80].strip()
-    resolved_project_id = _resolve_new_chat_session_project_id(store, requested_project_id=project_id)
-    session_id = uuid4().hex
-    session = {
-        "id": session_id,
-        "project_id": resolved_project_id,
-        "title": cleaned_title or _DEFAULT_SESSION_TITLE,
-        "session_slug": _resolve_unique_session_slug(
-            store,
-            resolved_project_id,
-            _slugify_session_name(cleaned_title or _DEFAULT_SESSION_TITLE, fallback="new-conversation"),
-            session_id=session_id,
-        ),
-        "auto_title": not bool(cleaned_title),
-        "title_state": _TITLE_STATE_READY if cleaned_title else _TITLE_STATE_IDLE,
-        "title_first_intent": None,
-        "title_last_generated_turn": 0,
-        "title_generation_count": 0,
-        "title_last_context_key": None,
-        "is_archived": False,
-        "created_at": now,
-        "updated_at": now,
-        "tags": [],
-        "workspace_path": None,
-        "snapshot": _normalize_chat_session_snapshot(snapshot),
-        "messages": [],
-    }
-    store["sessions"].append(session)
-    store["sessions"] = store["sessions"][-_MAX_CHAT_SESSIONS:]
-    _ensure_session_workspace_dir(store, session)
-    if activate:
-        store["active_session_id"] = session["id"]
-        store["active_project_id"] = resolved_project_id
-        state.active_chat_session_id = session["id"]
-        state.active_chat_project_id = resolved_project_id
-        touch_chat(state)
-    _touch_chat_sessions(state)
-    _persist_chat_session_store(state)
-    return _serialize_chat_session_detail(session, store, state)
+    return _get_session_application_service().create_session(
+        state,
+        title=title,
+        snapshot=snapshot,
+        activate=activate,
+        archive_session_id=archive_session_id,
+        project_id=project_id,
+    )
 
 
 def activate_chat_session(state: Any, session_id: str) -> dict[str, Any] | None:
-    session, store = _find_chat_session(state, session_id)
-    if session is None:
-        return None
-    changed = False
-    if bool(session.get("is_archived", False)):
-        session["is_archived"] = False
-        changed = True
-    if store.get("active_session_id") != session["id"]:
-        store["active_session_id"] = session["id"]
-        store["active_project_id"] = str(session.get("project_id") or store.get("active_project_id") or "")
-        state.active_chat_session_id = session["id"]
-        state.active_chat_project_id = store["active_project_id"]
-        touch_chat(state)
-        changed = True
-    if changed:
-        session["updated_at"] = _now_iso()
-        _touch_chat_sessions(state)
-        _persist_chat_session_store(state)
-    return _serialize_chat_session_detail(session, store, state)
+    return _get_session_application_service().activate_session(
+        state,
+        session_id,
+    )
 
 
 def update_chat_session(
@@ -1111,41 +1064,13 @@ def update_chat_session(
     tags: list[str] | object = _UNSET,
     snapshot: dict[str, Any] | object = _UNSET,
 ) -> dict[str, Any] | None:
-    session, store = _find_chat_session(state, session_id)
-    if session is None:
-        return None
-
-    changed = False
-    if title is not _UNSET:
-        old_slug = _get_session_slug(session)
-        cleaned_title = _sanitize_session_title_text(title or "")[:80].strip()
-        session["title"] = cleaned_title or _DEFAULT_SESSION_TITLE
-        session["session_slug"] = _desired_session_slug(store, session, cleaned_title or _DEFAULT_SESSION_TITLE)
-        session["auto_title"] = not bool(cleaned_title)
-        session["title_state"] = _TITLE_STATE_READY if cleaned_title else _TITLE_STATE_IDLE
-        if not cleaned_title:
-            session["title_generation_count"] = 0
-            session["title_last_generated_turn"] = 0
-            session["title_last_context_key"] = None
-        _ensure_session_workspace_dir(store, session)
-        _rename_session_group_label_if_needed(state, store, session, old_slug)
-        changed = True
-    if tags is not _UNSET:
-        session["tags"] = _normalize_chat_session_tags(tags)
-        changed = True
-    if snapshot is not _UNSET:
-        session["snapshot"] = _normalize_chat_session_snapshot(snapshot)
-        changed = True
-
-    if not changed:
-        return _serialize_chat_session_detail(session, store, state)
-
-    session["updated_at"] = _now_iso()
-    _touch_chat_sessions(state)
-    if get_active_chat_session_id(state) == session["id"]:
-        touch_chat(state)
-    _persist_chat_session_store(state)
-    return _serialize_chat_session_detail(session, store, state)
+    return _get_session_application_service().update_session(
+        state,
+        session_id,
+        title=SESSION_FIELD_UNSET if title is _UNSET else title,
+        tags=SESSION_FIELD_UNSET if tags is _UNSET else tags,
+        snapshot=SESSION_FIELD_UNSET if snapshot is _UNSET else snapshot,
+    )
 
 
 def _normalize_identifier_list(values: Any) -> list[str]:
@@ -1238,79 +1163,15 @@ def delete_chat_items(
     project_ids: list[str] | None = None,
     session_ids: list[str] | None = None,
 ) -> dict[str, list[str]]:
-    normalized_project_ids = set(_normalize_identifier_list(project_ids))
-    normalized_session_ids = set(_normalize_identifier_list(session_ids))
-    if not normalized_project_ids and not normalized_session_ids:
-        return {"deleted_project_ids": [], "deleted_session_ids": []}
-
-    store = _get_chat_session_store(state)
-    existing_projects = {
-        str(project.get("id") or "").strip(): project
-        for project in store.get("projects", [])
-        if isinstance(project, dict) and str(project.get("id") or "").strip()
-    }
-    existing_sessions = {
-        str(session.get("id") or "").strip(): session
-        for session in store.get("sessions", [])
-        if isinstance(session, dict) and str(session.get("id") or "").strip()
-    }
-
-    matched_project_ids = {project_id for project_id in normalized_project_ids if project_id in existing_projects}
-    matched_session_ids = {session_id for session_id in normalized_session_ids if session_id in existing_sessions}
-    matched_session_ids.update(
-        str(session.get("id") or "").strip()
-        for session in existing_sessions.values()
-        if str(session.get("project_id") or "").strip() in matched_project_ids
+    return _get_session_application_service().delete_items(
+        state,
+        project_ids=project_ids,
+        session_ids=session_ids,
     )
-
-    if not matched_project_ids and not matched_session_ids:
-        return {"deleted_project_ids": [], "deleted_session_ids": []}
-
-    projects_by_id = existing_projects
-    sessions_by_id = existing_sessions
-
-    for project_id in matched_project_ids:
-        project = projects_by_id.get(project_id)
-        if not isinstance(project, dict):
-            continue
-        _cleanup_project_workspace_dir(project)
-
-    store["sessions"] = [
-        session
-        for session in store.get("sessions", [])
-        if isinstance(session, dict) and str(session.get("id") or "").strip() not in matched_session_ids
-    ]
-    store["projects"] = [
-        project
-        for project in store.get("projects", [])
-        if isinstance(project, dict) and str(project.get("id") or "").strip() not in matched_project_ids
-    ]
-
-    deleted_project_ids = sorted(matched_project_ids)
-    deleted_session_ids = sorted(matched_session_ids)
-    if not deleted_project_ids and not deleted_session_ids:
-        return {"deleted_project_ids": [], "deleted_session_ids": []}
-
-    _reconcile_active_chat_targets(state, store)
-    _touch_chat_sessions(state)
-    touch_chat(state)
-    _persist_chat_session_store(state)
-    return {
-        "deleted_project_ids": deleted_project_ids,
-        "deleted_session_ids": deleted_session_ids,
-    }
 
 
 def get_chat_history(state: Any, session_id: str | None = None) -> list[dict[str, Any]]:
-    session, store = _find_chat_session(state, session_id)
-    if session is None:
-        state.active_chat_session_id = store.get("active_session_id")
-        if not hasattr(state, "chat_version"):
-            state.chat_version = 0
-        return []
-    if not hasattr(state, "chat_version"):
-        state.chat_version = 0
-    return session["messages"]
+    return _get_session_query_service().get_history(state, session_id)
 
 
 def touch_chat(state: Any) -> None:

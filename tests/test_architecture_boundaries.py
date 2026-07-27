@@ -7,6 +7,13 @@ import pytest
 
 from src.aris_apps.aiida.agent import runtime as aiida_runtime
 from src.aris_apps.aiida.capabilities import HttpAiiDACapability
+from src.aris_apps.aiida.chat import service as chat_service
+from src.aris_apps.aiida.chat.session_application_service import (
+    ChatSessionApplicationService,
+)
+from src.aris_apps.aiida.chat.session_query_service import (
+    ChatSessionQueryService,
+)
 from src.aris_apps.aiida.domain.submissions import (
     extract_recovery_plan,
     normalize_submission_request,
@@ -84,6 +91,17 @@ def test_submission_domain_reports_batch_and_recovery() -> None:
         "Reported issues:\n"
         "- Choose a code\n\n"
         "Next step: Select a code."
+    )
+
+
+def test_chat_session_commands_and_queries_use_dedicated_services() -> None:
+    assert isinstance(
+        chat_service._get_session_application_service(),
+        ChatSessionApplicationService,
+    )
+    assert isinstance(
+        chat_service._get_session_query_service(),
+        ChatSessionQueryService,
     )
 
 
