@@ -23,6 +23,7 @@ from sse_starlette.sse import EventSourceResponse
 from src.aris_core.config import settings
 from src.aris_core.logging import get_log_buffer_snapshot, log_event
 from src.aris_core.policy import AuthorizationDecision
+from src.aris_core.runtime import get_worker_process_manager
 from src.aris_core.schema.approval import (
     build_submission_approval_request,
     resolve_submission_approval,
@@ -1253,12 +1254,32 @@ def _get_selected_model(state: Any, available_models: list[str]) -> str:
 
 @router.get("/status", response_model=BridgeStatusResponse, tags=[WORKER_PROXY_TAG])
 async def get_bridge_status() -> BridgeStatusResponse:
+    worker_process_manager = get_worker_process_manager()
+    if worker_process_manager is not None:
+        try:
+            managed_status = await worker_process_manager.request("runtime.status")
+            worker_snapshot = worker_process_manager.snapshot()
+            return BridgeStatusResponse(
+                status="online",
+                url=f"stdio://aris-aiida-worker/{worker_snapshot.pid or 'unknown'}",
+                environment="Managed worker subprocess",
+                transport="stdio",
+                worker_mode=str(managed_status.get("mode") or "").strip() or None,
+                profile="unknown",
+                daemon_status=False,
+                resources=SystemCountsResponse(),
+                plugins=[],
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(log_event("worker.runtime.status.failed", error=str(exc)))
+
     try:
         snapshot = await aiida_capability.get_status()
         return BridgeStatusResponse(
             status=snapshot.status,
             url=snapshot.url,
             environment=snapshot.environment,
+            transport="http",
             worker_mode=snapshot.mode,
             profile=snapshot.profile,
             daemon_status=snapshot.daemon_status,
@@ -1276,6 +1297,7 @@ async def get_bridge_status() -> BridgeStatusResponse:
             status="offline",
             url=aiida_capability.bridge_url,
             environment="Remote Bridge",
+            transport="http",
             worker_mode=None,
             profile="unknown",
             daemon_status=False,

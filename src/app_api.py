@@ -25,6 +25,10 @@ from src.aris_core.config.runtime import (
 )
 from src.aris_core.memory import JSONMemory
 from src.aris_core.plugins import iter_enabled_app_manifests
+from src.aris_core.runtime import (
+    WorkerProcessManager,
+    configure_worker_process_manager,
+)
 
 # Global state container for long-lived objects
 state = {}
@@ -103,6 +107,34 @@ async def lifespan(app: FastAPI):
             )
         )
 
+    worker_process_manager: WorkerProcessManager | None = None
+    if settings.ARIS_WORKER_RUNTIME_ENABLED:
+        worker_process_manager = WorkerProcessManager(
+            [
+                settings.ARIS_WORKER_RUNTIME_PYTHON,
+                "-u",
+                "-m",
+                "aris_aiida_worker",
+            ],
+            cwd=settings.ARIS_WORKER_RUNTIME_CWD,
+        )
+        configure_worker_process_manager(worker_process_manager)
+        app.state.worker_process_manager = worker_process_manager
+        try:
+            worker_status = await worker_process_manager.start()
+            logger.info(
+                log_event(
+                    "worker.runtime.online",
+                    pid=worker_process_manager.snapshot().pid,
+                    transport=worker_status.get("transport"),
+                    python=worker_status.get("python_interpreter_path"),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(log_event("worker.runtime.start.failed", error=str(exc)))
+    else:
+        configure_worker_process_manager(None)
+
     # Initialize Global Memory
     memory = JSONMemory(
         namespace="aris_v2_global",
@@ -149,11 +181,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception(log_event("engine.bootstrap.failed", engine=engine_name, error=str(e)))
   
-    yield
-    logger.info(log_event("hub.shutdown.begin"))
-    # Cleanup logic
-    state.clear()
-    logger.info(log_event("hub.shutdown.done"))
+    try:
+        yield
+    finally:
+        logger.info(log_event("hub.shutdown.begin"))
+        if worker_process_manager is not None:
+            await worker_process_manager.stop()
+        configure_worker_process_manager(None)
+        state.clear()
+        logger.info(log_event("hub.shutdown.done"))
 
 # ============================================================
 # 🛠️ FastAPI Application Setup

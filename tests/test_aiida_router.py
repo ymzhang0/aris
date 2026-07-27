@@ -215,6 +215,31 @@ def test_extract_preview_for_node_type_prefers_embedded_preview_info() -> None:
 
 
 @pytest.mark.anyio
+async def test_bridge_status_prefers_managed_worker_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ManagedWorker:
+        async def request(self, method: str) -> dict[str, object]:
+            assert method == "runtime.status"
+            return {"status": "online", "mode": "core-injected-executor"}
+
+        @staticmethod
+        def snapshot() -> SimpleNamespace:
+            return SimpleNamespace(pid=31415)
+
+    async def unexpected_http_status() -> None:
+        raise AssertionError("HTTP status should not be called while the managed worker is online")
+
+    monkeypatch.setattr(aiida_router, "get_worker_process_manager", lambda: ManagedWorker())
+    monkeypatch.setattr(aiida_router.aiida_capability, "get_status", unexpected_http_status)
+
+    response = await aiida_router.get_bridge_status()
+
+    assert response.status == "online"
+    assert response.transport == "stdio"
+    assert response.url == "stdio://aris-aiida-worker/31415"
+    assert response.worker_mode == "core-injected-executor"
+
+
+@pytest.mark.anyio
 async def test_frontend_export_group_returns_archive_response(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(aiida_router.hub, "_current_profile", "codex-test-profile")
     monkeypatch.setattr(

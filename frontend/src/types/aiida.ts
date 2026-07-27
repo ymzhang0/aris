@@ -420,6 +420,7 @@ export type BridgeStatusResponse = {
   status: "online" | "offline";
   url: string;
   environment: string;
+  transport?: "stdio" | "http";
   worker_mode?: string | null;
   profile: string;
   daemon_status: boolean;

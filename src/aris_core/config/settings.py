@@ -4,6 +4,8 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+_WORKSPACE_ROOT = _REPO_ROOT.parent
+_DEFAULT_WORKER_ROOT = _WORKSPACE_ROOT / "aiida-worker"
 _ARIS_HOME_ROOT = Path.home() / ".aris"
 _ARIS_CONFIG_ROOT = _ARIS_HOME_ROOT / "config"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -109,6 +111,19 @@ class Settings(BaseSettings):
     ARIS_SCRIPT_ARCHIVE_DIR: str = _env_value(
         "ARIS_SCRIPT_ARCHIVE_DIR",
         default=str(Path(ARIS_RUNTIME_ROOT) / "scripts"),
+    )
+    ARIS_WORKER_RUNTIME_ENABLED: bool = _env_flag(
+        "ARIS_WORKER_RUNTIME_ENABLED",
+        default="true",
+    )
+    ARIS_WORKER_RUNTIME_PYTHON: str = _resolve_path(
+        "ARIS_WORKER_RUNTIME_PYTHON",
+        default_path=_DEFAULT_WORKER_ROOT / ".venv" / "bin" / "python3",
+    )
+    ARIS_WORKER_RUNTIME_CWD: str = _resolve_path(
+        "ARIS_WORKER_RUNTIME_CWD",
+        "ARIS_WORKER_DIR",
+        default_path=_DEFAULT_WORKER_ROOT,
     )
     ARIS_LOCAL_ACTOR_ID: str = _env_value(
         "ARIS_LOCAL_ACTOR_ID",
