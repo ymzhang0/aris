@@ -670,19 +670,35 @@ class AiiDAWorkerClient:
     async def _refresh_locked(self) -> None:
         checked_at = time.monotonic()
 
-        try:
-            payload = await self._fetch_json("/status")
-        except Exception as error:  # noqa: BLE001
-            self._snapshot.status = "offline"
-            self._snapshot.checked_at = checked_at
-            logger.error(
-                log_event(
-                    "aiida.bridge.unreachable",
-                    url=self._bridge_url,
-                    error=f"{type(error).__name__}: {error}",
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            try:
+                payload = await manager.request("runtime.status", {})
+            except Exception as error:  # noqa: BLE001
+                self._snapshot.status = "offline"
+                self._snapshot.checked_at = checked_at
+                logger.error(
+                    log_event(
+                        "aiida.bridge.unreachable",
+                        url="stdio-jsonrpc",
+                        error=f"{type(error).__name__}: {error}",
+                    )
                 )
-            )
-            return
+                return
+        else:
+            try:
+                payload = await self._fetch_json("/status")
+            except Exception as error:  # noqa: BLE001
+                self._snapshot.status = "offline"
+                self._snapshot.checked_at = checked_at
+                logger.error(
+                    log_event(
+                        "aiida.bridge.unreachable",
+                        url=self._bridge_url,
+                        error=f"{type(error).__name__}: {error}",
+                    )
+                )
+                return
 
         normalized = self._normalize_status_payload(payload)
         self._snapshot.status = normalized["status"]
@@ -872,6 +888,11 @@ class AiiDAWorkerClient:
             self._probe_status_sync()
 
     def _probe_status_sync(self) -> None:
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            self._snapshot.status = "online"
+            self._snapshot.checked_at = time.monotonic()
+            return
         endpoint = self.bridge_endpoint("/status")
         checked_at = time.monotonic()
         try:
