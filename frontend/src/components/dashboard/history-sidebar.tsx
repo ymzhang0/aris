@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CommandPaletteSelect } from "@/components/ui/command-palette-select";
 import { Panel } from "@/components/ui/panel";
+import { SidebarPageHeader } from "@/components/dashboard/sidebar-page-header";
 import { cn } from "@/lib/utils";
 import type { ChatProject, ChatSessionSummary } from "@/types/aiida";
 
@@ -333,6 +334,11 @@ export function HistorySidebar({
   return (
     <aside className="flex h-full min-h-0 w-full flex-col gap-2 font-sans tracking-tight">
       <Panel className="flex min-h-0 flex-1 flex-col gap-3 border-zinc-100/90 p-3 dark:border-zinc-800/80">
+        <SidebarPageHeader
+          title="Projects & History"
+          subtitle="Projects, conversations, and saved context"
+        />
+
         <div className="space-y-2">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />

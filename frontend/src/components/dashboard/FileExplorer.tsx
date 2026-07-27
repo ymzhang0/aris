@@ -46,6 +46,7 @@ type FileExplorerProps = {
   selectedPath?: string | null;
   emptyState?: string;
   className?: string;
+  compactHeader?: boolean;
 };
 
 type ContextMenuState = {
@@ -298,6 +299,7 @@ export function FileExplorer({
   selectedPath,
   emptyState = "No files found in this workspace.",
   className,
+  compactHeader = false,
 }: FileExplorerProps) {
   const [internalSelectedPath, setInternalSelectedPath] = useState<string | null>(selectedPath ?? null);
   const [searchValue, setSearchValue] = useState("");
@@ -402,51 +404,75 @@ export function FileExplorer({
         className,
       )}
     >
-      <header className="border-b border-slate-100 px-3 py-2 dark:border-[#313131]">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-[#8c8c8c]">
-              Explorer
-            </p>
-            <p className="truncate text-sm font-medium text-slate-900 dark:text-[#cccccc]">{projectName}</p>
-          </div>
+      <header
+        className={cn(
+          "border-b border-zinc-100 dark:border-zinc-800/80",
+          compactHeader ? "pb-3" : "px-3 py-2",
+        )}
+      >
+        {!compactHeader ? (
+          <>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+                  Explorer
+                </p>
+                <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{projectName}</p>
+              </div>
 
-          {onRefresh ? (
+              {onRefresh ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 rounded-none text-zinc-500 hover:bg-transparent hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-transparent dark:hover:text-zinc-100"
+                  onClick={onRefresh}
+                  aria-label="Refresh file explorer"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </Button>
+              ) : null}
+            </div>
+
+            <p className="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+              {rootPath || "Workspace path unavailable."}
+            </p>
+          </>
+        ) : null}
+
+        <div className={cn("flex items-center gap-2", !compactHeader && "mt-3")}>
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+            <input
+              type="text"
+              value={searchValue}
+              placeholder="Search files"
+              className={cn(
+                "w-full border-0 border-b border-zinc-200 bg-transparent pl-8 pr-3 text-zinc-800 outline-none transition",
+                compactHeader ? "h-9 text-sm" : "h-8 text-[13px]",
+                "placeholder:text-zinc-400 focus:border-blue-500",
+                "dark:border-zinc-800 dark:text-zinc-200 dark:placeholder:text-zinc-500",
+              )}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                startTransition(() => {
+                  setSearchValue(nextValue);
+                });
+              }}
+            />
+          </div>
+          {compactHeader && onRefresh ? (
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="h-7 w-7 rounded-none text-slate-500 hover:bg-transparent hover:text-slate-900 dark:text-[#8c8c8c] dark:hover:bg-transparent dark:hover:text-white"
+              className="h-9 w-9 shrink-0 rounded-none text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
               onClick={onRefresh}
               aria-label="Refresh file explorer"
             >
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
           ) : null}
-        </div>
-
-        <p className="mt-1 truncate text-[11px] text-slate-500 dark:text-[#8c8c8c]">
-          {rootPath || "Workspace path unavailable."}
-        </p>
-
-        <div className="relative mt-3">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 dark:text-[#8c8c8c]" />
-          <input
-            type="text"
-            value={searchValue}
-            placeholder="Search files"
-            className={cn(
-              "h-8 w-full border-0 border-b border-slate-200 bg-transparent pl-8 pr-3 text-[13px] text-slate-800 outline-none transition",
-              "placeholder:text-slate-400 focus:border-blue-500",
-              "dark:border-[#313131] dark:bg-transparent dark:text-[#cccccc] dark:placeholder:text-[#8c8c8c]",
-            )}
-            onChange={(event) => {
-              const nextValue = event.target.value;
-              startTransition(() => {
-                setSearchValue(nextValue);
-              });
-            }}
-          />
         </div>
       </header>
 

@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
 import { BridgeStatus } from "@/components/dashboard/bridge-status";
 import { ComputeHealthCard } from "@/components/dashboard/compute-health-card";
+import { SidebarPageHeader } from "@/components/dashboard/sidebar-page-header";
 import { cn } from "@/lib/utils";
 import {
   exportCodeConfig,
@@ -1289,13 +1290,17 @@ export function Sidebar({
 
   return (
     <aside className="relative flex h-full min-h-0 w-full shrink-0 flex-col gap-2 font-sans tracking-tight">
-      <BridgeStatus
-        onInfrastructureClick={() => setIsInfraExpanded(true)}
-        onSwitchProfileStart={handleProfileSwitchStart}
-        onSwitchProfileEnd={handleProfileSwitchEnd}
-      />
+      <Panel className="relative z-10 flex min-h-0 flex-1 flex-col gap-4 border-zinc-100/90 p-3 transition-opacity duration-300 dark:border-zinc-800/80">
+        <SidebarPageHeader
+          title="AiiDA Explorer"
+          subtitle="Groups, nodes, and compute resources"
+        />
 
-      <Panel className="relative z-10 flex min-h-0 flex-1 flex-col gap-4 border-zinc-100/90 p-4 transition-opacity duration-300 dark:border-zinc-800/80">
+        <BridgeStatus
+          onInfrastructureClick={() => setIsInfraExpanded(true)}
+          onSwitchProfileStart={handleProfileSwitchStart}
+          onSwitchProfileEnd={handleProfileSwitchEnd}
+        />
 
         {isSwitchingProfile && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center rounded-2xl bg-black/10 backdrop-blur-[2px] dark:bg-black/30">
