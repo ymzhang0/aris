@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import copy
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Mapping
@@ -19,7 +20,7 @@ import httpx
 from loguru import logger
 
 from src.aris_core.logging import log_event
-from src.aris_core.runtime import get_worker_process_manager
+from src.aris_core.runtime import WorkerProcessError, get_worker_process_manager
 from src.aris_apps.aiida.config import aiida_engine_settings
 from .schemas import CodeSetupRequest
 
@@ -170,6 +171,134 @@ def _merge_request_headers(headers: Mapping[str, Any] | None = None) -> dict[str
     return merged or None
 
 
+def _run_async_from_sync(coro: Any, timeout: float = 10.0) -> Any:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is None:
+        return asyncio.run(coro)
+
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=timeout)
+
+
+def _map_http_request_to_rpc(
+    http_method: str,
+    path: str,
+    params: Mapping[str, Any] | None = None,
+    json: Mapping[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]] | None:
+    cleaned_path = str(path or "").strip()
+    if cleaned_path.startswith("/"):
+        cleaned_path = cleaned_path[1:]
+
+    if "?" in cleaned_path:
+        cleaned_path = cleaned_path.split("?", 1)[0]
+
+    parts = [p for p in cleaned_path.split("/") if p]
+    req_params: dict[str, Any] = {}
+    if params:
+        req_params.update(dict(params))
+    if json:
+        req_params.update(dict(json))
+
+    method_upper = http_method.upper()
+
+    if not parts or parts == ["status"]:
+        return ("runtime.status", req_params)
+    if parts == ["system", "info"]:
+        return ("system.info", req_params)
+    if parts == ["resources"]:
+        return ("resource.summary", req_params)
+    if parts == ["plugins"]:
+        return ("resource.plugins", req_params)
+
+    if parts and parts[0] == "management":
+        sub = parts[1:]
+        if sub == ["profiles"]:
+            return ("profile.list", req_params)
+        if sub == ["profiles", "current-user-info"]:
+            return ("profile.current_user", req_params)
+        if sub == ["profiles", "setup"]:
+            return ("profile.setup", req_params)
+        if sub == ["profiles", "switch"]:
+            return ("profile.switch", req_params)
+        if sub == ["infrastructure"]:
+            return ("infrastructure.inspect_v2", req_params)
+        if sub == ["infrastructure", "capabilities"]:
+            return ("infrastructure.capabilities", req_params)
+        if sub == ["infrastructure", "setup"]:
+            return ("infrastructure.setup", req_params)
+        if sub == ["infrastructure", "setup-code"]:
+            return ("infrastructure.setup_code", req_params)
+        if sub == ["infrastructure", "ssh-config"]:
+            return ("infrastructure.ssh_config", req_params)
+        if len(sub) == 4 and sub[0] == "infrastructure" and sub[1] == "computer" and sub[3] == "codes":
+            req_params["computer_label"] = sub[2]
+            return ("infrastructure.computer_codes", req_params)
+        if sub == ["groups"]:
+            return ("group.list", req_params)
+        if sub == ["groups", "labels"]:
+            return ("group.labels", req_params)
+        if sub == ["groups", "create"]:
+            return ("group.create", req_params)
+        if len(sub) == 2 and sub[0] == "groups" and sub[1].isdigit():
+            req_params["pk"] = int(sub[1])
+            if method_upper == "DELETE":
+                return ("group.delete", req_params)
+            return ("group.inspect", req_params)
+        if len(sub) == 3 and sub[0] == "groups" and sub[1].isdigit() and sub[2] == "label":
+            req_params["pk"] = int(sub[1])
+            return ("group.rename", req_params)
+        if sub == ["recent-nodes"]:
+            return ("node.recent", req_params)
+        if sub == ["recent-processes"]:
+            return ("process.recent", req_params)
+        if sub == ["nodes", "context"]:
+            return ("node.context", req_params)
+        if len(sub) == 3 and sub[0] == "nodes" and sub[1].isdigit() and sub[2] == "soft-delete":
+            req_params["pk"] = int(sub[1])
+            return ("node.soft_delete", req_params)
+        if len(sub) == 3 and sub[0] == "nodes" and sub[1].isdigit() and sub[2] == "script":
+            req_params["pk"] = int(sub[1])
+            return ("node.script", req_params)
+        if sub == ["source-map"]:
+            return ("source_map", req_params)
+
+    if parts and parts[0] == "submission":
+        sub = parts[1:]
+        if len(sub) == 2 and sub[0] == "spec":
+            req_params["entry_point"] = sub[1]
+            return ("submission.spec", req_params)
+        if sub == ["validate"]:
+            return ("submission.validate", req_params)
+        if sub == ["draft-builder"] or sub == ["builder-draft"]:
+            return ("submission.builder_draft", req_params)
+        if sub == ["submit"]:
+            return ("submission.submit", req_params)
+        if sub == ["workgraph", "submit"]:
+            return ("submission.workgraph.submit", req_params)
+
+    if parts and parts[0] == "process":
+        sub = parts[1:]
+        if len(sub) == 1:
+            req_params["identifier"] = sub[0]
+            return ("process.detail", req_params)
+        if len(sub) == 2 and sub[1] == "workgraph":
+            req_params["identifier"] = sub[0]
+            return ("process.workgraph", req_params)
+        if len(sub) == 2 and sub[1] == "logs":
+            req_params["identifier"] = sub[0]
+            return ("process.logs", req_params)
+        if len(sub) == 2 and sub[1] == "clone-draft":
+            req_params["identifier"] = sub[0]
+            return ("process.clone_draft", req_params)
+
+    return None
+
+
 class AiiDAWorkerClient:
     def __init__(
         self,
@@ -228,6 +357,18 @@ class AiiDAWorkerClient:
     ) -> Any:
         method_upper = method.upper()
         normalized_path = self._normalize_request_path(path)
+
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            rpc_target = _map_http_request_to_rpc(method, path, params=params, json=json)
+            if rpc_target is not None:
+                rpc_method, rpc_params = rpc_target
+                _emit_bridge_call_event(method_upper, path)
+                try:
+                    return await manager.request(rpc_method, rpc_params, timeout=timeout)
+                except WorkerProcessError as exc:
+                    raise BridgeAPIError(status_code=500, message=str(exc), payload={"error": str(exc)}) from exc
+
         await self._ensure_request_supported_async(normalized_path)
         endpoint = self.bridge_endpoint(path)
         _emit_bridge_call_event(method_upper, path)
@@ -341,6 +482,18 @@ class AiiDAWorkerClient:
     ) -> Any:
         method_upper = method.upper()
         normalized_path = self._normalize_request_path(path)
+
+        manager = get_worker_process_manager()
+        if manager is not None and manager.is_running:
+            rpc_target = _map_http_request_to_rpc(method, path, params=params, json=json)
+            if rpc_target is not None:
+                rpc_method, rpc_params = rpc_target
+                _emit_bridge_call_event(method_upper, path)
+                try:
+                    return _run_async_from_sync(manager.request(rpc_method, rpc_params, timeout=timeout), timeout=timeout)
+                except WorkerProcessError as exc:
+                    raise BridgeAPIError(status_code=500, message=str(exc), payload={"error": str(exc)}) from exc
+
         self._ensure_request_supported_sync(normalized_path)
         endpoint = self.bridge_endpoint(path)
         _emit_bridge_call_event(method_upper, path)
