@@ -28,7 +28,7 @@ function toText(value: unknown): string | null {
 }
 
 function getPreviewComputerLabel(process: ProcessItem | null): string | null {
-  const preview = process?.preview_info ?? process?.preview;
+  const preview = process?.preview_info;
   if (!preview || typeof preview !== "object" || Array.isArray(preview)) {
     return null;
   }

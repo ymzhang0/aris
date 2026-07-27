@@ -44,8 +44,6 @@ def serialize_processes(processes: list[dict[str, Any]]) -> list[dict[str, Any]]
         }
         if process_label_raw:
             serialized["process_label"] = str(process_label_raw)
-        if "preview" in process:
-            serialized["preview"] = process.get("preview")
         if "preview_info" in process:
             serialized["preview_info"] = process.get("preview_info")
         payload.append(serialized)
@@ -268,9 +266,9 @@ def _dedupe_links(links: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "node_type": node_type,
             "pk": pk,
         }
-        preview = link.get("preview")
+        preview = link.get("preview_info")
         if isinstance(preview, dict) and preview:
-            payload["preview"] = preview
+            payload["preview_info"] = preview
         deduped.append(payload)
     return deduped
 
@@ -483,11 +481,8 @@ def _extract_xy_preview(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _extract_embedded_preview(payload: dict[str, Any]) -> dict[str, Any] | None:
-    for key in ("preview_info", "preview"):
-        preview = payload.get(key)
-        if isinstance(preview, dict) and preview:
-            return preview
-    return None
+    preview = payload.get("preview_info")
+    return preview if isinstance(preview, dict) and preview else None
 
 
 def _extract_preview_for_node_type(node_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -577,7 +572,7 @@ async def _enrich_link_preview(
                 preview["filenames"] = filenames[:5]
 
     if preview:
-        link["preview"] = preview
+        link["preview_info"] = preview
 
 
 async def _enrich_links_with_previews(

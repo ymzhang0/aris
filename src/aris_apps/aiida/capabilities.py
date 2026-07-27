@@ -139,9 +139,13 @@ class HttpAiiDACapability:
     async def list_submission_plugins(self) -> dict[str, Any]:
         payload = await self._client.request_json(
             "GET",
-            "/submission/plugins",
+            "/plugins",
         )
-        return payload if isinstance(payload, dict) else {"plugins": []}
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, list):
+            return {"plugins": [str(item) for item in payload if str(item).strip()]}
+        return {"plugins": []}
 
     async def get_submission_spec(
         self,

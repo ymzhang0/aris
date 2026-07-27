@@ -32,7 +32,7 @@ def _submission_request(
     )
 
 
-def test_serialize_processes_passes_preview_without_modification() -> None:
+def test_serialize_processes_ignores_noncanonical_preview_field() -> None:
     preview = {
         "formula": "Si2",
         "atom_count": 2,
@@ -50,11 +50,11 @@ def test_serialize_processes_passes_preview_without_modification() -> None:
 
     serialized = _serialize_processes(processes)
 
-    assert serialized[0]["preview"] is preview
-    assert serialized[0]["preview"] == preview
+    assert "preview" not in serialized[0]
+    assert "preview_info" not in serialized[0]
 
 
-def test_serialize_processes_does_not_add_preview_when_missing() -> None:
+def test_serialize_processes_does_not_add_preview_info_when_missing() -> None:
     processes = [
         {
             "pk": 202,
@@ -66,7 +66,7 @@ def test_serialize_processes_does_not_add_preview_when_missing() -> None:
 
     serialized = _serialize_processes(processes)
 
-    assert "preview" not in serialized[0]
+    assert "preview_info" not in serialized[0]
 
 
 def test_serialize_processes_passes_preview_info_without_modification() -> None:
@@ -1211,7 +1211,7 @@ async def test_run_worker_json_script_uses_default_environment_interpreter(
         assert method == "POST"
         assert path == "/management/run-python"
         assert kwargs.get("json") == {
-            "script": "print('hello')",
+            "script_content": "print('hello')",
             "python_interpreter_path": "/tmp/worker-python",
         }
         return {"output": f"noise\n{aiida_router.WORKER_JSON_MARKER}{{\"available\": true}}\n"}

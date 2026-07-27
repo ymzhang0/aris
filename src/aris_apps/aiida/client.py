@@ -789,8 +789,6 @@ class AiiDAWorkerClient:
             "/process/events",
             "/resources",
             "/plugins",
-            "/submission/plugins",
-            "/system/plugins",
         ):
             if path == prefix or path.startswith(f"{prefix}/"):
                 return prefix

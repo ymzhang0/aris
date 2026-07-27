@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from src.aris_apps.aiida.capabilities import HttpAiiDACapability
 from src.aris_apps.aiida.mcp_facade import (
     AiiDAMCPFacade,
     build_aiida_mcp_server,
@@ -75,6 +76,23 @@ class _Capability:
 
     async def validate_submission_draft(self, draft):
         return {"is_valid": True, "draft": draft}
+
+
+@pytest.mark.anyio
+async def test_http_capability_normalizes_canonical_plugin_list() -> None:
+    class _Client:
+        bridge_url = "http://worker.test"
+
+        async def request_json(self, method, path):
+            assert method == "GET"
+            assert path == "/plugins"
+            return ["quantumespresso.pw.base"]
+
+    capability = HttpAiiDACapability(_Client())
+
+    assert await capability.list_submission_plugins() == {
+        "plugins": ["quantumespresso.pw.base"],
+    }
 
 
 @pytest.mark.anyio

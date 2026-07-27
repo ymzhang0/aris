@@ -325,10 +325,9 @@ def _normalize_lookup_key(value: str) -> str:
 def _extract_preview_mapping(payload: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
-    for key in ("preview_info", "preview"):
-        candidate = payload.get(key)
-        if isinstance(candidate, dict):
-            return candidate
+    candidate = payload.get("preview_info")
+    if isinstance(candidate, dict):
+        return candidate
     return {}
 
 
@@ -628,7 +627,7 @@ async def _run_worker_json_script(script: str, *, timeout: float = 90.0) -> dict
             "POST",
             "/management/run-python",
             json={
-                "script": script,
+                "script_content": script,
                 "python_interpreter_path": python_interpreter_path,
             },
             timeout=timeout,
@@ -643,7 +642,7 @@ async def _run_contextual_worker_json_script(script: str, *, timeout: float = 90
         request_json(
             "POST",
             "/management/run-python",
-            json={"script": script},
+            json={"script_content": script},
             timeout=timeout,
         ),
         timeout=max(timeout + 0.5, 1.0),

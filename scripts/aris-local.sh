@@ -5,13 +5,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARIS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PM2_SCRIPT="${SCRIPT_DIR}/pm2-dev.sh"
-ECOSYSTEM_FILE="${ARIS_DIR}/ecosystem.config.js"
 ARIS_URL="${ARIS_URL:-http://127.0.0.1:5173}"
 API_URL="${ARIS_API_URL:-http://127.0.0.1:8000}"
 WORKER_URL="${ARIS_WORKER_URL:-http://127.0.0.1:8001}"
 WAIT_SECONDS="${ARIS_STARTUP_TIMEOUT:-45}"
-
-export ARIS_PM2_ECOSYSTEM_FILE="${ARIS_PM2_ECOSYSTEM_FILE:-${ECOSYSTEM_FILE}}"
 
 usage() {
   cat <<'EOF'

@@ -113,8 +113,6 @@ def test_bootstrap_home_config_copies_repo_defaults(tmp_path, monkeypatch) -> No
         "name: qe\n",
         encoding="utf-8",
     )
-    (repo_root / "ecosystem.config.js").write_text("module.exports = {};\n", encoding="utf-8")
-
     home_root = tmp_path / ".aris"
     fake_settings = SimpleNamespace(
         ARIS_CONFIG_ROOT=str(home_root / "config"),
@@ -128,7 +126,7 @@ def test_bootstrap_home_config_copies_repo_defaults(tmp_path, monkeypatch) -> No
     assert (home_root / "config" / "apps" / "aiida" / "presets.yaml").is_file()
     assert (home_root / "config" / "apps" / "aiida" / "settings.yaml").is_file()
     assert (home_root / "config" / "apps" / "aiida" / "specializations" / "qe.yaml").is_file()
-    assert (home_root / "config" / "pm2" / "ecosystem.config.js").is_file()
+    assert not (home_root / "config" / "pm2" / "ecosystem.config.js").exists()
     assert Path(fake_settings.ARIS_PRESETS_FILE).as_posix().endswith(".aris/config/apps/aiida/presets.yaml")
     assert Path(fake_settings.ARIS_AIIDA_SETTINGS_FILE).as_posix().endswith(
         ".aris/config/apps/aiida/settings.yaml"

@@ -483,19 +483,6 @@ async def get_recent_nodes(
         return format_bridge_error(exc)
 
 
-async def get_default_profile() -> dict[str, Any] | str:
-    """Compatibility helper returning default/current profile info from worker metadata."""
-    profiles = await list_system_profiles()
-    if isinstance(profiles, str):
-        return profiles
-    if isinstance(profiles, dict):
-        return {
-            "default_profile": profiles.get("default_profile"),
-            "current_profile": profiles.get("current_profile"),
-        }
-    return {"profiles": profiles}
-
-
 async def inspect_group(group_name: str, limit: int = 20) -> dict[str, Any] | str:
     """Inspect one group (`GET /management/groups/{group_name}`) with node attributes/extras."""
     try:
@@ -613,9 +600,9 @@ def _normalize_plugins_payload(payload: Any) -> list[str]:
 
 
 async def list_remote_plugins() -> list[str] | str:
-    """Source of truth for available WorkChains (`GET /submission/plugins`)."""
+    """Source of truth for available WorkChains (`GET /plugins`)."""
     try:
-        payload = await request_json("GET", "/submission/plugins")
+        payload = await request_json("GET", "/plugins")
         return _normalize_plugins_payload(payload)
     except BridgeOfflineError:
         return OFFLINE_WORKER_MESSAGE
@@ -662,15 +649,18 @@ async def draft_workchain_builder(
     protocol_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any] | str:
     """Request builder draft creation (`POST /submission/draft-builder`)."""
-    body = {
-        "workchain": workchain_label,
+    intent_data: dict[str, Any] = {
         "structure_pk": int(structure_pk),
         "code": code_label,
-        "protocol": protocol,
-        "overrides": overrides or {},
     }
     if protocol_kwargs:
-        body.update(protocol_kwargs)
+        intent_data.update(protocol_kwargs)
+    body = {
+        "entry_point": workchain_label,
+        "protocol": protocol,
+        "intent_data": intent_data,
+        "overrides": overrides or {},
+    }
 
     try:
         payload = await request_json("POST", "/submission/draft-builder", json=body)
@@ -740,7 +730,7 @@ async def run_python_code(
         payload = await request_json(
             "POST",
             "/management/run-python",
-            json={"script": script},
+            json={"script_content": script},
             timeout=180.0,
         )
         if isinstance(payload, dict):
@@ -850,7 +840,7 @@ async def register_specialized_skill(
 ) -> dict[str, Any] | str:
     """Persist a specialized skill script on worker (`POST /registry/register`)."""
     body = {
-        "skill_name": str(skill_name or "").strip(),
+        "script_name": str(skill_name or "").strip(),
         "script": script,
         "description": description,
         "overwrite": bool(overwrite),
@@ -881,71 +871,6 @@ async def execute_specialized_skill(skill_name: str, args: Mapping[str, Any] | N
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
-
-
-async def search_script_archive(
-    keyword: str | None = None,
-    nodes_involved: list[int] | None = None,
-    limit: int = 20,
-    include_source: bool = True,
-    script_id: str | None = None,
-) -> dict[str, Any]:
-    """Compatibility wrapper mapped to worker-side specialized skill registry."""
-    registry_payload = await list_registered_skills()
-    if isinstance(registry_payload, str):
-        return {"count": 0, "items": [], "error": registry_payload}
-    if not isinstance(registry_payload, dict):
-        return {"count": 0, "items": []}
-
-    items = registry_payload.get("items")
-    if not isinstance(items, list):
-        return {"count": 0, "items": []}
-
-    normalized_keyword = str(keyword or "").strip().lower()
-    normalized_script_id = str(script_id or "").strip().lower()
-    _ = nodes_involved
-    _ = include_source
-    try:
-        parsed_limit = int(limit)
-    except (TypeError, ValueError):
-        parsed_limit = 20
-    safe_limit = max(1, min(parsed_limit, 100))
-
-    filtered: list[dict[str, Any]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "").strip()
-        description = str(item.get("description") or "").strip()
-        if normalized_script_id and normalized_script_id != name.lower():
-            continue
-        if normalized_keyword and normalized_keyword not in f"{name} {description}".lower():
-            continue
-        filtered.append(
-            {
-                "script_id": name,
-                "intent": description or None,
-                "status": "registered",
-                "timestamp": item.get("updated_at"),
-                "nodes_involved": [],
-                "created_pks": [],
-                "error_message": None,
-                "missing_module": None,
-                "source": "worker_registry",
-            }
-        )
-        if len(filtered) >= safe_limit:
-            break
-
-    return {
-        "count": len(filtered),
-        "items": filtered,
-        "filters": {
-            "keyword": normalized_keyword or None,
-            "script_id": normalized_script_id or None,
-            "source": "worker_registry",
-        },
-    }
 
 
 async def get_bands_plot_data(pk: int) -> dict[str, Any] | str:
@@ -1016,13 +941,7 @@ async def get_node_summary(node_pk: int) -> dict[str, Any] | str:
         return format_bridge_error(exc)
 
 
-async def serialize_node(node_pk: int) -> dict[str, Any] | str:
-    """Compatibility wrapper that resolves to worker-provided node summary payload."""
-    return await get_node_summary(node_pk)
-
-
 __all__ = [
-    "get_default_profile",
     "list_system_profiles",
     "list_local_archives",
     "switch_profile",
@@ -1056,11 +975,9 @@ __all__ = [
     "list_registered_skills_sync",
     "register_specialized_skill",
     "execute_specialized_skill",
-    "search_script_archive",
     "get_bands_plot_data",
     "list_remote_files",
     "get_remote_file_content",
     "get_node_file_content",
     "get_node_summary",
-    "serialize_node",
 ]

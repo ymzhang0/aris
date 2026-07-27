@@ -63,7 +63,6 @@ type PreviewableNode = {
   pk?: number;
   label?: string | null;
   node_type: string;
-  preview?: Record<string, unknown> | null;
   preview_info?: Record<string, unknown> | null;
 };
 
@@ -75,7 +74,6 @@ type InspectorTarget = {
   nodeType: string;
   breadcrumb: string;
   relation: "root" | InspectorLinkDirection;
-  preview?: Record<string, unknown> | null;
   previewInfo?: Record<string, unknown> | null;
 };
 
@@ -262,7 +260,7 @@ function getDurationLabel(node: ProcessTreeNode): string {
 }
 
 function normalizePreview(node: PreviewableNode): Record<string, unknown> | null {
-  const preview = node.preview_info || node.preview;
+  const preview = node.preview_info;
   if (!preview || typeof preview !== "object" || Array.isArray(preview)) {
     return null;
   }
@@ -1117,7 +1115,6 @@ function buildRootTarget(process: ProcessItem): InspectorTarget {
     nodeType: process.node_type || "Node",
     breadcrumb: `${isProcessLikeNode(process) ? "Process" : "Node"} #${process.pk}`,
     relation: "root",
-    preview: process.preview ?? null,
     previewInfo: process.preview_info ?? null,
   };
 }
@@ -1129,7 +1126,6 @@ function buildLinkTarget(link: ProcessNodeLink, direction: InspectorLinkDirectio
     nodeType: String(link.node_type || "Node"),
     breadcrumb: `${direction === "input" ? "Input" : "Output"} #${link.pk}`,
     relation: direction,
-    preview: link.preview ?? null,
     previewInfo: link.preview_info ?? null,
   };
 }
@@ -1149,7 +1145,6 @@ function buildProcessItemFromInspector(
     process_label: summary?.process_label ?? null,
     process_state: state,
     formula: null,
-    preview: (summary?.preview as Record<string, unknown> | null | undefined) ?? target.preview ?? null,
     preview_info: (summary?.preview_info as Record<string, unknown> | null | undefined) ?? target.previewInfo ?? null,
   };
 }
@@ -1175,7 +1170,7 @@ function iconForNodeType(nodeType: string): { icon: string; ariaLabel: string } 
 }
 
 function formatLinkPreview(link: ProcessNodeLink): string | null {
-  const preview = link.preview_info ?? link.preview;
+  const preview = link.preview_info;
   if (!preview) {
     return null;
   }
@@ -1964,7 +1959,6 @@ function InspectorPanel({
     pk: target.pk,
     label: panelLabel,
     node_type: nodeType,
-    preview: (summary?.preview as Record<string, unknown> | null | undefined) ?? fallbackPreviewNode?.preview ?? target.preview ?? null,
     preview_info: (summary?.preview_info as Record<string, unknown> | null | undefined) ?? fallbackPreviewNode?.preview_info ?? target.previewInfo ?? null,
   };
   const normalizedPreview = normalizePreview(previewNode);
@@ -2001,7 +1995,7 @@ function InspectorPanel({
 
   const overviewContent = (
     <>
-      {(previewNode.preview_info || previewNode.preview) && (
+      {previewNode.preview_info && (
         <section className="space-y-3">
           {processMeta && (processMeta.state || processMeta.duration) ? (
             <div className="flex flex-wrap items-center gap-2">

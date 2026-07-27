@@ -74,7 +74,6 @@ def bootstrap_home_config(settings: object) -> list[dict[str, str]]:
             _REPO_ROOT / "config" / "apps" / "aiida" / "specializations",
             config_root / "apps" / "aiida" / "specializations",
         ),
-        (_REPO_ROOT / "ecosystem.config.js", config_root / "pm2" / "ecosystem.config.js"),
     ]
 
     bootstrapped: list[dict[str, str]] = []

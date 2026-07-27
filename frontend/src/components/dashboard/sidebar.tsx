@@ -207,7 +207,7 @@ function clampMenuPosition(x: number, y: number, dimensions: MenuDimensions = { 
 }
 
 function getPreviewObject(process: ProcessItem): Record<string, unknown> | null {
-  const raw = process.preview_info ?? process.preview;
+  const raw = process.preview_info;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return null;
   }

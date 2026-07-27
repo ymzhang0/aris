@@ -6,11 +6,53 @@ from src.aris_apps.aiida.agent import tools
 
 
 @pytest.mark.anyio
+async def test_list_remote_plugins_uses_canonical_worker_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_request_json(method: str, path: str, **kwargs):  # noqa: ANN003
+        assert method == "GET"
+        assert path == "/plugins"
+        return {"plugins": ["quantumespresso.pw.base"]}
+
+    monkeypatch.setattr(tools, "request_json", _fake_request_json)
+
+    assert await tools.list_remote_plugins() == ["quantumespresso.pw.base"]
+
+
+@pytest.mark.anyio
+async def test_draft_workchain_builder_uses_canonical_protocol_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_request_json(method: str, path: str, **kwargs):  # noqa: ANN003
+        assert method == "POST"
+        assert path == "/submission/draft-builder"
+        assert kwargs["json"] == {
+            "entry_point": "quantumespresso.pw.base",
+            "protocol": "moderate",
+            "intent_data": {
+                "structure_pk": 12,
+                "code": "pw@localhost",
+                "electronic_type": "metal",
+            },
+            "overrides": {"pw": {"metadata": {"options": {"resources": {"num_machines": 1}}}}},
+        }
+        return {"status": "DRAFT_READY"}
+
+    monkeypatch.setattr(tools, "request_json", _fake_request_json)
+
+    result = await tools.draft_workchain_builder(
+        "quantumespresso.pw.base",
+        12,
+        "pw@localhost",
+        protocol_kwargs={"electronic_type": "metal"},
+        overrides={"pw": {"metadata": {"options": {"resources": {"num_machines": 1}}}}},
+    )
+
+    assert result == {"status": "DRAFT_READY"}
+
+
+@pytest.mark.anyio
 async def test_run_python_code_success_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_request_json(method: str, path: str, **kwargs):  # noqa: ANN003
         assert method == "POST"
         assert path == "/management/run-python"
-        assert kwargs.get("json", {}).get("script") == "print('hello')"
+        assert kwargs.get("json", {}).get("script_content") == "print('hello')"
         return {"success": True, "output": "hello"}
 
     monkeypatch.setattr(tools, "request_json", _fake_request_json)
@@ -50,9 +92,9 @@ async def test_register_specialized_skill_calls_registry_endpoint(monkeypatch: p
         assert method == "POST"
         assert path == "/registry/register"
         body = kwargs.get("json", {})
-        assert body["skill_name"] == "relax_helper"
+        assert body["script_name"] == "relax_helper"
         assert "def main" in body["script"]
-        return {"status": "registered", "skill_name": body["skill_name"]}
+        return {"status": "registered", "script_name": body["script_name"]}
 
     monkeypatch.setattr(tools, "request_json", _fake_request_json)
 
@@ -65,7 +107,7 @@ async def test_register_specialized_skill_calls_registry_endpoint(monkeypatch: p
 
     assert isinstance(payload, dict)
     assert payload["status"] == "registered"
-    assert payload["skill_name"] == "relax_helper"
+    assert payload["script_name"] == "relax_helper"
 
 
 @pytest.mark.anyio

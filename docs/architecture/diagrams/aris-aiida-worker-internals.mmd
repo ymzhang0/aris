@@ -56,7 +56,7 @@ flowchart LR
         CORE["Core services<br/>profile/DB/session management<br/>spec + builder + validation<br/>single/batch submit<br/>node/process serialization"]
         ENV["Interpreter boundary<br/>worker-default Python<br/>or validated project Python<br/>+ project workspace header"]
         SUBPROCESS["DynamicExecutionRuntime<br/>managed subprocess<br/>stream output · result markers<br/>environment metadata cache"]
-        WORKER_GAPS["Current worker notes<br/>⚠ event producer not started<br/>aiida_bridge.py compatibility re-export"]
+        WORKER_GAPS["Current worker note<br/>⚠ event producer not started"]
 
         WAPP --> ROUTES --> CORE --> ENV --> SUBPROCESS
         ROUTES --> WORKER_GAPS

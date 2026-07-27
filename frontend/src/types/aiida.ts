@@ -7,7 +7,6 @@ export type ProcessItem = {
   process_label?: string | null;
   process_state: string | null;
   formula: string | null;
-  preview?: Record<string, unknown> | null;
   preview_info?: Record<string, unknown> | null;
 };
 
@@ -519,7 +518,6 @@ export type ProcessNodeLink = {
   node_type: string;
   pk: number;
   label?: string | null;
-  preview?: ProcessNodeLinkPreview | null;
   preview_info?: ProcessNodeLinkPreview | null;
 };
 
@@ -584,7 +582,6 @@ export type ProcessDetailResponse = {
     process_label?: string;
     exit_status?: number | null;
     ctime?: string | null;
-    preview?: ProcessNodeLinkPreview | null;
     preview_info?: ProcessNodeLinkPreview | null;
   };
   inputs?: Record<string, ProcessNodeLink>;

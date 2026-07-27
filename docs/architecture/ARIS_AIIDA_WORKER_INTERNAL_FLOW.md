@@ -90,7 +90,7 @@ sequenceDiagram
         PM2->>Worker: uv run uvicorn main:app
         Launcher->>Worker: poll GET /status
     and ARIS process
-        PM2->>API: ARIS .venv/bin/python app_api.py
+        PM2->>API: ARIS .venv/bin/python -m apps.api.main
         API->>API: load settings + JSONMemory
         API->>API: load AiiDA app manifest
         API->>API: build PydanticAIGeminiRuntime + AiiDADeps
@@ -475,19 +475,11 @@ These are observations from the current call graph, not target-state elements:
 2. **The MCP facade is not connected to the current agent runtime.** It is a
    runnable stdio server for an external/future MCP client, while the current
    Gemini agent uses in-process PydanticAI tool functions and HTTP.
-3. **One MCP capability route does not match the worker router.**
-   `HttpAiiDACapability.list_submission_plugins()` requests
-   `/submission/plugins`, while the current worker exposes `GET /plugins`.
-   The MCP `aiida_submission_plugins` tool therefore needs an adapter or route
-   correction before it can work against this worker unchanged.
-4. **The worker process-event producer is not started by `main.py`.**
+3. **The worker process-event producer is not started by `main.py`.**
    `/process/events` subscribes clients to `BroadcastManager`, and
    `core/events.py` defines `aiida_event_listener()`, but no current code calls
    that listener. The ARIS frontend process stream uses its own refresh logic;
    developers should not assume the worker event stream has an active producer.
-5. **A worker compatibility entry remains.** `aiida_bridge.py` only re-exports
-   `main.app`; PM2 starts `main:app`, so the re-export is not part of the normal
-   launch path.
 
 ## Developer tracing guide
 

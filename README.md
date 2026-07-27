@@ -42,8 +42,6 @@ These are the canonical root endpoints used by ARIS:
 | `POST` | `/submission/validate-job` | Validate job-style submission payloads |
 | `POST` | `/submission/submit` | Submit direct workflow inputs or builder drafts |
 | `POST` | `/submission/draft-builder` | Build a protocol-driven draft payload |
-| `POST` | `/submission/submit-builder` | Submit a builder payload directly |
-| `POST` | `/submission/generate-script` | Generate a submission script from a builder payload |
 
 ### Process and Data Endpoints
 
@@ -65,7 +63,6 @@ These are the canonical root endpoints used by ARIS:
 | :--- | :--- | :--- |
 | `GET` | `/registry/list` | List registered analysis scripts |
 | `POST` | `/registry/register` | Register or update a stored analysis script |
-| `GET` | `/registry/workchains/{entry_point}/spec` | Alias for workflow spec inspection |
 | `POST` | `/execute/{script_name}` | Execute a registered analysis script |
 | `POST` | `/management/run-python` | Managed Python execution helper |
 | `GET` | `/management/infrastructure` | Infrastructure summary for worker setup |
@@ -89,9 +86,9 @@ Backlog and product ideas should go in `/Users/yimingzhang/Developer/aris-worksp
 - Use `./scripts/aris-local.sh status`, `doctor`, `restart`, `stop`, or `logs` for daily operations.
 - Run `./scripts/aris-local.sh install` once to build and install `~/Applications/ARIS.app`. Opening the app starts the local services and displays ARIS in a native WebKit window instead of a browser.
 - The desktop app stores the current repository path in its application bundle. Run `install` again after moving the repository.
-- PM2 process names use the ARIS convention: `aris-api`, `aris-web`, `aris-tunnel`.
-- The active PM2 ecosystem file now lives at `~/.aris/config/pm2/ecosystem.config.js`.
-- `/Users/yimingzhang/Developer/aris-workspace/aris/ecosystem.config.js` is treated as the bootstrap template and is copied into `~/.aris/config/pm2/` on first use.
+- PM2 process names use the ARIS convention: `aiida-worker`, `aris-api`, `aris-web`, `aris-tunnel`.
+- The active PM2 ecosystem file is `/Users/yimingzhang/Developer/aris-workspace/aris/ecosystem.config.js`.
+- Set `ARIS_PM2_ECOSYSTEM_FILE` only when intentionally testing an alternate process definition.
 - Use `/Users/yimingzhang/Developer/aris-workspace/aris/scripts/pm2-dev.sh` for common local PM2 operations:
   `./scripts/pm2-dev.sh start`, `./scripts/pm2-dev.sh restart`, `./scripts/pm2-dev.sh status`, `./scripts/pm2-dev.sh logs web`, `./scripts/pm2-dev.sh startup`.
 - The script defaults to the `dev` target, which manages `aiida-worker`, `aris-api`, and `aris-web` together. Use `core`, `api`, `worker`, or `web` when you want a narrower scope.

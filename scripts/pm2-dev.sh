@@ -4,9 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARIS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-ARIS_CONFIG_HOME="${ARIS_CONFIG_HOME:-${HOME}/.aris/config}"
-REPO_ECOSYSTEM_FILE="${ARIS_DIR}/ecosystem.config.js"
-ECOSYSTEM_FILE="${ARIS_PM2_ECOSYSTEM_FILE:-${ARIS_CONFIG_HOME}/pm2/ecosystem.config.js}"
+ECOSYSTEM_FILE="${ARIS_PM2_ECOSYSTEM_FILE:-${ARIS_DIR}/ecosystem.config.js}"
 PM2_CMD=(npx --yes pm2)
 DEFAULT_TARGET="dev"
 USER_NAME="$(id -un)"
@@ -53,10 +51,6 @@ EOF
 }
 
 require_ecosystem() {
-  if [[ ! -f "${ECOSYSTEM_FILE}" && -f "${REPO_ECOSYSTEM_FILE}" ]]; then
-    mkdir -p "$(dirname "${ECOSYSTEM_FILE}")"
-    cp "${REPO_ECOSYSTEM_FILE}" "${ECOSYSTEM_FILE}"
-  fi
   if [[ ! -f "${ECOSYSTEM_FILE}" ]]; then
     echo "Missing PM2 ecosystem file: ${ECOSYSTEM_FILE}" >&2
     exit 1

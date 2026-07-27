@@ -21,7 +21,7 @@ module.exports = {
             name: 'aris-api',
             cwd: arisDir,
             script: arisPython,
-            args: 'app_api.py',
+            args: '-m apps.api.main',
             env: {
                 PYTHONPATH: arisDir
             }
