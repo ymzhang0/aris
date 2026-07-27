@@ -124,20 +124,24 @@ def test_chat_session_snapshot_preserves_environment_python_path() -> None:
 
 
 def test_normalize_task_mode_accepts_known_values() -> None:
-    assert chat_service._normalize_task_mode("single") == "single"
-    assert chat_service._normalize_task_mode("batch") == "batch"
-    assert chat_service._normalize_task_mode("none") == "none"
-    assert chat_service._normalize_task_mode("  BATCH ") == "batch"
+    preview_service = chat_service._submission_preview_service
+
+    assert preview_service.normalize_task_mode("single") == "single"
+    assert preview_service.normalize_task_mode("batch") == "batch"
+    assert preview_service.normalize_task_mode("none") == "none"
+    assert preview_service.normalize_task_mode("  BATCH ") == "batch"
 
 
 def test_normalize_task_mode_falls_back_to_none_for_unknown_values() -> None:
-    assert chat_service._normalize_task_mode("") == "none"
-    assert chat_service._normalize_task_mode("eos") == "none"
-    assert chat_service._normalize_task_mode(None) == "none"
+    preview_service = chat_service._submission_preview_service
+
+    assert preview_service.normalize_task_mode("") == "none"
+    assert preview_service.normalize_task_mode("eos") == "none"
+    assert preview_service.normalize_task_mode(None) == "none"
 
 
 def test_normalize_submission_request_accepts_batch_parameter_grid() -> None:
-    request = chat_service._normalize_submission_request(
+    request = chat_service._submission_preview_service.normalize_request(
         {
             "mode": "batch",
             "workchain": "quantumespresso.pw.base",
@@ -287,7 +291,7 @@ def test_inject_context_priority_instruction_adds_primary_scope() -> None:
 def test_build_chat_message_payload_includes_structured_task_mode() -> None:
     output = SimpleNamespace(task_mode="batch", data_payload={"source": "agent"})
 
-    payload = chat_service._build_chat_message_payload(
+    payload = chat_service._submission_preview_service.build_message_payload(
         output,
         tool_calls=None,
         task_mode=output.task_mode,
@@ -396,7 +400,7 @@ def test_build_chat_message_payload_includes_submission_draft_fields() -> None:
     )
     output = SimpleNamespace(data_payload={"submission_draft": submission_draft})
 
-    payload = chat_service._build_chat_message_payload(
+    payload = chat_service._submission_preview_service.build_message_payload(
         output,
         tool_calls=["GET management.statistics", "POST submission.draft-builder"],
     )
@@ -430,7 +434,7 @@ def test_build_chat_message_payload_blocks_single_draft_for_batch_intent() -> No
             }
         },
     )
-    payload = chat_service._build_chat_message_payload(
+    payload = chat_service._submission_preview_service.build_message_payload(
         output,
         tool_calls=None,
         task_mode=output.task_mode,
@@ -465,7 +469,7 @@ async def test_prepare_structured_submission_request_auto_builds_batch_preview(
 
     monkeypatch.setattr(researcher, "submit_new_batch_workflow", _fake_submit_new_batch_workflow)
 
-    payload = await chat_service._prepare_structured_submission_request(
+    payload = await chat_service._submission_preview_service.prepare_request(
         {
             "mode": "batch",
             "workchain": "quantumespresso.pw.base",
@@ -494,7 +498,7 @@ def test_build_chat_message_payload_extracts_submission_draft_from_output_payloa
             },
         }
     )
-    payload = chat_service._build_chat_message_payload(
+    payload = chat_service._submission_preview_service.build_message_payload(
         output,
         tool_calls=None,
     )
@@ -529,7 +533,7 @@ def test_build_chat_message_payload_surfaces_recovery_plan_and_next_step() -> No
             },
         }
     )
-    payload = chat_service._build_chat_message_payload(
+    payload = chat_service._submission_preview_service.build_message_payload(
         output,
         tool_calls=["POST submission.draft-builder"],
     )
@@ -543,7 +547,7 @@ def test_build_chat_message_payload_surfaces_recovery_plan_and_next_step() -> No
 
 
 def test_render_canonical_submission_blocker_message_uses_protocol_data_only() -> None:
-    message = chat_service._render_canonical_submission_blocker_message(
+    message = chat_service._submission_preview_service.render_blocker_message(
         task_mode="batch",
         recovery_plan={
             "status": "blocked",

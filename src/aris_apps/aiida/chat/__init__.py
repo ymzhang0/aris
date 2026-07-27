@@ -27,6 +27,10 @@ from .service import (
 )
 from .group_gateway import ChatGroupGateway, FrontendBridgeGroupGateway
 from .session_repository import ChatSessionRepository, JsonChatSessionRepository
+from .submission_preview_service import (
+    SubmissionPreviewRules,
+    SubmissionPreviewService,
+)
 from .workspace_manager import ChatWorkspaceManager
 
 __all__ = [
@@ -57,6 +61,8 @@ __all__ = [
     "normalize_context_node_ids",
     "serialize_chat_history",
     "start_chat_turn",
+    "SubmissionPreviewRules",
+    "SubmissionPreviewService",
     "touch_chat",
     "update_chat_session",
     "write_chat_project_file",

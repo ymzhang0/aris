@@ -8,7 +8,6 @@ import time
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
@@ -61,6 +60,10 @@ from src.aris_apps.aiida.chat.session_repository import (
     ChatSessionRepository,
     JsonChatSessionRepository,
 )
+from src.aris_apps.aiida.chat.submission_preview_service import (
+    SubmissionPreviewRules,
+    SubmissionPreviewService,
+)
 from src.aris_apps.aiida.chat.title_rules import (
     DEFAULT_SESSION_TITLE as _DEFAULT_SESSION_TITLE,
     TITLE_STAGE_CONTEXT_SWITCH as _TITLE_STAGE_CONTEXT_SWITCH,
@@ -84,18 +87,13 @@ from src.aris_apps.aiida.chat.title_rules import (
     slugify_session_name as _slugify_session_name,
 )
 from src.aris_apps.aiida.chat.workspace_manager import ChatWorkspaceManager
-from src.aris_apps.aiida.presenters.workflow_view import enrich_submission_draft_payload
 from src.aris_apps.aiida.domain.submissions import (
-    extract_recovery_plan as _domain_extract_recovery_plan,
-    normalize_submission_request as _domain_normalize_submission_request,
-    normalize_task_mode as _domain_normalize_task_mode,
-    render_submission_blocker_message as _domain_render_submission_blocker_message,
     submission_draft_is_batch as _domain_submission_draft_is_batch,
 )
+from src.aris_apps.aiida.presenters.workflow_view import enrich_submission_draft_payload
 from src.aris_core.agent import AgentModelRejectedError, AgentRunRequest
 from src.aris_core.config import settings
 from src.aris_core.logging import log_event
-from src.aris_core.schema.approval import build_submission_approval_request
 
 _PENDING_SUBMISSION_KEY = "aiida_pending_submission"
 _DEFAULT_PROJECT_NAME = "Default Project"
@@ -144,56 +142,6 @@ _resolve_workspace_target_path = (
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _normalize_task_mode(value: Any) -> str:
-    return _domain_normalize_task_mode(value)
-
-
-def _normalize_submission_request(value: Any) -> dict[str, Any] | None:
-    return _domain_normalize_submission_request(value)
-
-
-async def _prepare_structured_submission_request(
-    request: dict[str, Any] | None,
-    deps: Any,
-    tool_calls: list[str] | None = None,
-) -> dict[str, Any] | None:
-    normalized_request = _normalize_submission_request(request)
-    if not normalized_request:
-        return None
-
-    from src.aris_apps.aiida.agent import researcher as researcher_module
-
-    ctx = SimpleNamespace(deps=deps)
-    mode = normalized_request["mode"]
-    if tool_calls is not None:
-        tool_calls.append(
-            "AUTO submit_new_batch_workflow" if mode == "batch" else "AUTO submit_new_workflow"
-        )
-
-    if mode == "batch":
-        return await researcher_module.submit_new_batch_workflow(
-            ctx,
-            workchain=str(normalized_request["workchain"]),
-            structure_pks=list(normalized_request["structure_pks"]),
-            code=str(normalized_request["code"]),
-            protocol=str(normalized_request["protocol"]),
-            overrides=dict(normalized_request.get("overrides") or {}),
-            protocol_kwargs=dict(normalized_request.get("protocol_kwargs") or {}),
-            parameter_grid=dict(normalized_request.get("parameter_grid") or {}) or None,
-            matrix_mode=str(normalized_request.get("matrix_mode") or "product"),
-        )
-
-    return await researcher_module.submit_new_workflow(
-        ctx,
-        workchain=str(normalized_request["workchain"]),
-        structure_pk=int(normalized_request["structure_pk"]),
-        code=str(normalized_request["code"]),
-        protocol=str(normalized_request["protocol"]),
-        overrides=dict(normalized_request.get("overrides") or {}),
-        protocol_kwargs=dict(normalized_request.get("protocol_kwargs") or {}),
-    )
 
 
 def _resolve_unique_session_slug(
@@ -2122,164 +2070,18 @@ def _build_submission_draft_payload(
     return _apply_submission_preview_overview(enrich_submission_draft_payload(payload))
 
 
-def _extract_submission_draft_from_output_payload(output_payload: dict[str, Any]) -> dict[str, Any] | None:
-    raw_submission = output_payload.get("submission_draft")
-    if not isinstance(raw_submission, dict):
-        return None
-    return _normalize_submission_draft_payload(
-        raw_submission,
-        draft=None,
-        validation=None,
-        validation_summary=None,
+_submission_preview_service = SubmissionPreviewService(
+    SubmissionPreviewRules(
+        normalize_draft=lambda raw: _normalize_submission_draft_payload(
+            raw,
+            draft=None,
+            validation=None,
+            validation_summary=None,
+        ),
+        apply_overview=_apply_submission_preview_overview,
+        is_batch_draft=_submission_draft_is_batch,
     )
-
-
-def _extract_recovery_plan_from_submission_draft(submission_draft: dict[str, Any] | None) -> dict[str, Any] | None:
-    return _domain_extract_recovery_plan(submission_draft)
-
-
-def _extract_recovery_payload(
-    output_payload: dict[str, Any] | None,
-    submission_draft: dict[str, Any] | None,
-) -> tuple[dict[str, Any] | None, str | None, str | None]:
-    recovery_plan: dict[str, Any] | None = None
-    next_step: str | None = None
-    status: str | None = None
-
-    candidates = [output_payload]
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            continue
-        if status is None:
-            raw_status = candidate.get("status")
-            if isinstance(raw_status, str) and raw_status.strip():
-                status = raw_status.strip()
-        if next_step is None:
-            raw_next_step = candidate.get("next_step")
-            if isinstance(raw_next_step, str) and raw_next_step.strip():
-                next_step = raw_next_step.strip()
-        direct_plan = candidate.get("recovery_plan")
-        if isinstance(direct_plan, dict) and direct_plan and recovery_plan is None:
-            recovery_plan = direct_plan
-        details = candidate.get("details")
-        if isinstance(details, dict) and recovery_plan is None:
-            nested_plan = details.get("recovery_plan")
-            if isinstance(nested_plan, dict) and nested_plan:
-                recovery_plan = nested_plan
-
-    if recovery_plan is None:
-        recovery_plan = _extract_recovery_plan_from_submission_draft(submission_draft)
-
-    return recovery_plan, next_step, status
-
-
-def _render_canonical_submission_blocker_message(
-    *,
-    task_mode: str | None,
-    recovery_plan: dict[str, Any] | None,
-    next_step: str | None,
-) -> str | None:
-    return _domain_render_submission_blocker_message(
-        task_mode=task_mode,
-        recovery_plan=recovery_plan,
-        next_step=next_step,
-    )
-
-
-def _build_chat_message_payload(
-    output: Any,
-    *,
-    tool_calls: list[str] | None = None,
-    task_mode: str | None = None,
-) -> dict[str, Any] | None:
-    combined: dict[str, Any] = {}
-    forced_batch_block = False
-    output_payload = getattr(output, "data_payload", None)
-    if isinstance(output_payload, dict):
-        combined["data_payload"] = output_payload
-    if tool_calls:
-        normalized_calls: list[str] = []
-        for call in tool_calls:
-            cleaned = str(call).strip()
-            if not cleaned:
-                continue
-            if normalized_calls and normalized_calls[-1] == cleaned:
-                continue
-            normalized_calls.append(cleaned)
-        if normalized_calls:
-            combined["tool_calls"] = normalized_calls
-
-    resolved_submission_draft: dict[str, Any] | None = None
-    if isinstance(output_payload, dict):
-        resolved_submission_draft = _extract_submission_draft_from_output_payload(output_payload)
-
-    resolved_task_mode = _normalize_task_mode(task_mode)
-    if resolved_task_mode == "none":
-        if isinstance(resolved_submission_draft, dict):
-            resolved_task_mode = "batch" if _submission_draft_is_batch(resolved_submission_draft) else "single"
-        elif isinstance(output_payload, dict):
-            resolved_task_mode = _normalize_task_mode(output_payload.get("task_mode"))
-
-    if isinstance(resolved_submission_draft, dict):
-        resolved_submission_draft = _apply_submission_preview_overview(
-            resolved_submission_draft,
-            preferred_mode=resolved_task_mode,
-        )
-
-    if resolved_task_mode == "batch" and isinstance(resolved_submission_draft, dict) and not _submission_draft_is_batch(
-        resolved_submission_draft
-    ):
-        resolved_submission_draft = None
-        forced_batch_block = True
-
-    if isinstance(resolved_submission_draft, dict):
-        combined["type"] = "SUBMISSION_DRAFT"
-        combined["submission_draft"] = resolved_submission_draft
-        approval_scope = "batch" if resolved_task_mode == "batch" else "single"
-        approval_resource: Any = resolved_submission_draft
-        approval_meta = resolved_submission_draft.get("meta")
-        if isinstance(approval_meta, dict) and approval_meta.get("draft"):
-            approval_resource = approval_meta["draft"]
-        combined["approval_request"] = build_submission_approval_request(
-            approval_resource,
-            scope=approval_scope,
-        ).model_dump(mode="json")
-    combined["task_mode"] = resolved_task_mode
-
-    recovery_plan, next_step, status = _extract_recovery_payload(
-        output_payload if isinstance(output_payload, dict) else None,
-        resolved_submission_draft,
-    )
-    if forced_batch_block:
-        recovery_plan = {
-            "status": "blocked",
-            "summary": "This request requires a batch submission draft, but only a single-job draft was produced.",
-            "issues": [
-                {
-                    "type": "batch_draft_required",
-                    "message": "Do not present a single-job submission draft for a multi-structure request.",
-                }
-            ],
-            "recommended_actions": [
-                {
-                    "action": "submit_new_batch_workflow",
-                    "reason": "Prepare one batch draft that contains the full structure set.",
-                }
-            ],
-            "user_decision_required": False,
-        }
-        next_step = (
-            "Prepare a batch submission draft for the full structure list before showing any launch button."
-        )
-        status = "SUBMISSION_BLOCKED"
-    if isinstance(recovery_plan, dict) and recovery_plan:
-        combined["recovery_plan"] = recovery_plan
-    if isinstance(next_step, str) and next_step:
-        combined["next_step"] = next_step
-    if isinstance(status, str) and status:
-        combined["status"] = status
-
-    return combined or None
+)
 
 
 def _append_assistant_message(
@@ -2905,36 +2707,57 @@ async def _execute_chat_turn(
                 output.thought_process = current_deps.step_history
 
             answer_text = str(output.answer) if hasattr(output, "answer") else str(output)
-            output_task_mode = _normalize_task_mode(getattr(output, "task_mode", None))
+            output_task_mode = _submission_preview_service.normalize_task_mode(
+                getattr(output, "task_mode", None)
+            )
             structured_submission_request = getattr(output, "submission_request", None)
             raw_output_payload = getattr(output, "data_payload", None)
             existing_submission_draft = (
-                _extract_submission_draft_from_output_payload(raw_output_payload)
+                _submission_preview_service.extract_submission_draft(
+                    raw_output_payload
+                )
                 if isinstance(raw_output_payload, dict)
                 else None
             )
             auto_prepared_payload = None
-            if output_task_mode in {"single", "batch"} and existing_submission_draft is None:
-                auto_prepared_payload = await _prepare_structured_submission_request(
+            if (
+                output_task_mode in {"single", "batch"}
+                and existing_submission_draft is None
+            ):
+                auto_prepared_payload = await _submission_preview_service.prepare_request(
                     structured_submission_request,
                     current_deps,
                     bridge_tool_calls,
                 )
             if isinstance(auto_prepared_payload, dict):
-                merged_output_payload = dict(raw_output_payload) if isinstance(raw_output_payload, dict) else {}
+                merged_output_payload = (
+                    dict(raw_output_payload)
+                    if isinstance(raw_output_payload, dict)
+                    else {}
+                )
                 merged_output_payload.update(auto_prepared_payload)
                 if hasattr(output, "data_payload"):
                     output.data_payload = merged_output_payload
-            message_payload = _build_chat_message_payload(
+            message_payload = _submission_preview_service.build_message_payload(
                 output,
                 tool_calls=bridge_tool_calls,
                 task_mode=output_task_mode,
             )
-            if isinstance(message_payload, dict) and not isinstance(message_payload.get("submission_draft"), dict):
-                canonical_blocker_text = _render_canonical_submission_blocker_message(
-                    task_mode=output_task_mode,
-                    recovery_plan=message_payload.get("recovery_plan") if isinstance(message_payload.get("recovery_plan"), dict) else None,
-                    next_step=message_payload.get("next_step") if isinstance(message_payload.get("next_step"), str) else None,
+            if isinstance(message_payload, dict) and not isinstance(
+                message_payload.get("submission_draft"), dict
+            ):
+                recovery_plan = message_payload.get("recovery_plan")
+                next_step = message_payload.get("next_step")
+                canonical_blocker_text = (
+                    _submission_preview_service.render_blocker_message(
+                        task_mode=output_task_mode,
+                        recovery_plan=(
+                            recovery_plan
+                            if isinstance(recovery_plan, dict)
+                            else None
+                        ),
+                        next_step=next_step if isinstance(next_step, str) else None,
+                    )
                 )
                 if canonical_blocker_text:
                     answer_text = canonical_blocker_text
