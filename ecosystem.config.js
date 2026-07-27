@@ -8,16 +8,6 @@ const arisPython = process.env.ARIS_PYTHON || path.join(arisDir, ".venv", "bin",
 module.exports = {
     apps: [
         {
-            name: 'aiida-worker',
-            cwd: workerDir,
-            script: 'uv',
-            args: 'run uvicorn main:app --host 127.0.0.1 --port 8001',
-            interpreter: 'none',
-            env: {
-                PYTHONPATH: '.'
-            }
-        },
-        {
             name: 'aris-api',
             cwd: arisDir,
             script: arisPython,
