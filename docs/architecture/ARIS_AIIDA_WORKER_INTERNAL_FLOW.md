@@ -5,6 +5,8 @@ This document describes the implementation that exists on `main` at commit
 
 The canonical editable overview is
 [`diagrams/aris-aiida-worker-internals.mmd`](./diagrams/aris-aiida-worker-internals.mmd).
+The compact pre-rendered version is
+[`diagrams/aris-aiida-worker-internals.svg`](./diagrams/aris-aiida-worker-internals.svg).
 Solid arrows are active runtime paths. Dashed arrows are optional, development,
 or prepared-but-not-default paths.
 
