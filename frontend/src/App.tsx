@@ -20,7 +20,6 @@ import {
   deleteGroup,
   exportGroup,
   getBootstrap,
-  getChatMessages,
   getChatSessions,
   getGroups,
   getLogs,
@@ -34,6 +33,7 @@ import {
   uploadArchive,
   updateChatSession,
   updateChatSessionTitle,
+  type SubmissionApprovalRequest,
 } from "@/lib/api";
 import { ChatPanel } from "@/components/dashboard/chat-panel";
 import { HistorySidebar } from "@/components/dashboard/history-sidebar";
@@ -73,7 +73,6 @@ import { Database, FolderOpen, History, Moon, Sun } from "lucide-react";
 
 const THEME_STORAGE_KEY = "aris.dashboard.theme";
 const CURRENT_SESSION_STORAGE_KEY = "current_session_id";
-const CHAT_POLL_INTERVAL_MS = 350;
 const GROUP_SELECTION_ALL = "__all_groups__";
 const GROUP_SELECTION_CURRENT_CONTEXT = "__current_context__";
 
@@ -656,10 +655,11 @@ export default function App() {
   const [activeView, setActiveView] = useState<"CHAT" | "EDITOR">("CHAT");
   const [viewerFile, setViewerFile] = useState<WorkspaceExplorerFileSelection | null>(null);
   const [cloneDraft, setCloneDraft] = useState<SubmissionDraftPayload | null>(null);
+  const [cloneApprovalRequest, setCloneApprovalRequest] =
+    useState<SubmissionApprovalRequest | null>(null);
   const [cloneTurnId, setCloneTurnId] = useState<number | null>(null);
   const [cloneModalState, setCloneModalState] = useState<SubmissionModalState>({ status: "idle" });
   const [isCloneDraftLoading, setIsCloneDraftLoading] = useState(false);
-  const [isChatStateStreamReady, setIsChatStateStreamReady] = useState(false);
   const sendAbortControllerRef = useRef<AbortController | null>(null);
   const requestInFlightRef = useRef(false);
   const chatVersionRef = useRef(-1);
@@ -690,7 +690,6 @@ export default function App() {
     queryFn: getChatSessions,
     enabled: bootstrapQuery.isSuccess,
     refetchOnWindowFocus: false,
-    refetchInterval: isChatStateStreamReady ? false : isChatLoading ? 1_500 : 5_000,
   });
 
   const chatSessions = chatSessionsQuery.data?.items ?? [];
@@ -735,13 +734,6 @@ export default function App() {
     queryFn: () => getLogs(260),
     enabled: bootstrapQuery.isSuccess,
     refetchInterval: 1_500,
-  });
-
-  const chatQuery = useQuery({
-    queryKey: ["chat"],
-    queryFn: getChatMessages,
-    enabled: bootstrapQuery.isSuccess,
-    refetchInterval: isChatStateStreamReady ? false : isChatLoading ? CHAT_POLL_INTERVAL_MS : 900,
   });
 
   const defaultSelectedModel = bootstrapQuery.data?.selected_model ?? bootstrapQuery.data?.models?.[0] ?? "";
@@ -851,27 +843,16 @@ export default function App() {
   }, [applyChatSnapshot, bootstrapQuery.data?.chat]);
 
   useEffect(() => {
-    if (!chatQuery.data) {
-      return;
-    }
-    applyChatSnapshot(chatQuery.data);
-  }, [applyChatSnapshot, chatQuery.data]);
-
-  useEffect(() => {
     if (!bootstrapQuery.isSuccess) {
       return;
     }
 
     const source = new EventSource(CHAT_STREAM_URL);
-    const markStreamReady = () => {
-      setIsChatStateStreamReady(true);
-    };
     source.onmessage = (event) => {
       const parsed = parseArisAgUiEvent(event.data);
       if (parsed?.kind === "state") {
         applyChatSnapshot(parsed.chat);
         applyChatSessionsSnapshot(parsed.sessions);
-        markStreamReady();
       } else if (parsed?.kind === "error") {
         console.error("ARIS AG-UI state stream failed", {
           code: parsed.code,
@@ -880,7 +861,7 @@ export default function App() {
       }
     };
     source.onerror = () => {
-      setIsChatStateStreamReady(false);
+      console.error("ARIS AG-UI state stream disconnected");
     };
 
     return () => {
@@ -1091,7 +1072,6 @@ export default function App() {
         applyChatSnapshot(response.chat);
         setComposerResetVersion((current) => current + 1);
         await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-        await queryClient.invalidateQueries({ queryKey: ["chat"] });
       } catch (error) {
         console.error("Failed to restore stored chat session", error);
         window.localStorage.removeItem(CURRENT_SESSION_STORAGE_KEY);
@@ -1310,7 +1290,6 @@ export default function App() {
         console.error("Failed to stop chat request", error);
       }
     } finally {
-      await queryClient.invalidateQueries({ queryKey: ["chat"] });
       await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
     }
   }, [activeTurnId, isChatBusy, queryClient]);
@@ -1339,7 +1318,6 @@ export default function App() {
     setComposerResetVersion((current) => current + 1);
     setSidebarView("explorer");
     await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-    await queryClient.invalidateQueries({ queryKey: ["chat"] });
   }, [activeChatSessionId, applyChatSnapshot, hasPendingAgentStep, isChatBusy, queryClient, stopActiveChatTurn]);
 
   const handleActivateChatSession = useCallback(
@@ -1352,7 +1330,6 @@ export default function App() {
       setActiveWorkspaceProjectId(response.session?.project_id ?? response.active_project_id ?? null);
       setComposerResetVersion((current) => current + 1);
       await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-      await queryClient.invalidateQueries({ queryKey: ["chat"] });
     },
     [activeChatSessionId, applyChatSnapshot, isChatBusy, queryClient],
   );
@@ -1447,7 +1424,6 @@ export default function App() {
       applyChatSnapshot(response.chat);
       setActiveWorkspaceProjectId((current) => (current && !projectSet.has(current) ? current : null));
       await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-      await queryClient.invalidateQueries({ queryKey: ["chat"] });
     },
     [
       activeChatSessionId,
@@ -1654,7 +1630,6 @@ export default function App() {
         setActiveTurnId(turnId);
         setContextNodes([]);
         setComposerResetVersion((current) => current + 1);
-        void queryClient.invalidateQueries({ queryKey: ["chat"] });
         void queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
       } catch (error) {
         setIsChatLoading(false);
@@ -1756,7 +1731,8 @@ export default function App() {
     setIsCloneDraftLoading(true);
     try {
       const payload = await getProcessCloneDraft(process.pk);
-      setCloneDraft(payload as SubmissionDraftPayload);
+      setCloneDraft(payload.submission_draft as SubmissionDraftPayload);
+      setCloneApprovalRequest(payload.approval_request);
       setCloneTurnId(process.pk);
       setCloneModalState({ status: "idle", processPk: null, processPks: [], errorText: null });
     } catch (error) {
@@ -1772,18 +1748,27 @@ export default function App() {
       return;
     }
     setCloneDraft(null);
+    setCloneApprovalRequest(null);
     setCloneTurnId(null);
     setCloneModalState({ status: "idle", processPk: null, processPks: [], errorText: null });
   }, [cloneModalState.status]);
 
   const handleConfirmCloneDraft = useCallback(
     async (draftPayload: SubmissionSubmitDraft) => {
-      if (!cloneDraft || cloneTurnId === null || cloneModalState.status !== "idle") {
+      if (
+        !cloneDraft ||
+        !cloneApprovalRequest ||
+        cloneTurnId === null ||
+        cloneModalState.status !== "idle"
+      ) {
         return;
       }
       setCloneModalState({ status: "submitting", processPk: null, processPks: [], errorText: null });
       try {
-        const response = await submitPreviewDraft(draftPayload);
+        const response = await submitPreviewDraft(
+          draftPayload,
+          cloneApprovalRequest,
+        );
         const rawSubmitted = response.submitted_pks ?? response.process_pks ?? response.pk;
         const processPks = Array.isArray(rawSubmitted)
           ? rawSubmitted.map((value) => Number.parseInt(String(value), 10)).filter((value) => Number.isFinite(value) && value > 0)
@@ -1804,7 +1789,13 @@ export default function App() {
         setCloneModalState({ status: "error", processPk: null, processPks: [], errorText });
       }
     },
-    [cloneDraft, cloneModalState.status, cloneTurnId, queryClient],
+    [
+      cloneApprovalRequest,
+      cloneDraft,
+      cloneModalState.status,
+      cloneTurnId,
+      queryClient,
+    ],
   );
 
   const handleCancelCloneDraft = useCallback(async () => {

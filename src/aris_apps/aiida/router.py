@@ -23,7 +23,10 @@ from sse_starlette.sse import EventSourceResponse
 from src.aris_core.config import settings
 from src.aris_core.logging import get_log_buffer_snapshot, log_event
 from src.aris_core.policy import AuthorizationDecision
-from src.aris_core.schema.approval import resolve_submission_approval
+from src.aris_core.schema.approval import (
+    build_submission_approval_request,
+    resolve_submission_approval,
+)
 from src.aris_core.schema.ui_event import (
     build_ag_ui_sse_event,
     build_ag_ui_state_snapshot,
@@ -2097,7 +2100,27 @@ async def frontend_clone_process_draft(identifier: str):
         raise HTTPException(status_code=502, detail={"error": "Worker returned an invalid clone draft payload"})
 
     try:
-        return enrich_submission_draft_payload(payload)
+        submission_draft = enrich_submission_draft_payload(payload)
+        meta = (
+            submission_draft.get("meta")
+            if isinstance(submission_draft, dict)
+            else None
+        )
+        actionable_draft = (
+            meta.get("draft")
+            if isinstance(meta, dict) and meta.get("draft")
+            else submission_draft
+        )
+        scope: Literal["single", "batch"] = (
+            "batch" if isinstance(actionable_draft, list) else "single"
+        )
+        return {
+            "submission_draft": submission_draft,
+            "approval_request": build_submission_approval_request(
+                actionable_draft,
+                scope=scope,
+            ).model_dump(mode="json"),
+        }
     except Exception as exc:  # noqa: BLE001
         logger.exception(
             log_event(
@@ -2357,12 +2380,6 @@ async def frontend_cancel_pending_submission(
         "status": "cancelled",
         "approval": approval.model_dump(mode="json"),
     }
-
-
-@router.get("/frontend/chat/messages", tags=[FRONTEND_TAG])
-async def frontend_chat_messages(request: Request):
-    state = request.app.state
-    return get_chat_snapshot(state)
 
 
 @router.get("/frontend/chat/sessions", tags=[FRONTEND_TAG])

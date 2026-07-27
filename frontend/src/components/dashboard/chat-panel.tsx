@@ -52,7 +52,7 @@ type ChatTurn = {
 type SubmissionDraftPreview = {
   submissionDraft: SubmissionDraftPayload;
   submitDraft: SubmissionSubmitDraft;
-  approvalRequest: SubmissionApprovalRequest | null;
+  approvalRequest: SubmissionApprovalRequest;
 };
 
 type SubmittedPreviewSummary = {
@@ -231,7 +231,9 @@ function normalizeApprovalRequest(value: unknown): SubmissionApprovalRequest | n
     record.status !== "pending" ||
     (record.scope !== "single" && record.scope !== "batch") ||
     typeof record.approval_id !== "string" ||
+    !record.approval_id.trim() ||
     typeof record.resource_digest !== "string" ||
+    !record.resource_digest.trim() ||
     typeof record.created_at !== "string"
   ) {
     return null;
@@ -244,6 +246,10 @@ function normalizeSubmissionDraftPreview(
   approvalRequest?: unknown,
 ): SubmissionDraftPreview | null {
   if (!rawSubmissionDraft) {
+    return null;
+  }
+  const normalizedApprovalRequest = normalizeApprovalRequest(approvalRequest);
+  if (!normalizedApprovalRequest) {
     return null;
   }
 
@@ -302,7 +308,7 @@ function normalizeSubmissionDraftPreview(
   return {
     submissionDraft,
     submitDraft,
-    approvalRequest: normalizeApprovalRequest(approvalRequest),
+    approvalRequest: normalizedApprovalRequest,
   };
 }
 

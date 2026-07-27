@@ -38,6 +38,11 @@ test("rejects malformed and partial snapshots", () => {
     type: "STATE_SNAPSHOT",
     snapshot: { aris: { chat: { messages: [] } } },
   })), null);
+  assert.equal(parseArisAgUiEvent(JSON.stringify({
+    event: "chat",
+    chat: { messages: [] },
+    sessions: { items: [], projects: [] },
+  })), null);
 });
 
 test("parses lifecycle and error events", () => {
@@ -50,4 +55,3 @@ test("parses lifecycle and error events", () => {
     { kind: "error", message: "offline", code: "ARIS_OFFLINE" },
   );
 });
-

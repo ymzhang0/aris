@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 ApprovalAction = Literal["submission.execute"]
 ApprovalDecisionValue = Literal["approved", "rejected"]
@@ -52,6 +52,19 @@ class ApprovalDecision(BaseModel):
     decided_at: datetime
     resource_digest: str | None = None
 
+    @model_validator(mode="after")
+    def validate_scope_binding(self) -> "ApprovalDecision":
+        if self.scope in {"single", "batch"}:
+            if not str(self.resource_digest or "").strip():
+                raise ValueError(
+                    "Submission approval requires a resource digest"
+                )
+        elif self.resource_digest is not None:
+            raise ValueError(
+                "Pending cancellation cannot include a resource digest"
+            )
+        return self
+
 
 class ApprovalAudit(BaseModel):
     """Normalized approval data recorded at the execution boundary."""
@@ -93,7 +106,7 @@ def resolve_submission_approval(
         raise ValueError("Submission approval decision must be approved")
     if decision.scope != expected_scope:
         raise ValueError(f"Submission approval scope must be {expected_scope}")
-    if decision.resource_digest and decision.resource_digest != digest:
+    if decision.resource_digest != digest:
         raise ValueError("Submission draft changed after it was approved")
     return ApprovalAudit(
         approval_id=decision.approval_id,

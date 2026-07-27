@@ -120,7 +120,8 @@ ARIS application. Deterministic UI routes continue to use HTTP.
 `GET /api/aiida/frontend/chat/stream` is an AG-UI-only state stream. It
 publishes a `RUN_STARTED` lifecycle event followed by atomic `STATE_SNAPSHOT`
 events containing both chat and session state. Stream failures use
-`RUN_ERROR`; there is no alternate event-name or payload protocol.
+`RUN_ERROR`; there is no alternate event-name, payload protocol, or
+`/chat/messages` polling fallback.
 
 ## Submission approval
 
@@ -133,6 +134,9 @@ approval.
 
 Submission and pending-cancellation endpoints require an explicit
 `ApprovalDecision`. Missing decisions are rejected rather than inferred.
+Execution decisions must reuse the server-issued approval ID and resource
+digest; the browser cannot synthesize an execution approval when an approval
+request is absent. Clone previews follow the same protocol.
 
 ## Authorization policy
 

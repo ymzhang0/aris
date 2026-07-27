@@ -7,7 +7,6 @@ import type {
   BridgeSwitchProfileResponse,
   BootstrapResponse,
   BandsPlotResponse,
-  ChatResponse,
   ChatProjectMutationResponse,
   ChatProjectWorkspaceResponse,
   ChatDeleteResponse,
@@ -119,16 +118,30 @@ export type SubmissionSubmitDraftPayload =
   | Record<string, unknown>
   | Array<Record<string, unknown>>;
 
-export type SubmissionApprovalDecision = {
+export type SubmissionExecutionApprovalDecision = {
   protocol_version: "1";
   approval_id: string;
   action: "submission.execute";
-  decision: "approved" | "rejected";
-  scope: "single" | "batch" | "pending";
+  decision: "approved";
+  scope: "single" | "batch";
   actor_type: "user";
   decided_at: string;
-  resource_digest?: string;
+  resource_digest: string;
 };
+
+export type SubmissionCancellationDecision = {
+  protocol_version: "1";
+  approval_id: string;
+  action: "submission.execute";
+  decision: "rejected";
+  scope: "pending";
+  actor_type: "user";
+  decided_at: string;
+};
+
+export type SubmissionApprovalDecision =
+  | SubmissionExecutionApprovalDecision
+  | SubmissionCancellationDecision;
 
 export type SubmissionApprovalRequest = {
   protocol_version: "1";
@@ -141,26 +154,44 @@ export type SubmissionApprovalRequest = {
   summary?: string | null;
 };
 
-function createSubmissionApprovalDecision(
-  decision: SubmissionApprovalDecision["decision"],
-  scope: SubmissionApprovalDecision["scope"],
-  request?: SubmissionApprovalRequest | null,
-): SubmissionApprovalDecision {
-  const fallbackId = `approval-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const approvalId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+function createApprovalId(): string {
+  const localId = `approval-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
-    : fallbackId;
+    : localId;
+}
+
+function createSubmissionApprovalDecision(
+  request: SubmissionApprovalRequest,
+): SubmissionExecutionApprovalDecision {
   return {
     protocol_version: "1",
-    approval_id: request?.approval_id ?? approvalId,
+    approval_id: request.approval_id,
     action: "submission.execute",
-    decision,
-    scope,
+    decision: "approved",
+    scope: request.scope,
     actor_type: "user",
     decided_at: new Date().toISOString(),
-    ...(request?.resource_digest ? { resource_digest: request.resource_digest } : {}),
+    resource_digest: request.resource_digest,
   };
 }
+
+function createPendingCancellationDecision(): SubmissionCancellationDecision {
+  return {
+    protocol_version: "1",
+    approval_id: createApprovalId(),
+    action: "submission.execute",
+    decision: "rejected",
+    scope: "pending",
+    actor_type: "user",
+    decided_at: new Date().toISOString(),
+  };
+}
+
+export type ProcessCloneDraftResponse = {
+  submission_draft: Record<string, unknown>;
+  approval_request: SubmissionApprovalRequest;
+};
 
 function basenamePath(value: string | null | undefined): string {
   const normalized = String(value || "").trim().replace(/\\/g, "/");
@@ -385,8 +416,8 @@ export async function getNodeScript(pk: number): Promise<NodeScriptResponse> {
   return data;
 }
 
-export async function getProcessCloneDraft(identifier: number | string): Promise<Record<string, unknown>> {
-  const { data } = await frontendApi.get<Record<string, unknown>>(`/processes/${identifier}/clone-draft`);
+export async function getProcessCloneDraft(identifier: number | string): Promise<ProcessCloneDraftResponse> {
+  const { data } = await frontendApi.get<ProcessCloneDraftResponse>(`/processes/${identifier}/clone-draft`);
   return data;
 }
 
@@ -464,11 +495,6 @@ export async function getLogs(limit = 240): Promise<LogsResponse> {
   const { data } = await frontendApi.get<LogsResponse>("/logs", {
     params: { limit },
   });
-  return data;
-}
-
-export async function getChatMessages(): Promise<ChatResponse> {
-  const { data } = await frontendApi.get<ChatResponse>("/chat/messages");
   return data;
 }
 
@@ -726,26 +752,28 @@ export async function getRepositoryFileContent(
 
 export async function submitPreviewDraft(
   draft: SubmissionSubmitDraftPayload,
-  approvalRequest?: SubmissionApprovalRequest | null,
+  approvalRequest: SubmissionApprovalRequest,
 ): Promise<SubmissionResponse> {
   const isBatch = Array.isArray(draft);
+  const expectedScope = isBatch ? "batch" : "single";
+  if (approvalRequest.scope !== expectedScope) {
+    throw new Error(
+      `Submission approval scope must be ${expectedScope}.`,
+    );
+  }
   const endpoint = isBatch ? "/submission/submit_batch" : "/submission/submit";
   const { data } = await aiidaApi.post<SubmissionResponse>(endpoint, {
     draft,
     interpreter_info: buildInterpreterInfo(),
     metadata: buildEnvironmentMetadata(),
-    approval: createSubmissionApprovalDecision(
-      "approved",
-      isBatch ? "batch" : "single",
-      approvalRequest,
-    ),
+    approval: createSubmissionApprovalDecision(approvalRequest),
   });
   return data;
 }
 
 export async function cancelPendingSubmission(): Promise<{ status: string }> {
   const { data } = await frontendApi.post<{ status: string }>("/submission/pending/cancel", {
-    approval: createSubmissionApprovalDecision("rejected", "pending"),
+    approval: createPendingCancellationDecision(),
   });
   return data;
 }

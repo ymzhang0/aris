@@ -79,3 +79,30 @@ def test_submission_without_explicit_approval_is_rejected() -> None:
             {"inputs": {"structure_pk": 7}},
             expected_scope="single",
         )
+
+
+def test_submission_decision_without_resource_digest_is_rejected() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="requires a resource digest",
+    ):
+        ApprovalDecision(
+            approval_id="approval-1",
+            decision="approved",
+            scope="single",
+            decided_at=datetime.now(timezone.utc),
+        )
+
+
+def test_pending_cancellation_cannot_carry_submission_digest() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="cannot include a resource digest",
+    ):
+        ApprovalDecision(
+            approval_id="approval-1",
+            decision="rejected",
+            scope="pending",
+            decided_at=datetime.now(timezone.utc),
+            resource_digest="not-applicable",
+        )

@@ -1067,7 +1067,12 @@ async def test_frontend_clone_process_draft_enriches_worker_payload(monkeypatch:
 
     response = await aiida_router.frontend_clone_process_draft("321")
 
-    assert response == enriched_payload
+    assert response["submission_draft"] == enriched_payload
+    assert response["approval_request"]["action"] == "submission.execute"
+    assert response["approval_request"]["scope"] == "single"
+    assert response["approval_request"]["resource_digest"] == (
+        submission_resource_digest(worker_payload["meta"]["draft"])
+    )
 
 
 @pytest.mark.anyio
