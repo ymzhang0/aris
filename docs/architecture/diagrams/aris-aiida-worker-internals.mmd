@@ -1,0 +1,343 @@
+flowchart TB
+    %% ARIS + aiida-worker developer architecture map.
+    %% Solid arrows are current runtime paths. Dashed arrows are optional or prepared paths.
+
+    subgraph ENTRY["1. Application entry and process supervision"]
+        direction LR
+        USER["User"]
+        BROWSER["Browser<br/>http://127.0.0.1:8000"]
+        MAC["ARIS.app<br/>AppKit + WKWebView<br/>desktop/macos/main.m"]
+        LAUNCH["scripts/aris-local.sh<br/>start / dev / doctor"]
+        PM2["PM2<br/>ecosystem.config.js"]
+        API_PROCESS["aris-api process<br/>ARIS .venv<br/>127.0.0.1:8000"]
+        WORKER_PROCESS["aiida-worker process<br/>worker uv environment<br/>127.0.0.1:8001"]
+        VITE["Vite dev server<br/>127.0.0.1:5173<br/>development only"]
+
+        USER --> BROWSER
+        USER --> MAC
+        MAC --> LAUNCH
+        LAUNCH --> PM2
+        PM2 --> API_PROCESS
+        PM2 --> WORKER_PROCESS
+        PM2 -. "dev only" .-> VITE
+        MAC -->|"production URL"| API_PROCESS
+        MAC -. "development URL" .-> VITE
+    end
+
+    subgraph UI["2. Shared React client: browser and macOS use the same frontend"]
+        direction LR
+        REACT["React application<br/>frontend/src/App.tsx"]
+        DASHBOARD["Dashboard components<br/>chat / history / sidebar / process / submission"]
+        ENV_STORE["EnvironmentStore<br/>worker-default or project interpreter"]
+        API_LIB["frontend/src/lib/api.ts<br/>typed HTTP requests + approval decision"]
+        AGUI_CLIENT["frontend/src/lib/ag-ui.ts<br/>AG-UI STATE_SNAPSHOT parser"]
+        CLIENT_STATE["React UI state<br/>chat, sessions, processes, environment,<br/>modal and submission status"]
+
+        REACT --> DASHBOARD
+        REACT --> ENV_STORE
+        DASHBOARD --> API_LIB
+        ENV_STORE --> API_LIB
+        AGUI_CLIENT --> CLIENT_STATE
+        API_LIB --> CLIENT_STATE
+        CLIENT_STATE --> DASHBOARD
+    end
+
+    API_PROCESS -->|"serves frontend/dist + SPA fallback"| REACT
+    VITE -. "hot-reload bundle" .-> REACT
+    BROWSER --> REACT
+    MAC --> REACT
+
+    subgraph HOST["3. ARIS FastAPI host: application control plane"]
+        direction TB
+        APP_API["src/app_api.py<br/>FastAPI lifespan, CORS, static frontend,<br/>JSONMemory and app-state bootstrap"]
+        MANIFEST["AiiDAAppManifest<br/>/api/aiida route mount<br/>agent + deps module selection"]
+        BFF["AiiDA frontend router / BFF<br/>src/aris_apps/aiida/router.py"]
+        AUTH["Authorization boundary<br/>authorization.py + aris_core/policy<br/>permission checks for consequential actions"]
+        PRESENTERS["Presenter layer<br/>node_view.py + workflow_view.py<br/>worker payload -> stable UI payload"]
+        BRIDGE_CLIENT["AiiDAWorkerClient<br/>client.py<br/>timeouts, retries, error normalization,<br/>workspace/interpreter headers"]
+        CAP_PORT["AiiDACapability protocol<br/>capabilities.py"]
+        CAP_HTTP["HttpAiiDACapability<br/>current adapter"]
+
+        APP_API --> MANIFEST
+        MANIFEST --> BFF
+        BFF --> AUTH
+        BFF --> PRESENTERS
+        BFF --> BRIDGE_CLIENT
+        CAP_PORT --> CAP_HTTP
+        CAP_HTTP --> BRIDGE_CLIENT
+    end
+
+    API_PROCESS --> APP_API
+    API_LIB -->|"REST /api/aiida/frontend/*"| BFF
+    API_LIB -->|"REST /api/aiida/* proxy and commands"| BFF
+
+    subgraph STREAMS["4. UI synchronization protocols"]
+        direction LR
+        CHAT_POST["POST /api/aiida/frontend/chat<br/>queues a turn and returns turn_id"]
+        CHAT_STREAM["GET /api/aiida/frontend/chat/stream<br/>data-only SSE carrying official AG-UI events"]
+        AGUI_EVENTS["RUN_STARTED<br/>STATE_SNAPSHOT { aris.chat, aris.sessions }<br/>RUN_ERROR"]
+        DOMAIN_STREAMS["Domain telemetry SSE<br/>processes / groups / infrastructure / logs<br/>independent of chat AG-UI state"]
+
+        CHAT_POST --> CHAT_STREAM
+        CHAT_STREAM --> AGUI_EVENTS
+    end
+
+    API_LIB --> CHAT_POST
+    BFF --> CHAT_POST
+    BFF --> CHAT_STREAM
+    BFF --> DOMAIN_STREAMS
+    AGUI_EVENTS --> AGUI_CLIENT
+    DOMAIN_STREAMS --> CLIENT_STATE
+
+    subgraph CHAT["5. Chat application layer"]
+        direction TB
+        CHAT_SERVICE["chat/service.py<br/>turn orchestration and public chat functions"]
+        SESSION_APP["ChatSessionApplicationService<br/>create, activate, update, archive and delete"]
+        SESSION_QUERY["ChatSessionQueryService<br/>project/session summaries and details"]
+        SESSION_REPO_PORT["ChatSessionRepository protocol"]
+        SESSION_REPO_JSON["JsonChatSessionRepository<br/>index in JSONMemory + one JSON file per session"]
+        WORKSPACE["ChatWorkspaceManager<br/>project root, codes/, data/, safe path resolution"]
+        GROUP_GATEWAY["ChatGroupGateway<br/>project/session mapping to AiiDA groups"]
+        CONTEXT["Context builder<br/>selected AiiDA node PKs + session preferences<br/>+ project environment metadata"]
+        TURN_MACHINE["ChatTurnStateMachine<br/>queued -> running -> retry_wait -> running<br/>running -> processing -> completed<br/>any active state -> recovering -> failed<br/>any active state -> cancelled"]
+        TASK_REGISTRY["asyncio task registry + per-chat lock<br/>cancel/stop and single active execution section"]
+        PREVIEW_SERVICE["SubmissionPreviewService<br/>task_mode and data_payload parser,<br/>preview normalization, recovery payload,<br/>ApprovalRequest creation"]
+
+        CHAT_SERVICE --> SESSION_APP
+        CHAT_SERVICE --> SESSION_QUERY
+        SESSION_APP --> SESSION_REPO_PORT
+        SESSION_QUERY --> SESSION_REPO_PORT
+        SESSION_REPO_PORT --> SESSION_REPO_JSON
+        SESSION_APP --> WORKSPACE
+        SESSION_APP --> GROUP_GATEWAY
+        CHAT_SERVICE --> CONTEXT
+        CHAT_SERVICE --> TURN_MACHINE
+        CHAT_SERVICE --> TASK_REGISTRY
+        CHAT_SERVICE --> PREVIEW_SERVICE
+    end
+
+    CHAT_POST --> CHAT_SERVICE
+    CHAT_SERVICE -->|"version increments"| CHAT_STREAM
+
+    subgraph AGENT["6. Provider-neutral agent boundary and current implementation"]
+        direction TB
+        RUNTIME_PORT["aris_core.agent.AgentRuntime protocol<br/>AgentRunRequest -> AgentRunResult"]
+        GEMINI_RUNTIME["PydanticAIGeminiRuntime<br/>provider adapter, model selection,<br/>retryable-unavailable classification"]
+        PYDANTIC_AGENT["PydanticAI Agent<br/>aiida_researcher"]
+        OUTPUT_SCHEMA["ARISResponse schema<br/>answer + thought_process + task_mode<br/>+ submission_request + data_payload<br/>task_mode = none | single | batch"]
+        DEPS["AiiDADeps<br/>JSONMemory, session_id, app_state,<br/>context_nodes, step history, turn registry"]
+        TOOLS["Researcher tools<br/>profiles, groups, nodes, processes, specs,<br/>infrastructure, preview/validation,<br/>data files, scripts and specialized skills"]
+        AGENT_EXEC["Current execution-capable agent tools<br/>submit_validated_workflow<br/>run_aiida_code_script<br/>direct worker access; no typed ApprovalDecision"]
+        GEMINI_API["Google Gemini API"]
+
+        RUNTIME_PORT --> GEMINI_RUNTIME
+        GEMINI_RUNTIME --> PYDANTIC_AGENT
+        PYDANTIC_AGENT --> GEMINI_API
+        PYDANTIC_AGENT --> OUTPUT_SCHEMA
+        DEPS --> PYDANTIC_AGENT
+        PYDANTIC_AGENT --> TOOLS
+        PYDANTIC_AGENT --> AGENT_EXEC
+    end
+
+    CONTEXT --> DEPS
+    TURN_MACHINE -->|"execute_agent_turn"| RUNTIME_PORT
+    OUTPUT_SCHEMA --> PREVIEW_SERVICE
+    TOOLS -->|"current agent tool transport"| BRIDGE_CLIENT
+    AGENT_EXEC -->|"remaining direct execution path"| BRIDGE_CLIENT
+
+    subgraph PROTOCOL["7. Protocol-first submission preview and explicit approval gate"]
+        direction TB
+        TASK_MODE{"ARISResponse.task_mode"}
+        NONE["none<br/>analysis/message only"]
+        SINGLE["single<br/>one runnable preview"]
+        BATCH["batch<br/>multi-structure or parameter grid preview"]
+        STRUCT_REQUEST["submission_request<br/>structured workchain/code/protocol/<br/>structure(s)/overrides/grid"]
+        DRAFT_BUILD["Worker draft-builder + validate<br/>NO launch"]
+        DRAFT["data_payload.submission_draft<br/>normalized UI preview"]
+        APPROVAL_REQ["ApprovalRequest v1<br/>server-issued approval_id<br/>action=submission.execute<br/>scope=single|batch<br/>SHA-256 resource_digest"]
+        MODAL["React submission modal<br/>user reviews editable preview"]
+        APPROVAL_DECISION["ApprovalDecision v1<br/>approved/rejected + same id/scope/digest<br/>actor_type=user + decided_at"]
+        VERIFY["ARIS execution boundary<br/>permission + explicit decision + scope<br/>+ digest bound to exact submitted draft"]
+        SUBMIT_ROUTE{"scope"}
+        SUBMIT_SINGLE["POST worker /submission/submit"]
+        SUBMIT_BATCH["POST worker /submission/submit<br/>with batch payload<br/>(ARIS BFF also exposes submit_batch)"]
+        REJECT["Reject with 4xx/409<br/>missing approval, changed draft,<br/>scope mismatch or policy denial"]
+
+        TASK_MODE --> NONE
+        TASK_MODE --> SINGLE
+        TASK_MODE --> BATCH
+        SINGLE --> STRUCT_REQUEST
+        BATCH --> STRUCT_REQUEST
+        STRUCT_REQUEST --> DRAFT_BUILD
+        DRAFT_BUILD --> DRAFT
+        DRAFT --> APPROVAL_REQ
+        APPROVAL_REQ --> MODAL
+        MODAL --> APPROVAL_DECISION
+        APPROVAL_DECISION --> VERIFY
+        VERIFY --> SUBMIT_ROUTE
+        SUBMIT_ROUTE -->|"single"| SUBMIT_SINGLE
+        SUBMIT_ROUTE -->|"batch"| SUBMIT_BATCH
+        VERIFY -->|"invalid"| REJECT
+    end
+
+    PREVIEW_SERVICE --> TASK_MODE
+    PREVIEW_SERVICE --> STRUCT_REQUEST
+    APPROVAL_REQ --> CLIENT_STATE
+    API_LIB --> APPROVAL_DECISION
+    VERIFY --> AUTH
+    DRAFT_BUILD --> CAP_PORT
+    SUBMIT_SINGLE --> BFF
+    SUBMIT_BATCH --> BFF
+
+    subgraph MCP["8. MCP capability facade: implemented, safe, not the current Gemini tool path"]
+        direction TB
+        MCP_ENTRY["uv run aris-aiida-mcp<br/>stdio FastMCP server"]
+        MCP_FACADE["AiiDAMCPFacade<br/>maps MCP operations to AiiDACapability"]
+        MCP_TOOLS["10 tools<br/>status, system, recent processes/nodes,<br/>inspect/logs, plugins/spec,<br/>build preview, validate preview"]
+        MCP_RESOURCES["3 resources<br/>aiida://status<br/>aiida://resources<br/>aiida://profiles"]
+        MCP_PROMPT["1 prompt<br/>aiida_research_workflow"]
+        NO_SUBMIT["Deliberately no MCP submit tool<br/>MCP cannot launch a workflow"]
+        EXTERNAL_MCP["External or future MCP client"]
+
+        EXTERNAL_MCP -. "stdio MCP" .-> MCP_ENTRY
+        MCP_ENTRY --> MCP_FACADE
+        MCP_FACADE --> MCP_TOOLS
+        MCP_FACADE --> MCP_RESOURCES
+        MCP_FACADE --> MCP_PROMPT
+        MCP_FACADE --> NO_SUBMIT
+        MCP_FACADE --> CAP_PORT
+    end
+
+    PYDANTIC_AGENT -. "not currently wired as MCP client" .-> MCP_ENTRY
+
+    BRIDGE_CLIENT -->|"HTTP JSON / binary / domain SSE<br/>default bridge URL 127.0.0.1:8001"| WORKER_PROCESS
+    AGENT_EXEC -->|"POST /submission/submit or /management/run-python<br/>bypasses typed UI approval gate"| WORKER_PROCESS
+
+    subgraph WORKER["9. aiida-worker FastAPI: deterministic execution plane"]
+        direction TB
+        WORKER_APP["main.py<br/>FastAPI 3.0.0<br/>router mount + normalized errors<br/>shutdown of dynamic execution runtime"]
+        LEGACY_WORKER_ENTRY["aiida_bridge.py<br/>backward-compatible app re-export<br/>not the PM2 entry point"]
+
+        subgraph WORKER_ROUTES["HTTP router groups"]
+            direction LR
+            W_MANAGEMENT["/management<br/>profiles, system, resources, statistics,<br/>groups/nodes, infrastructure/codes,<br/>environment inspection and run-python"]
+            W_DATA["/data<br/>bands, remote files,<br/>repository files"]
+            W_PROCESS["/process<br/>inspect, logs, provenance workgraph,<br/>clone-draft, process event stream"]
+            W_SUBMISSION["/submission<br/>spec, validate, validate-job,<br/>draft-builder, submit, submit-builder,<br/>generate-script"]
+            W_EXECUTION["/execution<br/>registered script execution<br/>JSON or output SSE"]
+            W_REGISTRY["/registry<br/>list/register/read scripts<br/>and WorkChain spec alias"]
+        end
+
+        subgraph WORKER_CORE["Core modules behind the routers"]
+            direction LR
+            ENGINE["core/engine.py<br/>load/switch profile, archive profile,<br/>DB concurrency guard, SQLAlchemy pool,<br/>request session cleanup"]
+            SUB_UTIL["core/submission_utils.py<br/>WorkflowFactory, input resolution,<br/>port validation, single/batch expansion,<br/>AiiDA engine submit"]
+            INJECTED["core/injected_submission.py<br/>build/spec/validate/submit inside<br/>selected Python interpreter"]
+            DYNAMIC["DynamicExecutionRuntime<br/>interpreter validation, subprocess lifecycle,<br/>streamed output, result markers,<br/>environment metadata cache"]
+            PROC_UTIL["process_utils + node_utils<br/>ORM serialization, process detail/logs,<br/>provenance tree and clone preview"]
+            SCRIPT_REPO["core/scripts.py + repository/scripts<br/>registered executable Python scripts"]
+            EVENT_HUB["BroadcastManager<br/>process state fan-out SSE<br/>communicator/polling support module"]
+        end
+
+        WORKER_APP --> W_MANAGEMENT
+        WORKER_APP --> W_DATA
+        WORKER_APP --> W_PROCESS
+        WORKER_APP --> W_SUBMISSION
+        WORKER_APP --> W_EXECUTION
+        WORKER_APP --> W_REGISTRY
+        W_MANAGEMENT --> ENGINE
+        W_MANAGEMENT --> DYNAMIC
+        W_DATA --> ENGINE
+        W_DATA --> PROC_UTIL
+        W_PROCESS --> PROC_UTIL
+        W_PROCESS --> EVENT_HUB
+        W_SUBMISSION --> SUB_UTIL
+        W_SUBMISSION --> INJECTED
+        W_SUBMISSION --> DYNAMIC
+        W_EXECUTION --> DYNAMIC
+        W_EXECUTION --> SCRIPT_REPO
+        W_REGISTRY --> SCRIPT_REPO
+        W_REGISTRY --> ENGINE
+        LEGACY_WORKER_ENTRY -.-> WORKER_APP
+    end
+
+    WORKER_PROCESS --> WORKER_APP
+
+    subgraph ENV["10. Two Python-environment modes inside the worker boundary"]
+        direction LR
+        ENV_SELECT{"Interpreter context<br/>X-ARIS-Active-Python-Path<br/>+ X-ARIS-Active-Workspace-Path"}
+        WORKER_ENV["worker-default<br/>aiida-worker uv environment<br/>stable AiiDA service dependencies"]
+        PROJECT_ENV["project interpreter<br/>project .venv/conda Python<br/>calculation/plugin-specific packages"]
+        SUBPROCESS["Injected subprocess<br/>executes builder/spec/script<br/>against chosen interpreter"]
+        RESULT_PROTOCOL["Machine-readable result protocol<br/>stdout/stderr events + JSON result markers"]
+
+        ENV_SELECT -->|"no explicit project Python"| WORKER_ENV
+        ENV_SELECT -->|"validated explicit Python path"| PROJECT_ENV
+        WORKER_ENV --> SUBPROCESS
+        PROJECT_ENV --> SUBPROCESS
+        SUBPROCESS --> RESULT_PROTOCOL
+    end
+
+    DYNAMIC --> ENV_SELECT
+    INJECTED --> SUBPROCESS
+    RESULT_PROTOCOL --> W_SUBMISSION
+    RESULT_PROTOCOL --> W_EXECUTION
+
+    subgraph AIIDA["11. AiiDA runtime and external compute"]
+        direction TB
+        PROFILE["AiiDA profile/config<br/>default AIIDA_PROFILE=sandbox<br/>or selected profile/archive"]
+        ORM["AiiDA ORM + QueryBuilder<br/>Node, Group, ProcessNode,<br/>Computer, Code"]
+        STORAGE["AiiDA storage<br/>PostgreSQL/SQLite metadata<br/>+ repository objects<br/>or mounted .aiida/.zip archive"]
+        ENGINE_SUBMIT["AiiDA engine.submit<br/>creates process graph and provenance"]
+        DAEMON["AiiDA daemon / RabbitMQ communicator<br/>long-running process orchestration"]
+        TRANSPORT["AiiDA transport<br/>local or SSH computer"]
+        SCHEDULER["Scheduler / remote computer<br/>Slurm, PBS, local, etc."]
+        OUTPUTS["CalcJob/WorkChain outputs<br/>repository files, RemoteData,<br/>logs, BandsData and provenance"]
+
+        PROFILE --> ORM
+        ORM <--> STORAGE
+        ORM --> ENGINE_SUBMIT
+        ENGINE_SUBMIT --> DAEMON
+        DAEMON --> TRANSPORT
+        TRANSPORT --> SCHEDULER
+        SCHEDULER --> OUTPUTS
+        OUTPUTS --> STORAGE
+    end
+
+    ENGINE --> PROFILE
+    SUB_UTIL --> ORM
+    SUB_UTIL --> ENGINE_SUBMIT
+    PROC_UTIL --> ORM
+    EVENT_HUB -. "process state observations" .-> DAEMON
+
+    subgraph PERSIST["12. ARIS-owned persistence, separate from AiiDA persistence"]
+        direction LR
+        JSON_MEMORY["ARIS JSONMemory<br/>ARIS_MEMORY_DIR<br/>session/project index and app KV"]
+        SESSION_FILES["ARIS_MEMORY_DIR/sessions/*.json<br/>message history + session metadata"]
+        PROJECT_FILES["ARIS project workspace<br/>project root with codes/ and data/<br/>shared by sessions in one project"]
+        WORKER_HEADERS["Bridge context headers<br/>carry workspace and interpreter selection<br/>without merging the two environments"]
+
+        JSON_MEMORY --> SESSION_FILES
+        PROJECT_FILES --> WORKER_HEADERS
+    end
+
+    SESSION_REPO_JSON --> JSON_MEMORY
+    WORKSPACE --> PROJECT_FILES
+    CONTEXT --> WORKER_HEADERS
+    WORKER_HEADERS --> BRIDGE_CLIENT
+
+    classDef entry fill:#eef6ff,stroke:#4b82c3,color:#172033;
+    classDef ui fill:#f5f0ff,stroke:#7962b8,color:#201b31;
+    classDef host fill:#e9f8f1,stroke:#3d8f70,color:#163128;
+    classDef worker fill:#fff4e8,stroke:#c77a26,color:#3c2712;
+    classDef store fill:#fffbe6,stroke:#aa8a18,color:#362d0e;
+    classDef protocol fill:#fff0f3,stroke:#c94f70,color:#3b1721;
+    classDef future fill:#f2f2f2,stroke:#7a7a7a,color:#2f2f2f,stroke-dasharray: 5 5;
+
+    class BROWSER,MAC,LAUNCH,PM2,API_PROCESS,WORKER_PROCESS,VITE entry;
+    class REACT,DASHBOARD,ENV_STORE,API_LIB,AGUI_CLIENT,CLIENT_STATE ui;
+    class APP_API,MANIFEST,BFF,AUTH,PRESENTERS,BRIDGE_CLIENT,CAP_PORT,CAP_HTTP,CHAT_SERVICE,SESSION_APP,SESSION_QUERY,TURN_MACHINE,PREVIEW_SERVICE,RUNTIME_PORT,GEMINI_RUNTIME,PYDANTIC_AGENT,DEPS,TOOLS host;
+    class WORKER_APP,W_MANAGEMENT,W_DATA,W_PROCESS,W_SUBMISSION,W_EXECUTION,W_REGISTRY,ENGINE,SUB_UTIL,INJECTED,DYNAMIC,PROC_UTIL,SCRIPT_REPO,EVENT_HUB,WORKER_ENV,PROJECT_ENV,SUBPROCESS worker;
+    class JSON_MEMORY,SESSION_FILES,PROJECT_FILES,STORAGE,SCRIPT_REPO store;
+    class TASK_MODE,STRUCT_REQUEST,DRAFT_BUILD,DRAFT,APPROVAL_REQ,MODAL,APPROVAL_DECISION,VERIFY,SUBMIT_ROUTE,REJECT,OUTPUT_SCHEMA,AGENT_EXEC protocol;
+    class MCP_ENTRY,MCP_FACADE,MCP_TOOLS,MCP_RESOURCES,MCP_PROMPT,NO_SUBMIT,EXTERNAL_MCP,LEGACY_WORKER_ENTRY future;

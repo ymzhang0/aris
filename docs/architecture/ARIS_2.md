@@ -3,6 +3,11 @@
 This document defines the current ARIS architecture and its next evolution
 points.
 
+For a code-level map of the running processes, chat state machine, approval
+flow, MCP facade, worker routers, interpreter selection and AiiDA execution
+path, see
+[`ARIS and aiida-worker internal flow`](ARIS_AIIDA_WORKER_INTERNAL_FLOW.md).
+
 ## Goals
 
 - Keep one React product UI for browser and desktop delivery.
