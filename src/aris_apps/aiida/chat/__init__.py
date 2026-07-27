@@ -39,6 +39,12 @@ from .submission_preview_service import (
     SubmissionPreviewRules,
     SubmissionPreviewService,
 )
+from .turn_state_machine import (
+    ChatTurnRetry,
+    ChatTurnState,
+    ChatTurnStateMachine,
+    InvalidChatTurnTransition,
+)
 from .workspace_manager import ChatWorkspaceManager
 
 __all__ = [
@@ -51,6 +57,9 @@ __all__ = [
     "ChatSessionQueryService",
     "ChatSessionRepository",
     "ChatWorkspaceManager",
+    "ChatTurnRetry",
+    "ChatTurnState",
+    "ChatTurnStateMachine",
     "cancel_chat_turn",
     "create_chat_project",
     "create_chat_session",
@@ -70,6 +79,7 @@ __all__ = [
     "list_chat_session_workspace_files",
     "list_chat_sessions",
     "JsonChatSessionRepository",
+    "InvalidChatTurnTransition",
     "normalize_context_node_ids",
     "serialize_chat_history",
     "start_chat_turn",

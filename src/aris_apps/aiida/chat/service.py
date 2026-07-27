@@ -95,6 +95,11 @@ from src.aris_apps.aiida.chat.title_rules import (
     should_schedule_title_generation as _should_schedule_title_generation,
     slugify_session_name as _slugify_session_name,
 )
+from src.aris_apps.aiida.chat.turn_state_machine import (
+    ChatTurnRetry,
+    ChatTurnStateMachine,
+    execute_agent_turn,
+)
 from src.aris_apps.aiida.chat.workspace_manager import ChatWorkspaceManager
 from src.aris_apps.aiida.domain.submissions import (
     submission_draft_is_batch as _domain_submission_draft_is_batch,
@@ -2249,6 +2254,9 @@ def cancel_chat_turn(state: Any, turn_id: int | None = None) -> int | None:
         if task.done():
             tasks.pop(candidate_turn_id, None)
             continue
+        turn_execution = getattr(task, "turn_execution", None)
+        if isinstance(turn_execution, ChatTurnStateMachine):
+            turn_execution.cancel()
         task.cancel()
         session_id = getattr(task, "session_id", None)
         _update_assistant_message(
@@ -2256,12 +2264,38 @@ def cancel_chat_turn(state: Any, turn_id: int | None = None) -> int | None:
             candidate_turn_id,
             "Response stopped by user.",
             status="error",
-            session_id=str(session_id) if isinstance(session_id, str) and session_id else None,
+            session_id=(
+                str(session_id)
+                if isinstance(session_id, str) and session_id
+                else None
+            ),
+            payload=(
+                {"execution": turn_execution.to_payload()}
+                if isinstance(turn_execution, ChatTurnStateMachine)
+                else None
+            ),
         )
         logger.info(log_event("aiida.chat_turn.cancel.requested", turn_id=candidate_turn_id))
         return candidate_turn_id
 
     return None
+
+
+def _build_chat_turn_state_machine(
+    state: Any,
+    turn_id: int,
+) -> ChatTurnStateMachine:
+    agent_runtime = getattr(state, "agent_runtime", None)
+    retry_policy = getattr(agent_runtime, "retry_policy", None)
+    return ChatTurnStateMachine(
+        turn_id=turn_id,
+        unavailable_retries=int(
+            getattr(retry_policy, "unavailable_retries", 0) or 0
+        ),
+        base_backoff_seconds=float(
+            getattr(retry_policy, "base_backoff_seconds", 2.0) or 2.0
+        ),
+    )
 
 
 def start_chat_turn(
@@ -2298,6 +2332,7 @@ def start_chat_turn(
     turn_id = int(store.get("turn_seq", 0)) + 1
     store["turn_seq"] = turn_id
     state.chat_turn_seq = turn_id
+    turn_execution = _build_chat_turn_state_machine(state, turn_id)
     session_id = str(session["id"])
     chat_history = session["messages"]
 
@@ -2314,6 +2349,7 @@ def start_chat_turn(
             "turn_id": turn_id,
             "payload": {
                 "type": "status",
+                "execution": turn_execution.to_payload(),
                 "status": {
                     "current_step": "Queued request",
                     "steps": [],
@@ -2352,9 +2388,11 @@ def start_chat_turn(
             context_archive=context_archive,
             context_node_ids=normalized_node_ids,
             metadata=normalized_metadata,
+            turn_execution=turn_execution,
         )
     )
     setattr(task, "session_id", session_id)
+    setattr(task, "turn_execution", turn_execution)
     _ensure_chat_task_registry(state)[turn_id] = task
     task.add_done_callback(
         lambda _task, _state=state, _turn_id=turn_id: _ensure_chat_task_registry(_state).pop(_turn_id, None)
@@ -2369,6 +2407,7 @@ async def _execute_chat_turn(
     user_intent: str,
     selected_model: str,
     fetch_context_nodes: Callable[[list[int]], list[dict[str, Any]]],
+    turn_execution: ChatTurnStateMachine,
     context_archive: str | None = None,
     context_node_ids: list[int] | None = None,
     metadata: dict[str, Any] | None = None,
@@ -2439,6 +2478,7 @@ async def _execute_chat_turn(
                 payload = {
                     "type": "status",
                     "tool_calls": bridge_tool_calls[-20:],
+                    "execution": turn_execution.to_payload(),
                     "status": {
                         "current_step": cleaned,
                         "steps": step_history[-40:],
@@ -2471,83 +2511,55 @@ async def _execute_chat_turn(
             try:
                 run_intent = _inject_session_preference_instruction(user_intent, metadata)
                 run_intent = _inject_context_priority_instruction(run_intent, normalized_node_ids)
-                retry_policy = agent_runtime.retry_policy
-                retry_budget = retry_policy.unavailable_retries
-                retry_base_backoff_seconds = retry_policy.base_backoff_seconds
-                last_run_error: Exception | None = None
-                result = None
-                for attempt in range(retry_budget + 1):
-                    try:
-                        result = await agent_runtime.run(
-                            AgentRunRequest(
-                                prompt=run_intent,
-                                deps=current_deps,
-                                model_name=selected_model,
-                                metadata={
-                                    "session_id": session_id,
-                                    "turn_id": turn_id,
-                                },
-                            )
-                        )
-                        last_run_error = None
-                        break
-                    except asyncio.CancelledError:
-                        raise
-                    except AgentModelRejectedError as run_error:
-                        logger.error(
-                            log_event(
-                                "aiida.chat_turn.model_rejected",
-                                turn_id=turn_id,
-                                model=selected_model,
-                                provider=run_error.provider,
-                                error=str(run_error)[:500],
-                            )
-                        )
-                        raise RuntimeError(str(run_error)) from run_error
-                    except Exception as run_error:  # noqa: BLE001
-                        error_text = str(run_error)
-                        is_retryable = agent_runtime.is_retryable_unavailable_error(run_error)
-                        if is_retryable and attempt < retry_budget:
-                            wait_seconds = retry_base_backoff_seconds * (2**attempt)
-                            retry_step = (
-                                "The model provider is temporarily unavailable. "
-                                f"Auto-retrying in {wait_seconds:.1f}s ({attempt + 1}/{retry_budget})."
-                            )
-                            current_deps.log_step(retry_step)
-                            logger.warning(
-                                log_event(
-                                    "aiida.chat_turn.model_unavailable_retry",
-                                    turn_id=turn_id,
-                                    model=selected_model,
-                                    attempt=attempt + 1,
-                                    max_attempts=retry_budget + 1,
-                                    wait_seconds=f"{wait_seconds:.2f}",
-                                    error=error_text[:500],
-                                )
-                            )
-                            await asyncio.sleep(wait_seconds)
-                            continue
 
-                        last_run_error = run_error
-                        break
-
-                if result is None:
-                    if last_run_error is None:
-                        raise RuntimeError("Model call failed: no result and no error captured.")
-                    retry_exhausted = agent_runtime.is_retryable_unavailable_error(
-                        last_run_error
+                def _handle_retry(retry: ChatTurnRetry) -> None:
+                    retry_step = (
+                        "The model provider is temporarily unavailable. "
+                        f"Auto-retrying in {retry.wait_seconds:.1f}s "
+                        f"({retry.attempt}/{retry.max_attempts - 1})."
                     )
-                    if retry_exhausted:
-                        logger.error(
-                            log_event(
-                                "aiida.chat_turn.model_unavailable_retry_exhausted",
-                                turn_id=turn_id,
-                                model=selected_model,
-                                attempts=retry_budget + 1,
-                                error=str(last_run_error)[:500],
-                            )
+                    current_deps.log_step(retry_step)
+                    _update_assistant_message(
+                        state,
+                        turn_id,
+                        None,
+                        status="thinking",
+                        session_id=session_id,
+                        payload={
+                            "type": "status",
+                            "execution": turn_execution.to_payload(),
+                            "status": {
+                                "current_step": retry_step,
+                                "steps": step_history[-40:],
+                            },
+                        },
+                    )
+                    logger.warning(
+                        log_event(
+                            "aiida.chat_turn.model_unavailable_retry",
+                            turn_id=turn_id,
+                            model=selected_model,
+                            attempt=retry.attempt,
+                            max_attempts=retry.max_attempts,
+                            wait_seconds=f"{retry.wait_seconds:.2f}",
+                            error=retry.error[:500],
                         )
-                    raise last_run_error
+                    )
+
+                result = await execute_agent_turn(
+                    runtime=agent_runtime,
+                    request=AgentRunRequest(
+                        prompt=run_intent,
+                        deps=current_deps,
+                        model_name=selected_model,
+                        metadata={
+                            "session_id": session_id,
+                            "turn_id": turn_id,
+                        },
+                    ),
+                    machine=turn_execution,
+                    on_retry=_handle_retry,
+                )
             finally:
                 reset_bridge_call_listener(listener_token)
                 reset_bridge_request_headers(request_headers_token)
@@ -2622,6 +2634,9 @@ async def _execute_chat_turn(
                 )
                 if canonical_blocker_text:
                     answer_text = canonical_blocker_text
+            turn_execution.complete()
+            message_payload = dict(message_payload or {})
+            message_payload["execution"] = turn_execution.to_payload()
             _append_assistant_message(
                 state,
                 turn_id,
@@ -2686,12 +2701,14 @@ async def _execute_chat_turn(
 
         except asyncio.CancelledError:
             elapsed = time.perf_counter() - t0
+            turn_execution.cancel()
             _update_assistant_message(
                 state,
                 turn_id,
                 "Response stopped by user.",
                 status="error",
                 session_id=session_id,
+                payload={"execution": turn_execution.to_payload()},
             )
             session_history = get_chat_history(state, session_id=session_id)
             session_history[:] = session_history[-_MAX_CHAT_SESSION_MESSAGES:]
@@ -2713,6 +2730,33 @@ async def _execute_chat_turn(
             raise
         except Exception as error:  # noqa: BLE001
             elapsed = time.perf_counter() - t0
+            if isinstance(error, AgentModelRejectedError):
+                logger.error(
+                    log_event(
+                        "aiida.chat_turn.model_rejected",
+                        turn_id=turn_id,
+                        model=selected_model,
+                        provider=error.provider,
+                        error=str(error)[:500],
+                    )
+                )
+            turn_execution.fail(
+                error,
+                failure_kind=turn_execution.failure_kind or "execution_error",
+            )
+            if (
+                turn_execution.failure_kind
+                == "provider_unavailable_exhausted"
+            ):
+                logger.error(
+                    log_event(
+                        "aiida.chat_turn.model_unavailable_retry_exhausted",
+                        turn_id=turn_id,
+                        model=selected_model,
+                        attempts=turn_execution.attempt,
+                        error=str(error)[:500],
+                    )
+                )
             logger.exception(
                 log_event(
                     "aiida.chat_turn.failed",
@@ -2728,6 +2772,7 @@ async def _execute_chat_turn(
                 f"Request failed: {error}",
                 status="error",
                 session_id=session_id,
+                payload={"execution": turn_execution.to_payload()},
             )
             session_history = get_chat_history(state, session_id=session_id)
             session_history[:] = session_history[-_MAX_CHAT_SESSION_MESSAGES:]
