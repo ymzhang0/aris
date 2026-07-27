@@ -1259,16 +1259,23 @@ async def get_bridge_status() -> BridgeStatusResponse:
         try:
             managed_status = await worker_process_manager.request("runtime.status")
             worker_snapshot = worker_process_manager.snapshot()
+            res_dict = managed_status.get("resources") or {}
+            if not isinstance(res_dict, dict):
+                res_dict = {}
             return BridgeStatusResponse(
                 status="online",
                 url=f"stdio://aris-aiida-worker/{worker_snapshot.pid or 'unknown'}",
-                environment="Managed worker subprocess",
+                environment=str(managed_status.get("environment") or "Managed worker subprocess"),
                 transport="stdio",
                 worker_mode=str(managed_status.get("mode") or "").strip() or None,
-                profile="unknown",
-                daemon_status=False,
-                resources=SystemCountsResponse(),
-                plugins=[],
+                profile=str(managed_status.get("profile") or "").strip() or "unknown",
+                daemon_status=bool(managed_status.get("daemon_status", False)),
+                resources=SystemCountsResponse(
+                    computers=int(res_dict.get("computers", 0)),
+                    codes=int(res_dict.get("codes", 0)),
+                    workchains=int(res_dict.get("workchains", 0)),
+                ),
+                plugins=list(managed_status.get("plugins") or []),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(log_event("worker.runtime.status.failed", error=str(exc)))
