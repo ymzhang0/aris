@@ -197,6 +197,7 @@ source = { editable = "." }
 dependencies = [
     { name = "ag-ui-protocol" },
     { name = "fastapi" },
+    { name = "fastmcp" },
     { name = "google-genai" },
     { name = "httpx" },
     { name = "ipykernel" },
@@ -226,6 +227,7 @@ dev = [
 requires-dist = [
     { name = "ag-ui-protocol", specifier = ">=0.1.13,<0.2" },
     { name = "fastapi", specifier = ">=0.129.0" },
+    { name = "fastmcp", specifier = ">=3.0,<4" },
     { name = "google-genai", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "ipykernel", specifier = ">=7.2.0" },

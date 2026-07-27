@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
+from urllib.parse import quote
 
 from src.aris_apps.aiida.client import AiiDAWorkerClient, BridgeSnapshot, aiida_worker_client
 
@@ -23,6 +24,42 @@ class AiiDACapability(Protocol):
     async def get_profiles(self) -> dict[str, Any]: ...
 
     async def switch_profile(self, profile: str) -> dict[str, Any]: ...
+
+    async def get_system_info(self) -> dict[str, Any]: ...
+
+    async def list_recent_processes(
+        self,
+        *,
+        limit: int = 20,
+    ) -> dict[str, Any]: ...
+
+    async def inspect_process(self, identifier: str) -> dict[str, Any]: ...
+
+    async def get_process_logs(self, pk: int) -> dict[str, Any]: ...
+
+    async def list_recent_nodes(
+        self,
+        *,
+        limit: int = 50,
+        node_type: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def list_submission_plugins(self) -> dict[str, Any]: ...
+
+    async def get_submission_spec(
+        self,
+        workchain: str,
+    ) -> dict[str, Any]: ...
+
+    async def build_submission_draft(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
+    async def validate_submission_draft(
+        self,
+        draft: dict[str, Any],
+    ) -> dict[str, Any]: ...
 
 
 class HttpAiiDACapability:
@@ -49,6 +86,99 @@ class HttpAiiDACapability:
 
     async def switch_profile(self, profile: str) -> dict[str, Any]:
         return await self._client.switch_profile(profile)
+
+    async def get_system_info(self) -> dict[str, Any]:
+        return await self._client.get_system_info()
+
+    async def list_recent_processes(
+        self,
+        *,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        payload = await self._client.request_json(
+            "GET",
+            "/management/recent-processes",
+            params={"limit": int(limit)},
+        )
+        return payload if isinstance(payload, dict) else {"processes": []}
+
+    async def inspect_process(self, identifier: str) -> dict[str, Any]:
+        cleaned = str(identifier or "").strip()
+        if not cleaned:
+            raise ValueError("Process identifier is required")
+        payload = await self._client.request_json(
+            "GET",
+            f"/process/{quote(cleaned, safe='')}",
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    async def get_process_logs(self, pk: int) -> dict[str, Any]:
+        payload = await self._client.request_json(
+            "GET",
+            f"/process/{int(pk)}/logs",
+        )
+        return payload if isinstance(payload, dict) else {"logs": []}
+
+    async def list_recent_nodes(
+        self,
+        *,
+        limit: int = 50,
+        node_type: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": int(limit)}
+        cleaned_node_type = str(node_type or "").strip()
+        if cleaned_node_type:
+            params["node_type"] = cleaned_node_type
+        payload = await self._client.request_json(
+            "GET",
+            "/management/recent-nodes",
+            params=params,
+        )
+        return payload if isinstance(payload, dict) else {"nodes": []}
+
+    async def list_submission_plugins(self) -> dict[str, Any]:
+        payload = await self._client.request_json(
+            "GET",
+            "/submission/plugins",
+        )
+        return payload if isinstance(payload, dict) else {"plugins": []}
+
+    async def get_submission_spec(
+        self,
+        workchain: str,
+    ) -> dict[str, Any]:
+        cleaned = str(workchain or "").strip()
+        if not cleaned:
+            raise ValueError("WorkChain entry point is required")
+        payload = await self._client.request_json(
+            "GET",
+            f"/submission/spec/{quote(cleaned, safe='')}",
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    async def build_submission_draft(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = await self._client.request_json(
+            "POST",
+            "/submission/draft-builder",
+            json=dict(request),
+            retries=0,
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    async def validate_submission_draft(
+        self,
+        draft: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = await self._client.request_json(
+            "POST",
+            "/submission/validate",
+            json={"draft": dict(draft)},
+            retries=0,
+        )
+        return payload if isinstance(payload, dict) else {}
 
 
 aiida_capability: AiiDACapability = HttpAiiDACapability(aiida_worker_client)

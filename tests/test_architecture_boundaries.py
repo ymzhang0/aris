@@ -165,6 +165,9 @@ async def test_http_aiida_capability_delegates_to_worker_client() -> None:
     class FakeClient:
         bridge_url = "http://worker.test"
 
+        def __init__(self) -> None:
+            self.requests = []
+
         async def get_status(self):
             return snapshot
 
@@ -180,7 +183,15 @@ async def test_http_aiida_capability_delegates_to_worker_client() -> None:
         async def switch_profile(self, profile):
             return {"current_profile": profile}
 
-    capability = HttpAiiDACapability(FakeClient())  # type: ignore[arg-type]
+        async def get_system_info(self):
+            return {"version": "2.7"}
+
+        async def request_json(self, method, path, **kwargs):
+            self.requests.append((method, path, kwargs))
+            return {"method": method, "path": path, **kwargs}
+
+    client = FakeClient()
+    capability = HttpAiiDACapability(client)  # type: ignore[arg-type]
 
     assert capability.bridge_url == "http://worker.test"
     assert await capability.get_status() is snapshot
@@ -188,3 +199,18 @@ async def test_http_aiida_capability_delegates_to_worker_client() -> None:
     assert await capability.get_resources() == {"computers": []}
     assert await capability.get_profiles() == {"profiles": []}
     assert await capability.switch_profile("research") == {"current_profile": "research"}
+    assert await capability.get_system_info() == {"version": "2.7"}
+    assert await capability.inspect_process("12") == {
+        "method": "GET",
+        "path": "/process/12",
+    }
+    assert await capability.get_submission_spec("quantumespresso.pw.base") == {
+        "method": "GET",
+        "path": "/submission/spec/quantumespresso.pw.base",
+    }
+    assert await capability.build_submission_draft({"workchain": "pw.base"}) == {
+        "method": "POST",
+        "path": "/submission/draft-builder",
+        "json": {"workchain": "pw.base"},
+        "retries": 0,
+    }

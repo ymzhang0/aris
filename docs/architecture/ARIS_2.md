@@ -30,8 +30,8 @@ Application API / BFF
         |                                     v
         +-- Submission Domain Service --> AiiDA Capability
                                                |
-                                  HTTP adapter now
-                                  MCP adapter later
+                                  +-- HTTP adapter (UI)
+                                  +-- MCP facade (agents)
                                                |
                                           aiida-worker
                                                |
@@ -65,6 +65,15 @@ Session naming is separated into `chat.title_rules`: title sanitization, slug
 generation, context fingerprints, prompt construction, and lifecycle scheduling
 are deterministic rules. Provider calls, asynchronous task coordination,
 persistence, and workspace/group renaming remain in the chat service.
+
+Session commands and reads are separated into
+`ChatSessionApplicationService` and `ChatSessionQueryService`. The original
+chat module retains thin public entry points so API and UI callers do not depend
+on persistence details.
+
+One chat turn is driven by `ChatTurnStateMachine`. Model invocation, exponential
+backoff, recovery, failure, and cancellation use explicit legal transitions;
+the structured execution state is included in the assistant message payload.
 
 Project filesystem behavior is owned by `ChatWorkspaceManager`. It defines the
 shared `codes/` and `data/` layout, validates file targets against path and
@@ -100,9 +109,11 @@ phrases must not be used to infer topology.
 ### AiiDA Capability
 
 Application and agent code depend on an `AiiDACapability` protocol. The current
-adapter delegates to `AiiDAWorkerClient` over HTTP. A future MCP facade may
-expose agent-facing tools, resources, and prompts while deterministic UI routes
-continue to use HTTP.
+adapter delegates to `AiiDAWorkerClient` over HTTP. `AiiDAMCPFacade` and the
+`aris-aiida-mcp` stdio server expose agent-facing inspection and submission
+preview tools, resources, and a protocol prompt. The MCP surface intentionally
+has no submission-execution tool: typed approval and execution remain in the
+ARIS application. Deterministic UI routes continue to use HTTP.
 
 ## UI events
 
@@ -155,9 +166,9 @@ Sharing a repository does not imply sharing a Python virtual environment.
 
 ## Next architecture steps
 
-1. Add an MCP facade for agent-facing AiiDA capabilities.
-2. Replace JSON session persistence with a transactional repository.
-3. Unify retries, runtime selection, and recovery in an explicit state machine.
+1. Replace JSON session persistence with a transactional repository.
+2. Move runtime selection into the explicit turn state machine.
+3. Connect the selected agent runtime to the AiiDA MCP server.
 4. Consolidate repositories only after service boundaries are stable.
 5. Evaluate an OpenAI Agents SDK adapter after the provider-neutral contract is
    exercised by the current implementation.
