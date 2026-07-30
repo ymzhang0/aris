@@ -315,14 +315,6 @@ async def _get_frontend_nodes_async(
     return payload.get("items", []) if isinstance(payload, dict) else []
 
 
-async def _get_frontend_processes_async(
-    limit: int = 15,
-    *,
-    root_only: bool = True,
-) -> list[dict[str, Any]]:
-    params: dict[str, Any] = {"limit": limit, "root_only": root_only}
-    payload = await aiida_worker_client.request_json("GET", "/management/recent-processes", params=params)
-    return payload.get("items", []) if isinstance(payload, dict) else []
 
 
 def _coerce_text_value(value: Any) -> str | None:
@@ -1086,59 +1078,8 @@ async def _ensure_named_groups(labels: list[str]) -> dict[str, str]:
     return ensured
 
 
-async def _delete_named_groups(labels: list[str]) -> dict[str, str]:
-    deleted: dict[str, str] = {}
-    for raw_label in labels:
-        cleaned_label = str(raw_label or "").strip()
-        if not cleaned_label or cleaned_label in deleted:
-            continue
-        existing = next((group for group in list_groups() if str(group.get("label") or "").strip() == cleaned_label), None)
-        if not isinstance(existing, dict):
-            continue
-        try:
-            delete_group(int(existing.get("pk")))
-        except BridgeAPIError as exc:
-            if int(exc.status_code or 0) != 404:
-                raise
-        deleted[cleaned_label] = cleaned_label
-    return deleted
 
 
-def _collect_chat_group_labels_for_deletion(
-    state: Any,
-    *,
-    project_ids: list[str] | None = None,
-    session_ids: list[str] | None = None,
-) -> list[str]:
-    project_id_set = {str(project_id or "").strip() for project_id in project_ids or [] if str(project_id or "").strip()}
-    session_id_set = {str(session_id or "").strip() for session_id in session_ids or [] if str(session_id or "").strip()}
-    if not project_id_set and not session_id_set:
-        return []
-
-    labels: list[str] = []
-    seen: set[str] = set()
-    sessions = list_chat_sessions(state)
-    projects = list_chat_projects(state)
-
-    for project in projects:
-        if str(project.get("id") or "").strip() not in project_id_set:
-            continue
-        label = str(project.get("group_label") or "").strip()
-        if label and label not in seen:
-            seen.add(label)
-            labels.append(label)
-
-    for session in sessions:
-        session_id = str(session.get("id") or "").strip()
-        project_id = str(session.get("project_id") or "").strip()
-        if session_id not in session_id_set and project_id not in project_id_set:
-            continue
-        label = str(session.get("session_group_label") or "").strip()
-        if label and label not in seen:
-            seen.add(label)
-            labels.append(label)
-
-    return labels
 
 
 def _chat_delete_response(state: Any, deleted: dict[str, Any]) -> dict[str, Any]:

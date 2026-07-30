@@ -13,42 +13,10 @@ from src.aris_apps.aiida.client import (
 )
 
 
-def is_worker_connected() -> bool:
-    return aiida_worker_client.is_connected
 
 
-def get_recent_processes(limit: int = 5, *, root_only: bool = True) -> list[dict[str, Any]]:
-    try:
-        payload = request_json_sync(
-            "GET",
-            "/management/recent-processes",
-            params={"limit": int(limit), "root_only": bool(root_only)},
-            timeout=6.0,
-        )
-    except (BridgeOfflineError, BridgeAPIError):
-        return []
-    except Exception:  # noqa: BLE001
-        return []
-
-    if isinstance(payload, dict):
-        items = payload.get("items")
-        return items if isinstance(items, list) else []
-    return payload if isinstance(payload, list) else []
 
 
-def list_group_labels(search: str | None = None) -> list[str]:
-    params = {"search": search} if search else None
-    try:
-        payload = request_json_sync("GET", "/management/groups/labels", params=params, timeout=6.0)
-    except (BridgeOfflineError, BridgeAPIError):
-        return []
-    except Exception:  # noqa: BLE001
-        return []
-
-    if isinstance(payload, dict):
-        items = payload.get("items")
-        return [str(item) for item in items] if isinstance(items, list) else []
-    return [str(item) for item in payload] if isinstance(payload, list) else []
 
 
 def _normalize_group_item(raw: Any) -> dict[str, Any] | None:

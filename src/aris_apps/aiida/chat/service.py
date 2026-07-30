@@ -1014,11 +1014,6 @@ def get_chat_snapshot(state: Any) -> dict[str, Any]:
     return _get_session_query_service().get_snapshot(state)
 
 
-def archive_chat_session(state: Any, session_id: str) -> dict[str, Any] | None:
-    return _get_session_application_service().archive_session(
-        state,
-        session_id,
-    )
 
 
 def _get_project_config_path(root_path: str | None) -> Path | None:

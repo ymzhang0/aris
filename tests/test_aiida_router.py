@@ -656,10 +656,7 @@ async def test_frontend_delete_chat_items_supports_mixed_bulk_delete(
     monkeypatch.setattr(aiida_router, "get_chat_snapshot", lambda _state: {"session_id": None, "messages": [], "snapshot": {}})
     monkeypatch.setattr(aiida_router, "_chat_sessions_payload", lambda _state: {"version": 5, "active_session_id": None, "active_project_id": None, "projects": [], "items": []})
 
-    async def _fake_delete_named_groups(_labels: list[str]) -> dict[str, str]:
-        return {}
 
-    monkeypatch.setattr(aiida_router, "_delete_named_groups", _fake_delete_named_groups)
 
     response = await aiida_router.frontend_delete_chat_items(
         request,
