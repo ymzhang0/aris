@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.aris_apps.aiida.agent import runtime as aiida_runtime
-from src.aris_apps.aiida.capabilities import HttpAiiDACapability
+from src.aris_apps.aiida.capabilities import ManagedAiiDACapability
 from src.aris_apps.aiida.chat import service as chat_service
 from src.aris_apps.aiida.chat.session_application_service import (
     ChatSessionApplicationService,
@@ -159,7 +159,7 @@ async def test_pydantic_runtime_maps_provider_model_rejection(
 
 
 @pytest.mark.anyio
-async def test_http_aiida_capability_delegates_to_worker_client() -> None:
+async def test_managed_aiida_capability_delegates_to_worker_client() -> None:
     snapshot = SimpleNamespace(status="online")
 
     class FakeClient:
@@ -191,7 +191,7 @@ async def test_http_aiida_capability_delegates_to_worker_client() -> None:
             return {"method": method, "path": path, **kwargs}
 
     client = FakeClient()
-    capability = HttpAiiDACapability(client)  # type: ignore[arg-type]
+    capability = ManagedAiiDACapability(client)  # type: ignore[arg-type]
 
     assert capability.bridge_url == "http://worker.test"
     assert await capability.get_status() is snapshot

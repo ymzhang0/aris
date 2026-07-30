@@ -35,10 +35,9 @@ Commands:
   startup    Configure a user-level launchd agent that runs 'pm2 resurrect' at login
 
 Targets:
-  dev        aiida-worker + aris-api + aris-web
-  core       aiida-worker + aris-api
+  dev        aris-api + aris-web (ARIS owns its worker subprocess)
+  core       aris-api (ARIS owns its worker subprocess)
   api        aris-api
-  worker     aiida-worker
   web        aris-web
   all        entire ecosystem config
 
@@ -61,16 +60,13 @@ resolve_names() {
   local target="${1:-${DEFAULT_TARGET}}"
   case "${target}" in
     dev)
-      printf '%s\n' "aiida-worker" "aris-api" "aris-web"
+      printf '%s\n' "aris-api" "aris-web"
       ;;
     core)
-      printf '%s\n' "aiida-worker" "aris-api"
+      printf '%s\n' "aris-api"
       ;;
     api)
       printf '%s\n' "aris-api"
-      ;;
-    worker)
-      printf '%s\n' "aiida-worker"
       ;;
     web)
       printf '%s\n' "aris-web"

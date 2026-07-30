@@ -62,8 +62,8 @@ class AiiDACapability(Protocol):
     ) -> dict[str, Any]: ...
 
 
-class HttpAiiDACapability:
-    """Current adapter backed by the aiida-worker HTTP client."""
+class ManagedAiiDACapability:
+    """Adapter backed by ARIS' managed aiida-worker subprocess."""
 
     def __init__(self, client: AiiDAWorkerClient) -> None:
         self._client = client
@@ -185,7 +185,7 @@ class HttpAiiDACapability:
         return payload if isinstance(payload, dict) else {}
 
 
-aiida_capability: AiiDACapability = HttpAiiDACapability(aiida_worker_client)
+aiida_capability: AiiDACapability = ManagedAiiDACapability(aiida_worker_client)
 
 
-__all__ = ["AiiDACapability", "HttpAiiDACapability", "aiida_capability"]
+__all__ = ["AiiDACapability", "ManagedAiiDACapability", "aiida_capability"]

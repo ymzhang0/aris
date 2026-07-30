@@ -124,7 +124,7 @@ class BridgeStatusResponse(BaseModel):
     status: Literal["online", "offline"]
     url: str
     environment: str
-    transport: Literal["stdio", "http"] = "http"
+    transport: Literal["stdio"] = "stdio"
     worker_mode: str | None = None
     profile: str = "unknown"
     daemon_status: bool = False

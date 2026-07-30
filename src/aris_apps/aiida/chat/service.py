@@ -14,11 +14,11 @@ from uuid import uuid4
 from loguru import logger
 
 from src.aris_apps.aiida.client import (
-    build_bridge_context_headers,
+    build_worker_context,
     reset_bridge_call_listener,
-    reset_bridge_request_headers,
+    reset_worker_request_context,
     set_bridge_call_listener,
-    set_bridge_request_headers,
+    set_worker_request_context,
 )
 from src.aris_apps.aiida.chat.batch_progress import (
     _batch_process_label,
@@ -854,20 +854,20 @@ def describe_chat_project_file(
     }
 
 
-def build_chat_project_worker_headers(state: Any, project_id: str) -> dict[str, str] | None:
+def build_chat_project_worker_context(state: Any, project_id: str) -> dict[str, str] | None:
     _session, store = _find_chat_session(state, None)
     project = _find_store_project(store, project_id)
     if project is None:
         return None
 
     workspace_path = str(_ensure_project_workspace_dir(project))
-    return build_bridge_context_headers(
+    return build_worker_context(
         workspace_path=workspace_path,
         project_id=project.get("id"),
     )
 
 
-def _build_worker_workspace_headers(state: Any, session_id: str | None = None) -> dict[str, str] | None:
+def _build_worker_context(state: Any, session_id: str | None = None) -> dict[str, str] | None:
     session, store = _find_chat_session(state, session_id)
     if session is None:
         return None
@@ -875,7 +875,7 @@ def _build_worker_workspace_headers(state: Any, session_id: str | None = None) -
     _ensure_session_workspace_dir(store, session)
     workspace_path = str(_ensure_project_workspace_dir(project))
     snapshot = _normalize_chat_session_snapshot(session.get("snapshot"))
-    return build_bridge_context_headers(
+    return build_worker_context(
         workspace_path=workspace_path,
         session_id=session.get("id"),
         project_id=project.get("id"),
@@ -2564,7 +2564,7 @@ async def _execute_chat_turn(
                 setattr(current_deps, "step_callback", _record_step_update)
 
             listener_token = set_bridge_call_listener(_record_bridge_call)
-            request_headers_token = set_bridge_request_headers(_build_worker_workspace_headers(state, session_id))
+            worker_context_token = set_worker_request_context(_build_worker_context(state, session_id))
             spinner_task = asyncio.create_task(
                 _thinking_status_ticker(
                     state=state,
@@ -2629,7 +2629,7 @@ async def _execute_chat_turn(
                 )
             finally:
                 reset_bridge_call_listener(listener_token)
-                reset_bridge_request_headers(request_headers_token)
+                reset_worker_request_context(worker_context_token)
 
             spinner_stop.set()
             if spinner_task:

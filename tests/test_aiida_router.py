@@ -215,27 +215,26 @@ def test_extract_preview_for_node_type_prefers_embedded_preview_info() -> None:
 
 
 @pytest.mark.anyio
-async def test_bridge_status_prefers_managed_worker_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
-    class ManagedWorker:
-        async def request(self, method: str) -> dict[str, object]:
-            assert method == "runtime.status"
-            return {"status": "online", "mode": "core-injected-executor"}
+async def test_bridge_status_reports_managed_worker_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def managed_status() -> SimpleNamespace:
+        return SimpleNamespace(
+            status="online",
+            url="stdio://managed-aiida-worker",
+            environment="Managed AiiDA runtime",
+            mode="core-injected-executor",
+            profile="dev",
+            daemon_status=True,
+            resources=SimpleNamespace(computers=1, codes=2, workchains=3),
+            plugins=["quantumespresso.pw.base"],
+        )
 
-        @staticmethod
-        def snapshot() -> SimpleNamespace:
-            return SimpleNamespace(pid=31415)
-
-    async def unexpected_http_status() -> None:
-        raise AssertionError("HTTP status should not be called while the managed worker is online")
-
-    monkeypatch.setattr(aiida_router, "get_worker_process_manager", lambda: ManagedWorker())
-    monkeypatch.setattr(aiida_router.aiida_capability, "get_status", unexpected_http_status)
+    monkeypatch.setattr(aiida_router.aiida_capability, "get_status", managed_status)
 
     response = await aiida_router.get_bridge_status()
 
     assert response.status == "online"
     assert response.transport == "stdio"
-    assert response.url == "stdio://aris-aiida-worker/31415"
+    assert response.url == "stdio://managed-aiida-worker"
     assert response.worker_mode == "core-injected-executor"
 
 
@@ -396,19 +395,19 @@ async def test_submit_bridge_workchain_single_adds_submitted_pk(monkeypatch: pyt
         method: str,
         path: str,
         json: dict[str, object],
-        headers: dict[str, str] | None = None,
+        context: dict[str, str] | None = None,
     ):  # noqa: ARG001
         assert method == "POST"
         assert path == "/submission/submit"
         assert "draft" in json
-        assert headers == {"X-ARIS-Session-Id": "chat-0307"}
+        assert context == {"session_id": "chat-0307"}
         return {"status": "SUBMITTED", "pk": 321}
 
     monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
     monkeypatch.setattr(
         aiida_router,
-        "_build_submission_request_headers",
-        lambda _state: {"X-ARIS-Session-Id": "chat-0307"},
+        "_build_submission_worker_context",
+        lambda _state: {"session_id": "chat-0307"},
     )
     monkeypatch.setattr(aiida_router, "_auto_assign_submission_groups", _fake_auto_assign_submission_groups)
 
@@ -440,19 +439,19 @@ async def test_submit_bridge_workchain_unwraps_direct_entry_point_payload(monkey
         method: str,
         path: str,
         json: dict[str, object],
-        headers: dict[str, str] | None = None,
+        context: dict[str, str] | None = None,
     ):  # noqa: ARG001
         assert method == "POST"
         assert path == "/submission/submit"
         captured_request["payload"] = json
-        assert headers == {"X-ARIS-Session-Id": "chat-0307"}
+        assert context == {"session_id": "chat-0307"}
         return {"status": "SUBMITTED", "pk": 654}
 
     monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
     monkeypatch.setattr(
         aiida_router,
-        "_build_submission_request_headers",
-        lambda _state: {"X-ARIS-Session-Id": "chat-0307"},
+        "_build_submission_worker_context",
+        lambda _state: {"session_id": "chat-0307"},
     )
     monkeypatch.setattr(aiida_router, "_auto_assign_submission_groups", _fake_auto_assign_submission_groups)
 
@@ -683,12 +682,12 @@ async def test_submit_bridge_workchain_batch_collects_submitted_pks(monkeypatch:
         method: str,
         path: str,
         json: dict[str, object],
-        headers: dict[str, str] | None = None,
+        context: dict[str, str] | None = None,
     ):  # noqa: ARG001
         assert method == "POST"
         assert path == "/submission/submit"
         captured_request["payload"] = json
-        assert headers == {"X-ARIS-Session-Id": "chat-0307"}
+        assert context == {"session_id": "chat-0307"}
         return {
             "status": "SUBMITTED_BATCH",
             "total": 3,
@@ -706,8 +705,8 @@ async def test_submit_bridge_workchain_batch_collects_submitted_pks(monkeypatch:
     monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
     monkeypatch.setattr(
         aiida_router,
-        "_build_submission_request_headers",
-        lambda _state: {"X-ARIS-Session-Id": "chat-0307"},
+        "_build_submission_worker_context",
+        lambda _state: {"session_id": "chat-0307"},
     )
     monkeypatch.setattr(aiida_router, "_auto_assign_submission_groups", _fake_auto_assign_submission_groups)
 

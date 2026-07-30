@@ -1,7 +1,8 @@
 # ARIS for macOS
 
 The macOS target is a small native AppKit/WebKit shell for ARIS. In normal use,
-it starts the PM2-managed worker and API, waits for their health checks, and
+it starts the API, which owns its AiiDA worker subprocess, waits for the ARIS
+health check, and
 loads the production React build served by the API. It does not start Vite.
 
 Build and install it with:

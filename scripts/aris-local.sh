@@ -7,7 +7,6 @@ ARIS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PM2_SCRIPT="${SCRIPT_DIR}/pm2-dev.sh"
 ARIS_URL="${ARIS_URL:-http://127.0.0.1:5173}"
 API_URL="${ARIS_API_URL:-http://127.0.0.1:8000}"
-WORKER_URL="${ARIS_WORKER_URL:-http://127.0.0.1:8001}"
 WAIT_SECONDS="${ARIS_STARTUP_TIMEOUT:-45}"
 
 usage() {
@@ -15,9 +14,9 @@ usage() {
 Usage: ./scripts/aris-local.sh <command>
 
 Commands:
-  start     Start the production app services (worker + API)
-  dev       Start worker, API, and Vite for live frontend development
-  stop      Stop the local worker, API, and optional Vite service
+  start     Start ARIS (the API owns its AiiDA worker subprocess)
+  dev       Start ARIS API and Vite for live frontend development
+  stop      Stop the local API, its worker subprocess, and optional Vite service
   restart   Restart the production app services
   status    Show a concise service health summary
   doctor    Check local dependencies, paths, and service health
@@ -96,7 +95,8 @@ doctor() {
   for required_path in \
     "${ARIS_DIR}/.venv/bin/python" \
     "${ARIS_DIR}/frontend/package.json" \
-    "${worker_dir}/main.py"; do
+    "${worker_dir}/.venv/bin/python3" \
+    "${worker_dir}/src/aris_aiida_worker/stdio.py"; do
     if [[ -e "${required_path}" ]]; then
       printf 'ok      path         %s\n' "${required_path}"
     else

@@ -14,6 +14,18 @@ from typing import Any
 class WorkerProcessError(RuntimeError):
     """Raised when the isolated worker process cannot satisfy a request."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 500,
+        payload: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = int(status_code)
+        self.payload = dict(payload or {"error": message})
+
 
 @dataclass(frozen=True)
 class WorkerProcessSnapshot:
@@ -193,8 +205,18 @@ class WorkerProcessManager:
         error = response.get("error")
         if isinstance(error, dict):
             message = str(error.get("message") or "Worker request failed")
-            reason = error.get("data")
-            raise WorkerProcessError(f"{message}: {reason}")
+            data = error.get("data")
+            payload = dict(data) if isinstance(data, dict) else {"reason": data}
+            status_code = payload.get("status_code", 500)
+            try:
+                normalized_status = int(status_code)
+            except (TypeError, ValueError):
+                normalized_status = 500
+            raise WorkerProcessError(
+                message,
+                status_code=normalized_status,
+                payload={"error": message, **payload},
+            )
         result = response.get("result")
         if not isinstance(result, dict):
             raise WorkerProcessError("Worker result must be a JSON object")

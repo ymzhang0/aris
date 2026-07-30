@@ -8,15 +8,14 @@ logic in one singleton-backed class.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextvars
 import copy
-import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Mapping
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
-import httpx
 from loguru import logger
 
 from src.aris_core.logging import log_event
@@ -32,14 +31,8 @@ _bridge_call_listener: contextvars.ContextVar[BridgeCallListener | None] = conte
     "aiida_bridge_call_listener",
     default=None,
 )
-from src.aris_core.protocols.worker_constants import (
-    HEADER_WORKSPACE_PATH as WORKSPACE_PATH_HEADER,
-    HEADER_SESSION_ID as SESSION_ID_HEADER,
-    HEADER_PROJECT_ID as PROJECT_ID_HEADER,
-    HEADER_PYTHON_PATH as PYTHON_PATH_HEADER,
-)
-_bridge_request_headers: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
-    "aiida_bridge_request_headers",
+_worker_request_context: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "aiida_worker_request_context",
     default=None,
 )
 
@@ -117,59 +110,42 @@ def _emit_bridge_call_event(method: str, path: str) -> None:
         pass
 
 
-def _extract_error_payload(response: httpx.Response) -> tuple[str, Any]:
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = response.text
-
-    if isinstance(payload, dict):
-        detail = payload.get("detail")
-        if isinstance(detail, dict):
-            message = str(detail.get("error") or detail.get("message") or response.reason_phrase)
-        else:
-            message = str(payload.get("error") or payload.get("message") or response.reason_phrase)
-    else:
-        message = str(payload or response.reason_phrase)
-
-    return message, payload
-
-
-def _normalize_header_entries(headers: Mapping[str, Any] | None = None) -> dict[str, str]:
+def _normalize_context_entries(context: Mapping[str, Any] | None = None) -> dict[str, str]:
     normalized: dict[str, str] = {}
-    if not headers:
+    if not context:
         return normalized
-    for key, value in headers.items():
+    allowed = {"session_id", "project_id", "workspace_path", "python_interpreter_path"}
+    for key, value in context.items():
         cleaned_key = str(key or "").strip()
         cleaned_value = str(value or "").strip()
-        if cleaned_key and cleaned_value:
+        if cleaned_key in allowed and cleaned_value:
             normalized[cleaned_key] = cleaned_value
     return normalized
 
-def build_bridge_context_headers(
+def build_worker_context(
     *,
     session_id: Any = None,
     project_id: Any = None,
     workspace_path: Any = None,
     python_path: Any = None,
 ) -> dict[str, str] | None:
-    headers: dict[str, Any] = {}
+    context: dict[str, Any] = {}
     if session_id is not None:
-        headers[SESSION_ID_HEADER] = session_id
+        context["session_id"] = session_id
     if project_id is not None:
-        headers[PROJECT_ID_HEADER] = project_id
+        context["project_id"] = project_id
     if workspace_path is not None:
-        headers[WORKSPACE_PATH_HEADER] = workspace_path
+        context["workspace_path"] = workspace_path
     if python_path is not None:
-        headers[PYTHON_PATH_HEADER] = python_path
-    return _normalize_header_entries(headers) or None
+        context["python_interpreter_path"] = python_path
+    return _normalize_context_entries(context) or None
 
 
-def _merge_request_headers(headers: Mapping[str, Any] | None = None) -> dict[str, str] | None:
+def _merge_worker_context(context: Mapping[str, Any] | None = None) -> dict[str, str] | None:
     merged: dict[str, str] = {}
-    scoped_headers = _bridge_request_headers.get()
-    for payload in (scoped_headers, headers):
-        merged.update(_normalize_header_entries(payload))
+    scoped_context = _worker_request_context.get()
+    for payload in (scoped_context, context):
+        merged.update(_normalize_context_entries(payload))
     return merged or None
 
 
@@ -201,11 +177,12 @@ def _run_async_from_sync(coro: Any, timeout: float = 10.0) -> Any:
         return executor.submit(_run_in_thread).result(timeout=timeout)
 
 
-def _map_http_request_to_rpc(
-    http_method: str,
+def _map_request_to_rpc(
+    request_method: str,
     path: str,
     params: Mapping[str, Any] | None = None,
     json: Mapping[str, Any] | None = None,
+    context: Mapping[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]] | None:
     cleaned_path = str(path or "").strip()
     if cleaned_path.startswith("/"):
@@ -220,8 +197,10 @@ def _map_http_request_to_rpc(
         req_params.update(dict(params))
     if json:
         req_params.update(dict(json))
+    for field_name, value in (_merge_worker_context(context) or {}).items():
+        req_params.setdefault(field_name, value)
 
-    method_upper = http_method.upper()
+    method_upper = request_method.upper()
 
     if not parts or parts == ["status"]:
         return ("runtime.status", req_params)
@@ -242,6 +221,20 @@ def _map_http_request_to_rpc(
             return ("profile.setup", req_params)
         if sub == ["profiles", "switch"]:
             return ("profile.switch", req_params)
+        if sub == ["profiles", "load-archive"]:
+            return ("profile.load_archive", req_params)
+        if sub == ["archives", "local"]:
+            return ("archive.list", req_params)
+        if sub == ["statistics"]:
+            return ("system.statistics", req_params)
+        if sub == ["database", "summary"]:
+            return ("system.database_summary", req_params)
+        if sub == ["environments", "default"]:
+            return ("environment.default", req_params)
+        if sub == ["environments", "inspect"]:
+            return ("environment.inspect", req_params)
+        if sub == ["run-python"]:
+            return ("execution.run_python", req_params)
         if sub == ["infrastructure"]:
             return ("infrastructure.inspect_v2", req_params)
         if sub == ["infrastructure", "capabilities"]:
@@ -250,8 +243,16 @@ def _map_http_request_to_rpc(
             return ("infrastructure.setup", req_params)
         if sub == ["infrastructure", "setup-code"]:
             return ("infrastructure.setup_code", req_params)
+        if sub == ["infrastructure", "test-connection"]:
+            return ("infrastructure.test_connection", req_params)
         if sub == ["infrastructure", "ssh-config"]:
             return ("infrastructure.ssh_config", req_params)
+        if len(sub) == 5 and sub[:3] == ["infrastructure", "computer", "pk"] and sub[4] == "export":
+            req_params["pk"] = int(sub[3])
+            return ("infrastructure.export_computer", req_params)
+        if len(sub) == 4 and sub[:2] == ["infrastructure", "code"] and sub[3] == "export":
+            req_params["pk"] = int(sub[2])
+            return ("infrastructure.export_code", req_params)
         if len(sub) == 4 and sub[0] == "infrastructure" and sub[1] == "computer" and sub[3] == "codes":
             req_params["computer_label"] = sub[2]
             return ("infrastructure.computer_codes", req_params)
@@ -265,10 +266,22 @@ def _map_http_request_to_rpc(
             req_params["pk"] = int(sub[1])
             if method_upper == "DELETE":
                 return ("group.delete", req_params)
+        if len(sub) == 2 and sub[0] == "groups":
+            req_params["group_name"] = unquote(sub[1])
             return ("group.inspect", req_params)
         if len(sub) == 3 and sub[0] == "groups" and sub[1].isdigit() and sub[2] == "label":
             req_params["pk"] = int(sub[1])
             return ("group.rename", req_params)
+        if len(sub) == 3 and sub[0] == "groups" and sub[1].isdigit() and sub[2] == "nodes":
+            req_params["pk"] = int(sub[1])
+            return ("group.add_nodes", req_params)
+        if len(sub) == 4 and sub[0] == "groups" and sub[1].isdigit() and sub[2] == "nodes":
+            req_params["pk"] = int(sub[1])
+            req_params["node_pk"] = int(sub[3])
+            return ("group.remove_node", req_params)
+        if len(sub) == 3 and sub[0] == "groups" and sub[1].isdigit() and sub[2] == "export":
+            req_params["pk"] = int(sub[1])
+            return ("group.export_archive", req_params)
         if sub == ["recent-nodes"]:
             return ("node.recent", req_params)
         if sub == ["recent-processes"]:
@@ -281,6 +294,9 @@ def _map_http_request_to_rpc(
         if len(sub) == 3 and sub[0] == "nodes" and sub[1].isdigit() and sub[2] == "script":
             req_params["pk"] = int(sub[1])
             return ("node.script", req_params)
+        if len(sub) == 2 and sub[0] == "nodes" and sub[1].isdigit():
+            req_params["pk"] = int(sub[1])
+            return ("node.summary", req_params)
         if sub == ["source-map"]:
             return ("source_map", req_params)
 
@@ -313,6 +329,42 @@ def _map_http_request_to_rpc(
             req_params["identifier"] = sub[0]
             return ("process.clone_draft", req_params)
 
+    if parts and parts[0] == "registry":
+        if parts[1:] == ["list"]:
+            return ("registry.list", req_params)
+        if parts[1:] == ["register"]:
+            return ("registry.register", req_params)
+
+    if len(parts) == 2 and parts[0] == "execute":
+        req_params["script_name"] = unquote(parts[1])
+        return ("registry.execute", req_params)
+
+    if parts and parts[0] == "data":
+        sub = parts[1:]
+        if len(sub) == 2 and sub[0] == "node":
+            req_params["pk"] = int(sub[1])
+            return ("node.summary", req_params)
+        if len(sub) == 2 and sub[0] == "bands":
+            req_params["pk"] = int(sub[1])
+            return ("data.bands", req_params)
+        if len(sub) == 3 and sub[0] == "remote" and sub[2] == "files":
+            req_params["pk"] = int(sub[1])
+            return ("data.remote_files", req_params)
+        if len(sub) >= 4 and sub[0] == "remote" and sub[2] == "files":
+            req_params["pk"] = int(sub[1])
+            req_params["filename"] = unquote("/".join(sub[3:]))
+            return ("data.remote_file", req_params)
+        if len(sub) == 3 and sub[0] == "repository" and sub[2] == "files":
+            req_params["pk"] = int(sub[1])
+            return ("data.repository_files", req_params)
+        if len(sub) >= 4 and sub[0] == "repository" and sub[2] == "files":
+            req_params["pk"] = int(sub[1])
+            req_params["filename"] = unquote("/".join(sub[3:]))
+            return ("data.repository_file", req_params)
+        if len(sub) == 2 and sub[0] == "import":
+            req_params["data_type"] = unquote(sub[1])
+            return ("data.import", req_params)
+
     return None
 
 
@@ -325,8 +377,6 @@ class AiiDAWorkerClient:
         cache_ttl_seconds: float = 10.0,
         infra_cache_ttl_seconds: float = 8.0,
         request_timeout_seconds: float = 2.0,
-        request_retries: int = 2,
-        retry_backoff_seconds: float = 0.2,
     ) -> None:
         normalized_url = (bridge_url or aiida_engine_settings.default_bridge_url).strip()
         self._bridge_url = normalized_url.rstrip("/")
@@ -334,8 +384,6 @@ class AiiDAWorkerClient:
         self._cache_ttl_seconds = max(1.0, float(cache_ttl_seconds))
         self._infra_cache_ttl_seconds = max(1.0, float(infra_cache_ttl_seconds))
         self._request_timeout_seconds = max(0.2, float(request_timeout_seconds))
-        self._request_retries = max(0, int(request_retries))
-        self._retry_backoff_seconds = max(0.05, float(retry_backoff_seconds))
 
         self._snapshot = BridgeSnapshot(url=self._bridge_url, environment=self._environment)
         self._status_lock = asyncio.Lock()
@@ -343,7 +391,6 @@ class AiiDAWorkerClient:
         self._infrastructure_cache: dict[str, Any] | None = None
         self._infrastructure_cached_at: float = 0.0
         self._logged_first_handshake = False
-        self._unsupported_prefixes: set[str] = set()
 
     @property
     def bridge_url(self) -> str:
@@ -353,13 +400,17 @@ class AiiDAWorkerClient:
     def is_connected(self) -> bool:
         return self._snapshot.status == "online"
 
-    def bridge_endpoint(self, path: str) -> str:
-        normalized = path if path.startswith("/") else f"/{path}"
-        return f"{self._bridge_url}{normalized}"
-
     @property
     def worker_mode(self) -> str | None:
         return self._snapshot.mode
+
+    @staticmethod
+    def _bridge_error_from_worker(exc: WorkerProcessError) -> BridgeAPIError:
+        return BridgeAPIError(
+            status_code=exc.status_code,
+            message=exc.message,
+            payload=exc.payload,
+        )
 
     async def request_json(
         self,
@@ -368,80 +419,25 @@ class AiiDAWorkerClient:
         *,
         params: Mapping[str, Any] | None = None,
         json: Mapping[str, Any] | None = None,
-        headers: Mapping[str, Any] | None = None,
+        context: Mapping[str, Any] | None = None,
         timeout: float = 10.0,
         retries: int | None = None,
     ) -> Any:
         method_upper = method.upper()
-        normalized_path = self._normalize_request_path(path)
-
         manager = get_worker_process_manager()
-        if manager is not None:
-            rpc_target = _map_http_request_to_rpc(method, path, params=params, json=json)
-
-            if rpc_target is not None:
-                rpc_method, rpc_params = rpc_target
-                _emit_bridge_call_event(method_upper, path)
-                try:
-                    return await manager.request(rpc_method, rpc_params, timeout=timeout)
-                except WorkerProcessError as exc:
-                    raise BridgeAPIError(status_code=500, message=str(exc), payload={"error": str(exc)}) from exc
-
-        await self._ensure_request_supported_async(normalized_path)
-        endpoint = self.bridge_endpoint(path)
+        if manager is None:
+            raise BridgeOfflineError()
+        rpc_target = _map_request_to_rpc(method, path, params=params, json=json, context=context)
+        if rpc_target is None:
+            raise self._unsupported_endpoint_error(self._normalize_request_path(path))
+        rpc_method, rpc_params = rpc_target
         _emit_bridge_call_event(method_upper, path)
-        retry_budget = self._resolve_retry_budget(method_upper, retries)
-        request_headers = _merge_request_headers(headers)
-
-        for attempt in range(retry_budget + 1):
-            try:
-                async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-                    response = await client.request(
-                        method_upper,
-                        endpoint,
-                        params=params,
-                        json=json,
-                        headers=request_headers,
-                    )
-            except httpx.ConnectError as exc:
-                self._record_status_failure(normalized_path)
-                if attempt < retry_budget:
-                    await self._sleep_for_retry(attempt)
-                    continue
-                raise BridgeOfflineError() from exc
-            except httpx.TimeoutException as exc:
-                self._record_status_failure(normalized_path)
-                if attempt < retry_budget:
-                    await self._sleep_for_retry(attempt)
-                    continue
-                raise BridgeAPIError(status_code=0, message=str(exc), payload={"error": str(exc)}) from exc
-            except httpx.RequestError as exc:
-                self._record_status_failure(normalized_path)
-                if attempt < retry_budget:
-                    await self._sleep_for_retry(attempt)
-                    continue
-                raise BridgeAPIError(status_code=0, message=str(exc), payload={"error": str(exc)}) from exc
-
-            if self._should_retry_status(response.status_code) and attempt < retry_budget:
-                await self._sleep_for_retry(attempt)
-                continue
-
-            if response.status_code >= 400:
-                self._remember_unsupported_path(normalized_path, response.status_code)
-                message, payload = _extract_error_payload(response)
-                raise BridgeAPIError(status_code=response.status_code, message=message, payload=payload)
-
-            self._record_status_success(normalized_path)
-            try:
-                return response.json()
-            except ValueError as exc:
-                raise BridgeAPIError(
-                    status_code=response.status_code,
-                    message="Invalid JSON response",
-                    payload=response.text,
-                ) from exc
-
-        raise BridgeAPIError(status_code=0, message="Unknown worker request failure", payload={"path": path})
+        try:
+            result = await manager.request(rpc_method, rpc_params, timeout=timeout)
+        except WorkerProcessError as exc:
+            raise self._bridge_error_from_worker(exc) from exc
+        self._record_status_success(self._normalize_request_path(path))
+        return result
 
     async def request_multipart(
         self,
@@ -450,42 +446,42 @@ class AiiDAWorkerClient:
         *,
         files: Mapping[str, Any] | None = None,
         data: Mapping[str, Any] | None = None,
-        headers: Mapping[str, Any] | None = None,
+        context: Mapping[str, Any] | None = None,
         timeout: float = 60.0,
     ) -> Any:
-        method_upper = method.upper()
-        endpoint = self.bridge_endpoint(path)
-        _emit_bridge_call_event(method_upper, path)
-        request_headers = _merge_request_headers(headers)
-
-        try:
-            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-                response = await client.request(
-                    method_upper,
-                    endpoint,
-                    files=files,
-                    data=data,
-                    headers=request_headers,
+        rpc_target = _map_request_to_rpc(method, path, params=data, context=context)
+        if rpc_target is None or rpc_target[0] != "data.import":
+            raise self._unsupported_endpoint_error(self._normalize_request_path(path))
+        rpc_method, rpc_params = rpc_target
+        file_value = (files or {}).get("file")
+        if file_value is not None:
+            if not isinstance(file_value, (tuple, list)) or len(file_value) < 2:
+                raise BridgeAPIError(
+                    status_code=422,
+                    message="Invalid file payload",
+                    payload={"error": "Expected (filename, bytes, content_type)"},
                 )
-        except httpx.ConnectError as exc:
-            raise BridgeOfflineError() from exc
-        except httpx.RequestError as exc:
-            raise BridgeAPIError(status_code=0, message=str(exc), payload={"error": str(exc)}) from exc
-
-        if response.status_code >= 400:
-            message, payload = _extract_error_payload(response)
-            raise BridgeAPIError(status_code=response.status_code, message=message, payload=payload)
-
+            filename, content = file_value[0], file_value[1]
+            if hasattr(content, "read"):
+                content = content.read()
+                if asyncio.iscoroutine(content):
+                    content = await content
+            if not isinstance(content, (bytes, bytearray)):
+                raise BridgeAPIError(
+                    status_code=422,
+                    message="Invalid file content",
+                    payload={"error": "Uploaded file content must be bytes"},
+                )
+            rpc_params["filename"] = str(filename or "uploaded_file")
+            rpc_params["content_base64"] = base64.b64encode(bytes(content)).decode("ascii")
+        manager = get_worker_process_manager()
+        if manager is None:
+            raise BridgeOfflineError()
+        _emit_bridge_call_event(method.upper(), path)
         try:
-            return response.json()
-        except ValueError as exc:
-            raise BridgeAPIError(
-                status_code=response.status_code,
-                message="Invalid JSON response",
-                payload=response.text,
-            ) from exc
-
-        raise BridgeAPIError(status_code=0, message="Unknown worker request failure", payload={"path": path})
+            return await manager.request(rpc_method, rpc_params, timeout=timeout)
+        except WorkerProcessError as exc:
+            raise self._bridge_error_from_worker(exc) from exc
 
     def request_json_sync(
         self,
@@ -494,79 +490,28 @@ class AiiDAWorkerClient:
         *,
         params: Mapping[str, Any] | None = None,
         json: Mapping[str, Any] | None = None,
-        headers: Mapping[str, Any] | None = None,
+        context: Mapping[str, Any] | None = None,
         timeout: float = 10.0,
         retries: int | None = None,
     ) -> Any:
         method_upper = method.upper()
-        normalized_path = self._normalize_request_path(path)
-
         manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            rpc_target = _map_http_request_to_rpc(method, path, params=params, json=json)
-            if rpc_target is not None:
-                rpc_method, rpc_params = rpc_target
-                _emit_bridge_call_event(method_upper, path)
-                try:
-                    return _run_async_from_sync(manager.request(rpc_method, rpc_params, timeout=timeout), timeout=timeout)
-                except WorkerProcessError as exc:
-                    raise BridgeAPIError(status_code=500, message=str(exc), payload={"error": str(exc)}) from exc
-
-        self._ensure_request_supported_sync(normalized_path)
-        endpoint = self.bridge_endpoint(path)
+        if manager is None:
+            raise BridgeOfflineError()
+        rpc_target = _map_request_to_rpc(method, path, params=params, json=json, context=context)
+        if rpc_target is None:
+            raise self._unsupported_endpoint_error(self._normalize_request_path(path))
+        rpc_method, rpc_params = rpc_target
         _emit_bridge_call_event(method_upper, path)
-        retry_budget = self._resolve_retry_budget(method_upper, retries)
-        request_headers = _merge_request_headers(headers)
-
-        for attempt in range(retry_budget + 1):
-            try:
-                with httpx.Client(timeout=timeout, trust_env=False) as client:
-                    response = client.request(
-                        method_upper,
-                        endpoint,
-                        params=params,
-                        json=json,
-                        headers=request_headers,
-                    )
-            except httpx.ConnectError as exc:
-                self._record_status_failure(normalized_path)
-                if attempt < retry_budget:
-                    self._sleep_for_retry_sync(attempt)
-                    continue
-                raise BridgeOfflineError() from exc
-            except httpx.TimeoutException as exc:
-                self._record_status_failure(normalized_path)
-                if attempt < retry_budget:
-                    self._sleep_for_retry_sync(attempt)
-                    continue
-                raise BridgeAPIError(status_code=0, message=str(exc), payload={"error": str(exc)}) from exc
-            except httpx.RequestError as exc:
-                self._record_status_failure(normalized_path)
-                if attempt < retry_budget:
-                    self._sleep_for_retry_sync(attempt)
-                    continue
-                raise BridgeAPIError(status_code=0, message=str(exc), payload={"error": str(exc)}) from exc
-
-            if self._should_retry_status(response.status_code) and attempt < retry_budget:
-                self._sleep_for_retry_sync(attempt)
-                continue
-
-            if response.status_code >= 400:
-                self._remember_unsupported_path(normalized_path, response.status_code)
-                message, payload = _extract_error_payload(response)
-                raise BridgeAPIError(status_code=response.status_code, message=message, payload=payload)
-
-            self._record_status_success(normalized_path)
-            try:
-                return response.json()
-            except ValueError as exc:
-                raise BridgeAPIError(
-                    status_code=response.status_code,
-                    message="Invalid JSON response",
-                    payload=response.text,
-                ) from exc
-
-        raise BridgeAPIError(status_code=0, message="Unknown worker request failure", payload={"path": path})
+        try:
+            result = _run_async_from_sync(
+                manager.request(rpc_method, rpc_params, timeout=timeout),
+                timeout=timeout,
+            )
+        except WorkerProcessError as exc:
+            raise self._bridge_error_from_worker(exc) from exc
+        self._record_status_success(self._normalize_request_path(path))
+        return result
 
     def request_content_sync(
         self,
@@ -575,57 +520,35 @@ class AiiDAWorkerClient:
         *,
         params: Mapping[str, Any] | None = None,
         json: Mapping[str, Any] | None = None,
-        headers: Mapping[str, Any] | None = None,
+        context: Mapping[str, Any] | None = None,
         timeout: float = 10.0,
         retries: int | None = None,
     ) -> BridgeBinaryResponse:
-        method_upper = method.upper()
-        endpoint = self.bridge_endpoint(path)
-        _emit_bridge_call_event(method_upper, path)
-        retry_budget = self._resolve_retry_budget(method_upper, retries)
-        request_headers = _merge_request_headers(headers)
-
-        for attempt in range(retry_budget + 1):
-            try:
-                with httpx.Client(timeout=timeout, trust_env=False) as client:
-                    response = client.request(
-                        method_upper,
-                        endpoint,
-                        params=params,
-                        json=json,
-                        headers=request_headers,
-                    )
-            except httpx.ConnectError as exc:
-                if attempt < retry_budget:
-                    self._sleep_for_retry_sync(attempt)
-                    continue
-                raise BridgeOfflineError() from exc
-            except httpx.TimeoutException as exc:
-                if attempt < retry_budget:
-                    self._sleep_for_retry_sync(attempt)
-                    continue
-                raise BridgeAPIError(status_code=0, message=str(exc), payload={"error": str(exc)}) from exc
-            except httpx.RequestError as exc:
-                if attempt < retry_budget:
-                    self._sleep_for_retry_sync(attempt)
-                    continue
-                raise BridgeAPIError(status_code=0, message=str(exc), payload={"error": str(exc)}) from exc
-
-            if self._should_retry_status(response.status_code) and attempt < retry_budget:
-                self._sleep_for_retry_sync(attempt)
-                continue
-
-            if response.status_code >= 400:
-                message, payload = _extract_error_payload(response)
-                raise BridgeAPIError(status_code=response.status_code, message=message, payload=payload)
-
-            return BridgeBinaryResponse(
-                content=response.content,
-                headers=dict(response.headers),
-                media_type=response.headers.get("content-type"),
-            )
-
-        raise BridgeAPIError(status_code=0, message="Unknown worker request failure", payload={"path": path})
+        payload = self.request_json_sync(
+            method,
+            path,
+            params=params,
+            json=json,
+            context=context,
+            timeout=timeout,
+            retries=retries,
+        )
+        if not isinstance(payload, dict):
+            raise BridgeAPIError(500, "Invalid binary response", {"error": "Worker result must be an object"})
+        encoded = payload.get("content_base64")
+        if not isinstance(encoded, str):
+            raise BridgeAPIError(500, "Invalid binary response", payload)
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except ValueError as exc:
+            raise BridgeAPIError(500, "Invalid binary response", payload) from exc
+        filename = str(payload.get("filename") or "archive.aiida")
+        media_type = str(payload.get("media_type") or "application/octet-stream")
+        return BridgeBinaryResponse(
+            content=content,
+            headers={"content-type": media_type, "content-disposition": f'attachment; filename="{filename}"'},
+            media_type=media_type,
+        )
 
     async def get_status(self, *, force_refresh: bool = False) -> BridgeSnapshot:
         await self._refresh_if_needed(force_refresh=force_refresh)
@@ -842,34 +765,23 @@ class AiiDAWorkerClient:
         checked_at = time.monotonic()
 
         manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            try:
-                payload = await manager.request("runtime.status", {})
-            except Exception as error:  # noqa: BLE001
-                self._snapshot.status = "offline"
-                self._snapshot.checked_at = checked_at
-                logger.error(
-                    log_event(
-                        "aiida.bridge.unreachable",
-                        url="stdio-jsonrpc",
-                        error=f"{type(error).__name__}: {error}",
-                    )
+        if manager is None:
+            self._snapshot.status = "offline"
+            self._snapshot.checked_at = checked_at
+            return
+        try:
+            payload = await manager.request("runtime.status", {})
+        except Exception as error:  # noqa: BLE001
+            self._snapshot.status = "offline"
+            self._snapshot.checked_at = checked_at
+            logger.error(
+                log_event(
+                    "aiida.worker.unreachable",
+                    transport="stdio-jsonrpc",
+                    error=f"{type(error).__name__}: {error}",
                 )
-                return
-        else:
-            try:
-                payload = await self._fetch_json("/status")
-            except Exception as error:  # noqa: BLE001
-                self._snapshot.status = "offline"
-                self._snapshot.checked_at = checked_at
-                logger.error(
-                    log_event(
-                        "aiida.bridge.unreachable",
-                        url=self._bridge_url,
-                        error=f"{type(error).__name__}: {error}",
-                    )
-                )
-                return
+            )
+            return
 
         normalized = self._normalize_status_payload(payload)
         self._snapshot.status = normalized["status"]
@@ -885,7 +797,7 @@ class AiiDAWorkerClient:
             self._snapshot.plugins = normalized["plugins"]
 
         if not self._logged_first_handshake:
-            logger.info(f"[AiiDA Bridge] Connected to worker at {self._worker_target}")
+            logger.info("[AiiDA Worker] Connected over managed stdio JSON-RPC")
             self._logged_first_handshake = True
 
     async def _fetch_json(
@@ -918,27 +830,6 @@ class AiiDAWorkerClient:
             retries=retries,
         )
 
-    @staticmethod
-    def _is_idempotent_method(method: str) -> bool:
-        return method.upper() in {"GET", "HEAD", "OPTIONS"}
-
-    @staticmethod
-    def _should_retry_status(status_code: int) -> bool:
-        return status_code in {408, 425, 429, 500, 502, 503, 504}
-
-    def _resolve_retry_budget(self, method: str, retries: int | None) -> int:
-        if retries is not None:
-            return max(0, int(retries))
-        if self._is_idempotent_method(method):
-            return self._request_retries
-        return 0
-
-    async def _sleep_for_retry(self, attempt: int) -> None:
-        await asyncio.sleep(self._retry_backoff_seconds * float(attempt + 1))
-
-    def _sleep_for_retry_sync(self, attempt: int) -> None:
-        time.sleep(self._retry_backoff_seconds * float(attempt + 1))
-
     def _mark_online(self) -> None:
         self._snapshot.status = "online"
 
@@ -948,19 +839,6 @@ class AiiDAWorkerClient:
     def _record_status_success(self, path: str) -> None:
         if path == "/status":
             self._mark_online()
-
-    def _record_status_failure(self, path: str) -> None:
-        if path == "/status":
-            self._mark_offline()
-
-    @property
-    def _worker_target(self) -> str:
-        parsed = urlparse(self._bridge_url)
-        if parsed.port:
-            return f":{parsed.port}"
-        if parsed.netloc:
-            return parsed.netloc
-        return self._bridge_url
 
     def _normalize_status_payload(self, payload: Any) -> dict[str, Any]:
         if not isinstance(payload, dict):
@@ -1007,85 +885,12 @@ class AiiDAWorkerClient:
             normalized = f"/{normalized}"
         return normalized
 
-    def _unsupported_prefix(self, path: str) -> str | None:
-        for prefix in (
-            "/management/profiles",
-            "/management/infrastructure",
-            "/management/recent-nodes",
-            "/management/recent-processes",
-            "/management/groups",
-            "/management/nodes",
-            "/process/events",
-            "/resources",
-            "/plugins",
-        ):
-            if path == prefix or path.startswith(f"{prefix}/"):
-                return prefix
-        return None
-
-    def _is_path_known_unsupported(self, path: str) -> bool:
-        prefix = self._unsupported_prefix(path)
-        return prefix in self._unsupported_prefixes if prefix else False
-
-    def _remember_unsupported_path(self, path: str, status_code: int) -> None:
-        prefix = self._unsupported_prefix(path)
-        if int(status_code) == 404 and prefix:
-            self._unsupported_prefixes.add(prefix)
-
     def _unsupported_endpoint_error(self, path: str) -> BridgeAPIError:
         return BridgeAPIError(
             status_code=404,
             message="Worker endpoint not supported",
-            payload={"error": "Worker endpoint not supported by the current worker mode", "path": path},
+            payload={"error": "Worker capability is not mapped to the stdio protocol", "path": path},
         )
-
-    async def _ensure_request_supported_async(self, path: str) -> None:
-        if path == "/status":
-            return
-        if self._is_path_known_unsupported(path):
-            raise self._unsupported_endpoint_error(path)
-        if self._snapshot.checked_at <= 0:
-            try:
-                await self._refresh_if_needed(force_refresh=False)
-            except Exception:
-                return
-
-    def _ensure_request_supported_sync(self, path: str) -> None:
-        if path == "/status":
-            return
-        if self._is_path_known_unsupported(path):
-            raise self._unsupported_endpoint_error(path)
-        if self._snapshot.checked_at <= 0:
-            self._probe_status_sync()
-
-    def _probe_status_sync(self) -> None:
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            self._snapshot.status = "online"
-            self._snapshot.checked_at = time.monotonic()
-            return
-        endpoint = self.bridge_endpoint("/status")
-        checked_at = time.monotonic()
-        try:
-            with httpx.Client(timeout=self._request_timeout_seconds, trust_env=False) as client:
-                response = client.get(endpoint)
-        except Exception:
-            return
-        if response.status_code >= 400:
-            return
-        try:
-            payload = response.json()
-        except ValueError:
-            return
-        normalized = self._normalize_status_payload(payload)
-        self._snapshot.status = normalized["status"]
-        self._snapshot.environment = normalized["environment"]
-        self._snapshot.mode = normalized["mode"]
-        self._snapshot.profile = normalized["profile"]
-        self._snapshot.daemon_status = normalized["daemon_status"]
-        self._snapshot.resources = normalized["resources"]
-        self._snapshot.plugins = normalized["plugins"]
-        self._snapshot.checked_at = checked_at
 
     def _extract_profile(self, payload: dict[str, Any]) -> str | None:
         profile = self._extract_first_non_empty(payload, ("profile", "current_profile", "active_profile"))
@@ -1126,9 +931,24 @@ class AiiDAWorkerClient:
             computers = resources_payload.get("computers")
             codes = resources_payload.get("codes")
             if counts.computers == 0:
-                counts.computers = self._count_resource_items(computers)
+                counts.computers = (
+                    self._coerce_non_negative_int(computers)
+                    if isinstance(computers, (int, str))
+                    else self._count_resource_items(computers)
+                )
             if counts.codes == 0:
-                counts.codes = self._count_resource_items(codes)
+                counts.codes = (
+                    self._coerce_non_negative_int(codes)
+                    if isinstance(codes, (int, str))
+                    else self._count_resource_items(codes)
+                )
+            if counts.workchains == 0:
+                workchains = resources_payload.get("workchains")
+                counts.workchains = (
+                    self._coerce_non_negative_int(workchains)
+                    if isinstance(workchains, (int, str))
+                    else self._count_resource_items(workchains)
+                )
 
         if counts.workchains == 0:
             workchains = payload.get("workchains")
@@ -1279,10 +1099,6 @@ def bridge_url() -> str:
     return aiida_worker_client.bridge_url
 
 
-def bridge_endpoint(path: str) -> str:
-    return aiida_worker_client.bridge_endpoint(path)
-
-
 def set_bridge_call_listener(
     listener: BridgeCallListener | None,
 ) -> contextvars.Token[BridgeCallListener | None]:
@@ -1293,15 +1109,15 @@ def reset_bridge_call_listener(token: contextvars.Token[BridgeCallListener | Non
     _bridge_call_listener.reset(token)
 
 
-def set_bridge_request_headers(
-    headers: Mapping[str, Any] | None,
+def set_worker_request_context(
+    context: Mapping[str, Any] | None,
 ) -> contextvars.Token[dict[str, str] | None]:
-    normalized_headers = _merge_request_headers(headers)
-    return _bridge_request_headers.set(normalized_headers)
+    normalized_context = _merge_worker_context(context)
+    return _worker_request_context.set(normalized_context)
 
 
-def reset_bridge_request_headers(token: contextvars.Token[dict[str, str] | None]) -> None:
-    _bridge_request_headers.reset(token)
+def reset_worker_request_context(token: contextvars.Token[dict[str, str] | None]) -> None:
+    _worker_request_context.reset(token)
 
 
 async def request_json(
@@ -1310,7 +1126,7 @@ async def request_json(
     *,
     params: Mapping[str, Any] | None = None,
     json: Mapping[str, Any] | None = None,
-    headers: Mapping[str, Any] | None = None,
+    context: Mapping[str, Any] | None = None,
     timeout: float = 10.0,
     retries: int | None = None,
 ) -> Any:
@@ -1319,7 +1135,7 @@ async def request_json(
         path,
         params=params,
         json=json,
-        headers=headers,
+        context=context,
         timeout=timeout,
         retries=retries,
     )
@@ -1331,7 +1147,7 @@ def request_json_sync(
     *,
     params: Mapping[str, Any] | None = None,
     json: Mapping[str, Any] | None = None,
-    headers: Mapping[str, Any] | None = None,
+    context: Mapping[str, Any] | None = None,
     timeout: float = 10.0,
     retries: int | None = None,
 ) -> Any:
@@ -1340,7 +1156,7 @@ def request_json_sync(
         path,
         params=params,
         json=json,
-        headers=headers,
+        context=context,
         timeout=timeout,
         retries=retries,
     )
@@ -1352,7 +1168,7 @@ def request_content_sync(
     *,
     params: Mapping[str, Any] | None = None,
     json: Mapping[str, Any] | None = None,
-    headers: Mapping[str, Any] | None = None,
+    context: Mapping[str, Any] | None = None,
     timeout: float = 10.0,
     retries: int | None = None,
 ) -> BridgeBinaryResponse:
@@ -1361,7 +1177,7 @@ def request_content_sync(
         path,
         params=params,
         json=json,
-        headers=headers,
+        context=context,
         timeout=timeout,
         retries=retries,
     )
@@ -1392,7 +1208,6 @@ __all__ = [
     "get_aiida_worker_client",
     "aiida_worker_client",
     "bridge_url",
-    "bridge_endpoint",
     "set_bridge_call_listener",
     "reset_bridge_call_listener",
     "request_json",

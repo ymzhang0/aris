@@ -1,8 +1,6 @@
 const path = require("node:path");
 
 const arisDir = __dirname;
-const workspaceDir = path.dirname(arisDir);
-const workerDir = process.env.ARIS_WORKER_DIR || path.join(workspaceDir, "aiida-worker");
 const arisPython = process.env.ARIS_PYTHON || path.join(arisDir, ".venv", "bin", "python");
 
 module.exports = {
@@ -14,15 +12,6 @@ module.exports = {
             args: '-m apps.api.main',
             env: {
                 PYTHONPATH: arisDir
-            }
-        },
-        {
-            name: 'aiida-worker',
-            cwd: workerDir,
-            script: path.join(workerDir, '.venv', 'bin', 'python'),
-            args: 'main.py',
-            env: {
-                PYTHONPATH: workerDir
             }
         },
         {

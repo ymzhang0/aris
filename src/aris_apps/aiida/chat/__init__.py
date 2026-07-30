@@ -1,6 +1,6 @@
 from .service import (
     activate_chat_session,
-    build_chat_project_worker_headers,
+    build_chat_project_worker_context,
     cancel_chat_turn,
     create_chat_project,
     create_chat_session,
@@ -50,7 +50,7 @@ from .workspace_manager import ChatWorkspaceManager
 
 __all__ = [
     "activate_chat_session",
-    "build_chat_project_worker_headers",
+    "build_chat_project_worker_context",
     "ChatGroupGateway",
     "ChatSessionApplicationDependencies",
     "ChatSessionApplicationService",

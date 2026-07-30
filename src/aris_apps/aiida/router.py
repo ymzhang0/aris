@@ -11,7 +11,6 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
-import httpx
 import yaml
 from ag_ui.core import RunErrorEvent, RunStartedEvent
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Path as ApiPath, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
@@ -24,7 +23,6 @@ from src.aris_core.config import settings
 from .config import aiida_engine_settings
 from src.aris_core.logging import get_log_buffer_snapshot, log_event
 from src.aris_core.policy import AuthorizationDecision
-from src.aris_core.runtime import get_worker_process_manager
 from src.aris_core.schema.approval import (
     build_submission_approval_request,
     resolve_submission_approval,
@@ -36,7 +34,7 @@ from src.aris_core.schema.ui_event import (
 
 from .chat import (
     activate_chat_session,
-    build_chat_project_worker_headers,
+    build_chat_project_worker_context,
     cancel_chat_turn,
     create_chat_project,
     update_chat_project,
@@ -67,11 +65,10 @@ from .client import (
     BridgeAPIError,
     BridgeOfflineError,
     aiida_worker_client,
-    bridge_endpoint,
-    build_bridge_context_headers,
-    reset_bridge_request_headers,
+    build_worker_context,
+    reset_worker_request_context,
     request_json,
-    set_bridge_request_headers,
+    set_worker_request_context,
 )
 from .presenters.node_view import (
     attach_tree_links as _attach_tree_links,
@@ -1154,14 +1151,14 @@ def _chat_delete_response(state: Any, deleted: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def _build_submission_request_headers(state: Any) -> dict[str, str] | None:
+def _build_submission_worker_context(state: Any) -> dict[str, str] | None:
     session_id = get_active_chat_session_id(state)
     if not session_id:
         return None
 
     active_project_id = get_active_chat_project_id(state)
     workspace_path = get_chat_session_project_root_path(state, session_id)
-    return build_bridge_context_headers(
+    return build_worker_context(
         session_id=session_id,
         project_id=active_project_id,
         workspace_path=workspace_path,
@@ -1288,39 +1285,13 @@ def _get_selected_model(state: Any, available_models: list[str]) -> str:
 
 @router.get("/status", response_model=BridgeStatusResponse, tags=[WORKER_PROXY_TAG])
 async def get_bridge_status() -> BridgeStatusResponse:
-    worker_process_manager = get_worker_process_manager()
-    if worker_process_manager is not None:
-        try:
-            managed_status = await worker_process_manager.request("runtime.status")
-            worker_snapshot = worker_process_manager.snapshot()
-            res_dict = managed_status.get("resources") or {}
-            if not isinstance(res_dict, dict):
-                res_dict = {}
-            return BridgeStatusResponse(
-                status="online",
-                url=f"stdio://aris-aiida-worker/{worker_snapshot.pid or 'unknown'}",
-                environment=str(managed_status.get("environment") or "Managed worker subprocess"),
-                transport="stdio",
-                worker_mode=str(managed_status.get("mode") or "").strip() or None,
-                profile=str(managed_status.get("profile") or "").strip() or "unknown",
-                daemon_status=bool(managed_status.get("daemon_status", False)),
-                resources=SystemCountsResponse(
-                    computers=int(res_dict.get("computers", 0)),
-                    codes=int(res_dict.get("codes", 0)),
-                    workchains=int(res_dict.get("workchains", 0)),
-                ),
-                plugins=list(managed_status.get("plugins") or []),
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(log_event("worker.runtime.status.failed", error=str(exc)))
-
     try:
         snapshot = await aiida_capability.get_status()
         return BridgeStatusResponse(
             status=snapshot.status,
             url=snapshot.url,
             environment=snapshot.environment,
-            transport="http",
+            transport="stdio",
             worker_mode=snapshot.mode,
             profile=snapshot.profile,
             daemon_status=snapshot.daemon_status,
@@ -1337,8 +1308,8 @@ async def get_bridge_status() -> BridgeStatusResponse:
         return BridgeStatusResponse(
             status="offline",
             url=aiida_capability.bridge_url,
-            environment="Remote Bridge",
-            transport="http",
+            environment="Managed AiiDA runtime",
+            transport="stdio",
             worker_mode=None,
             profile="unknown",
             daemon_status=False,
@@ -1538,7 +1509,7 @@ async def _submit_bridge_workchain_impl(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    worker_request_headers = _build_submission_request_headers(request.app.state)
+    worker_request_context = _build_submission_worker_context(request.app.state)
     worker_payload: dict[str, Any]
     if (
         isinstance(draft_payload, dict)
@@ -1565,7 +1536,7 @@ async def _submit_bridge_workchain_impl(
                 "POST",
                 "/submission/submit",
                 json=worker_payload,
-                headers=worker_request_headers,
+                context=worker_request_context,
             )
         except Exception as exc:
             _raise_worker_http_error(exc)
@@ -1593,7 +1564,7 @@ async def _submit_bridge_workchain_impl(
             "POST",
             "/submission/submit",
             json=worker_payload,
-            headers=worker_request_headers,
+            context=worker_request_context,
         )
         response = format_single_submission_response(raw)
         _clear_pending_submission_memory(request.app.state)
@@ -2807,8 +2778,8 @@ async def frontend_execute_chat_project_file(
     except OSError as exc:
         raise HTTPException(status_code=500, detail={"error": f"Failed to read project file: {exc}"}) from exc
 
-    request_headers = build_chat_project_worker_headers(state, project_id)
-    request_headers_token = set_bridge_request_headers(request_headers) if request_headers else None
+    worker_context = build_chat_project_worker_context(state, project_id)
+    worker_context_token = set_worker_request_context(worker_context) if worker_context else None
     execution_script = (
         "import contextlib\n"
         "import io\n"
@@ -2834,8 +2805,8 @@ async def frontend_execute_chat_project_file(
     except Exception as exc:  # noqa: BLE001
         _raise_worker_http_error(exc)
     finally:
-        if request_headers_token is not None:
-            reset_bridge_request_headers(request_headers_token)
+        if worker_context_token is not None:
+            reset_worker_request_context(worker_context_token)
 
     if not isinstance(raw_result, dict):
         raise HTTPException(status_code=502, detail={"error": "Worker returned an invalid execute payload"})

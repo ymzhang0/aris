@@ -1,104 +1,45 @@
-%%{init: {
-  "flowchart": {
-    "curve": "basis",
-    "htmlLabels": true,
-    "nodeSpacing": 16,
-    "rankSpacing": 26,
-    "diagramPadding": 6,
-    "useMaxWidth": true
-  },
-  "themeVariables": {
-    "fontSize": "15px"
-  }
-}}%%
+%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 18, "rankSpacing": 28, "diagramPadding": 6}, "themeVariables": {"fontSize": "14px"}}}%%
 flowchart LR
-    %% Compact system map.
-    %% Details that would create long cross-lane edges live in the sequence
-    %% diagrams in ARIS_AIIDA_WORKER_INTERNAL_FLOW.md.
-
-    subgraph CLIENT["1 · CLIENT"]
-        direction TB
-        SURFACE["Browser or ARIS.app<br/>same React frontend"]
-        REACT["App.tsx + dashboard<br/>chat · history · processes<br/>submission · environment"]
-        CLIENT_PROTOCOL["Client protocols<br/>REST requests<br/>AG-UI state snapshots<br/>ApprovalRequest / Decision"]
-        STARTUP["Desktop startup<br/>aris-local.sh → PM2<br/>API :8000 · worker :8001<br/>Vite :5173 dev-only"]
-
-        SURFACE --> REACT --> CLIENT_PROTOCOL
-        SURFACE --> STARTUP
+    subgraph CLIENT["CLIENT · shared React UI"]
+        UI["Browser / ARIS.app"]
+        REACT["React frontend<br/>chat · compute · provenance"]
+        UI --> REACT
     end
 
-    subgraph ARIS["2 · ARIS CONTROL PLANE · aris/.venv · :8000"]
-        direction TB
-        APP["src/app_api.py<br/>FastAPI · SPA · CORS<br/>JSONMemory · app state<br/>AiiDAAppManifest"]
-        BFF["router.py · frontend BFF<br/>REST + AG-UI + domain SSE<br/>presenters · policy · worker proxy"]
-        CHAT["Chat application layer<br/>service · Application/QueryService<br/>JsonSessionRepository · WorkspaceManager<br/>GroupGateway"]
-        MACHINE["Turn execution<br/>queued → running ↔ retry_wait<br/>processing → completed<br/>recovering → failed/cancelled"]
-        AGENT["Agent boundary<br/>AgentRuntime protocol<br/>PydanticAIGeminiRuntime<br/>PydanticAI researcher"]
-        RESPONSE["Protocol-first output<br/>ARISResponse.task_mode<br/>none | single | batch<br/>submission_request / data_payload"]
-        APPROVAL["Preview + typed approval<br/>SubmissionPreviewService<br/>permission · scope<br/>SHA-256 draft digest"]
-        CAPABILITY["AiiDA capability boundary<br/>AiiDACapability<br/>HttpAiiDACapability<br/>AiiDAWorkerClient"]
-        ARIS_DATA["ARIS-owned data<br/>session JSON files<br/>project codes/ + data/"]
-        MCP["Optional MCP facade<br/>inspect + preview only<br/>not current Gemini path"]
-        BYPASS["⚠ remaining bypass<br/>submit_validated_workflow<br/>run_aiida_code_script<br/>no typed ApprovalDecision"]
-
-        APP --> BFF --> CHAT --> MACHINE --> AGENT --> RESPONSE --> APPROVAL
-        CHAT --> ARIS_DATA
-        AGENT --> CAPABILITY
-        APPROVAL --> CAPABILITY
-        MCP -.-> CAPABILITY
-        AGENT --> BYPASS --> CAPABILITY
+    subgraph ARIS["ARIS CONTROL PLANE · API :8000"]
+        API["FastAPI + SPA<br/>src/app_api.py"]
+        CHAT["Chat application<br/>session · state machine · approval"]
+        AGENT["Agent runtime<br/>Pydantic AI"]
+        CAP["AiiDA capability adapter<br/>protocol-first request mapping"]
+        OWNER["WorkerProcessManager<br/>start · serialize requests<br/>timeout · restart · stop"]
+        API --> CHAT --> AGENT --> CAP --> OWNER
     end
 
-    subgraph WORKER["3 · AIIDA-WORKER EXECUTION PLANE · uv env · :8001"]
-        direction TB
-        WAPP["main.py · FastAPI 3<br/>deterministic REST API<br/>normalized JSON errors"]
-        ROUTES["Router surface<br/>management · submission<br/>process · data<br/>execution · registry"]
-        CORE["Core services<br/>profile/DB/session management<br/>spec + builder + validation<br/>single/batch submit<br/>node/process serialization"]
-        ENV["Interpreter boundary<br/>worker-default Python<br/>or validated project Python<br/>+ project workspace header"]
-        SUBPROCESS["DynamicExecutionRuntime<br/>managed subprocess<br/>stream output · result markers<br/>environment metadata cache"]
-        WORKER_GAPS["Current worker note<br/>⚠ event producer not started"]
-
-        WAPP --> ROUTES --> CORE --> ENV --> SUBPROCESS
-        ROUTES --> WORKER_GAPS
+    subgraph WORKER["MANAGED AIIDA WORKER · no port"]
+        STDIO["stdio loop<br/>newline-delimited JSON-RPC 2.0"]
+        DISPATCH["AiiDAWorkerService<br/>validated method + params<br/>structured domain errors"]
+        SERVICES["Pure Python capabilities<br/>profile · infrastructure · submission<br/>process · group · node · data<br/>execution · registry"]
+        EXEC["DynamicExecutionRuntime<br/>selected Python + workspace<br/>managed computation subprocess"]
+        STDIO --> DISPATCH --> SERVICES --> EXEC
     end
 
-    subgraph AIIDA["4 · AIIDA + COMPUTE"]
-        direction TB
-        PROFILE["Active profile<br/>sandbox · selected profile<br/>or mounted archive"]
-        ORM["ORM + QueryBuilder<br/>Node · Group · ProcessNode<br/>Computer · Code"]
-        STORAGE["AiiDA storage<br/>PostgreSQL/SQLite metadata<br/>object repository"]
-        ENGINE["AiiDA engine.submit<br/>process graph + provenance"]
-        DAEMON["Daemon + RabbitMQ<br/>long-running orchestration"]
-        REMOTE["local/SSH transport<br/>remote computer + scheduler"]
-        OUTPUT["Feedback and outputs<br/>state · logs · repository files<br/>RemoteData · BandsData · provenance"]
-
-        PROFILE --> ORM
-        ORM <--> STORAGE
-        ORM --> ENGINE --> DAEMON --> REMOTE --> OUTPUT
-        OUTPUT --> STORAGE
+    subgraph AIIDA["AiiDA + COMPUTE"]
+        PROFILE["Selected AiiDA profile"]
+        ORM["ORM · storage · provenance"]
+        ENGINE["engine / daemon"]
+        REMOTE["local or SSH scheduler"]
+        PROFILE --> ORM --> ENGINE --> REMOTE
     end
 
-    %% Four cross-lane boundaries; no long internal back-edges.
-    STARTUP -->|"starts both processes"| APP
-    STARTUP --> WAPP
-    CLIENT_PROTOCOL <-->|"REST · AG-UI · approval"| BFF
-    CAPABILITY <-->|"HTTP JSON · binary · SSE"| WAPP
-    CORE <-->|"profile · ORM · engine"| ORM
+    REACT <-->|"REST / AG-UI"| API
+    OWNER <-->|"stdin/stdout<br/>one request at a time"| STDIO
+    SERVICES <-->|"direct Python API"| PROFILE
 
     classDef client fill:#eef4ff,stroke:#7393c2,color:#172033;
     classDef aris fill:#eaf8f2,stroke:#5b9b7e,color:#163128;
     classDef worker fill:#fff3e6,stroke:#c48a4d,color:#3c2712;
     classDef aiida fill:#f3efff,stroke:#8872bd,color:#241d38;
-    classDef protocol fill:#fff0f3,stroke:#c95b77,color:#3b1721;
-    classDef warning fill:#fff0f0,stroke:#c53f3f,color:#4a1515,stroke-width:2px;
-    classDef optional fill:#f4f4f4,stroke:#888,color:#333,stroke-dasharray:5 4;
-    classDef store fill:#fffbe8,stroke:#aa902e,color:#3a310e;
-
-    class SURFACE,REACT,CLIENT_PROTOCOL,STARTUP client;
-    class APP,BFF,CHAT,MACHINE,AGENT,CAPABILITY aris;
-    class RESPONSE,APPROVAL protocol;
-    class BYPASS,WORKER_GAPS warning;
-    class MCP optional;
-    class ARIS_DATA,STORAGE store;
-    class WAPP,ROUTES,CORE,ENV,SUBPROCESS worker;
-    class PROFILE,ORM,ENGINE,DAEMON,REMOTE,OUTPUT aiida;
+    class UI,REACT client;
+    class API,CHAT,AGENT,CAP,OWNER aris;
+    class STDIO,DISPATCH,SERVICES,EXEC worker;
+    class PROFILE,ORM,ENGINE,REMOTE aiida;
