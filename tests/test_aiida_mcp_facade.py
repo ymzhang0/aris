@@ -83,7 +83,7 @@ async def test_managed_capability_normalizes_canonical_plugin_list() -> None:
     class _Client:
         bridge_url = "http://worker.test"
 
-        async def request_json(self, method, path):
+        async def worker_call(self, method, path):
             assert method == "GET"
             assert path == "/plugins"
             return ["quantumespresso.pw.base"]

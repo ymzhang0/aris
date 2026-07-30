@@ -20,18 +20,13 @@ def _resolve_preferred_path(env_name: str, preferred_path: Path, fallback_path: 
 
 @dataclass(frozen=True)
 class AiiDAEngineSettings:
-    default_bridge_url: str = "stdio://managed-aiida-worker"
-    bridge_url: str = ""
     bridge_environment: str = "Managed AiiDA runtime"
     offline_worker_message: str = os.getenv(
         "AIIDA_OFFLINE_WORKER_MESSAGE",
         "ARIS could not start its managed AiiDA runtime.",
     )
 
-    @property
-    def resolved_bridge_url(self) -> str:
-        raw = str(self.bridge_url or self.default_bridge_url).strip()
-        return raw if raw else self.default_bridge_url
+
 
     @property
     def presets_file(self) -> str:

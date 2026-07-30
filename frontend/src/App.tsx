@@ -1,4 +1,4 @@
-import { aiidaClient } from "@/api/aiidaClient";
+import { aiidaClient } from "@/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -28,7 +28,7 @@ import {
   updateChatSession,
   updateChatSessionTitle,
   type SubmissionApprovalRequest,
-} from "@/lib/api";
+} from "@/api";
 import { ChatPanel } from "@/components/dashboard/chat-panel";
 import { HistorySidebar } from "@/components/dashboard/history-sidebar";
 import { MainWorkspace } from "@/components/dashboard/MainWorkspace";

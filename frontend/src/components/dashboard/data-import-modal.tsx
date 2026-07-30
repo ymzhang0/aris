@@ -1,4 +1,4 @@
-import { aiidaClient } from "@/api/aiidaClient";
+import { aiidaClient } from "@/api";
 
 import React, { useState, useEffect, useMemo } from "react";
 import {
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { addNodesToGroup, createGroup } from "@/lib/api";
+import { addNodesToGroup, createGroup } from "@/api";
 
 type DataImportModalProps = {
     isOpen: boolean;

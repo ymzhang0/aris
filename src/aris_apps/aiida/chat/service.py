@@ -15,9 +15,9 @@ from loguru import logger
 
 from src.aris_apps.aiida.client import (
     build_worker_context,
-    reset_bridge_call_listener,
+    reset_worker_call_listener,
     reset_worker_request_context,
-    set_bridge_call_listener,
+    set_worker_call_listener,
     set_worker_request_context,
 )
 from src.aris_apps.aiida.chat.batch_progress import (
@@ -39,7 +39,7 @@ from src.aris_apps.aiida.chat.context import (
 )
 from src.aris_apps.aiida.chat.group_gateway import (
     ChatGroupGateway,
-    FrontendBridgeGroupGateway,
+    WorkerGroupGateway,
     build_project_group_label as _build_project_group_label,
     build_session_group_label as _build_session_group_label,
 )
@@ -141,7 +141,7 @@ _CHAT_SESSION_REPOSITORY = JsonChatSessionRepository(
 _CHAT_WORKSPACE_MANAGER = ChatWorkspaceManager(
     lambda: settings.ARIS_PROJECTS_ROOT,
 )
-_CHAT_GROUP_GATEWAY: ChatGroupGateway = FrontendBridgeGroupGateway()
+_CHAT_GROUP_GATEWAY: ChatGroupGateway = WorkerGroupGateway()
 _managed_project_root = _CHAT_WORKSPACE_MANAGER.managed_project_root
 _project_root_path = _CHAT_WORKSPACE_MANAGER.project_root_path
 _get_session_slug = _CHAT_WORKSPACE_MANAGER.get_session_slug
@@ -2480,17 +2480,17 @@ async def _execute_chat_turn(
     t0 = time.perf_counter()
     spinner_stop = asyncio.Event()
     spinner_task: asyncio.Task | None = None
-    bridge_tool_calls: list[str] = []
+    worker_tool_calls: list[str] = []
 
     def _record_bridge_call(tool_name: str) -> None:
         cleaned = str(tool_name).strip()
         if not cleaned:
             return
-        if bridge_tool_calls and bridge_tool_calls[-1] == cleaned:
+        if worker_tool_calls and worker_tool_calls[-1] == cleaned:
             return
-        bridge_tool_calls.append(cleaned)
-        if len(bridge_tool_calls) > 40:
-            del bridge_tool_calls[:-40]
+        worker_tool_calls.append(cleaned)
+        if len(worker_tool_calls) > 40:
+            del worker_tool_calls[:-40]
 
     async with lock:
         logger.info(
@@ -2539,7 +2539,7 @@ async def _execute_chat_turn(
                     return
                 payload = {
                     "type": "status",
-                    "tool_calls": bridge_tool_calls[-20:],
+                    "tool_calls": worker_tool_calls[-20:],
                     "execution": turn_execution.to_payload(),
                     "status": {
                         "current_step": cleaned,
@@ -2558,7 +2558,7 @@ async def _execute_chat_turn(
             if hasattr(current_deps, "step_callback"):
                 setattr(current_deps, "step_callback", _record_step_update)
 
-            listener_token = set_bridge_call_listener(_record_bridge_call)
+            listener_token = set_worker_call_listener(_record_bridge_call)
             worker_context_token = set_worker_request_context(_build_worker_context(state, session_id))
             spinner_task = asyncio.create_task(
                 _thinking_status_ticker(
@@ -2566,7 +2566,7 @@ async def _execute_chat_turn(
                     turn_id=turn_id,
                     session_id=session_id,
                     stop_event=spinner_stop,
-                    get_running_tools=lambda: list(bridge_tool_calls),
+                    get_running_tools=lambda: list(worker_tool_calls),
                     get_step_history=lambda: list(step_history),
                 )
             )
@@ -2623,7 +2623,7 @@ async def _execute_chat_turn(
                     on_retry=_handle_retry,
                 )
             finally:
-                reset_bridge_call_listener(listener_token)
+                reset_worker_call_listener(listener_token)
                 reset_worker_request_context(worker_context_token)
 
             spinner_stop.set()
@@ -2662,7 +2662,7 @@ async def _execute_chat_turn(
                 auto_prepared_payload = await _submission_preview_service.prepare_request(
                     structured_submission_request,
                     current_deps,
-                    bridge_tool_calls,
+                    worker_tool_calls,
                 )
             if isinstance(auto_prepared_payload, dict):
                 merged_output_payload = (
@@ -2675,7 +2675,7 @@ async def _execute_chat_turn(
                     output.data_payload = merged_output_payload
             message_payload = _submission_preview_service.build_message_payload(
                 output,
-                tool_calls=bridge_tool_calls,
+                tool_calls=worker_tool_calls,
                 task_mode=output_task_mode,
             )
             if isinstance(message_payload, dict) and not isinstance(

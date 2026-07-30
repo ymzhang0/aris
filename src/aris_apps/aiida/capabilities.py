@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import quote
 
-from src.aris_apps.aiida.client import AiiDAWorkerClient, BridgeSnapshot, aiida_worker_client
+from src.aris_apps.aiida.client import AiiDAWorkerClient, WorkerSnapshot, aiida_worker_client
 
 
 @runtime_checkable
@@ -15,7 +15,7 @@ class AiiDACapability(Protocol):
     @property
     def bridge_url(self) -> str: ...
 
-    async def get_status(self) -> BridgeSnapshot: ...
+    async def get_status(self) -> WorkerSnapshot: ...
 
     async def get_plugins(self) -> list[str]: ...
 
@@ -72,7 +72,7 @@ class ManagedAiiDACapability:
     def bridge_url(self) -> str:
         return self._client.bridge_url
 
-    async def get_status(self) -> BridgeSnapshot:
+    async def get_status(self) -> WorkerSnapshot:
         return await self._client.get_status()
 
     async def get_plugins(self) -> list[str]:
@@ -95,7 +95,7 @@ class ManagedAiiDACapability:
         *,
         limit: int = 20,
     ) -> dict[str, Any]:
-        payload = await self._client.request_json(
+        payload = await self._client.worker_call(
             "GET",
             "/management/recent-processes",
             params={"limit": int(limit)},
@@ -106,14 +106,14 @@ class ManagedAiiDACapability:
         cleaned = str(identifier or "").strip()
         if not cleaned:
             raise ValueError("Process identifier is required")
-        payload = await self._client.request_json(
+        payload = await self._client.worker_call(
             "GET",
             f"/process/{quote(cleaned, safe='')}",
         )
         return payload if isinstance(payload, dict) else {}
 
     async def get_process_logs(self, pk: int) -> dict[str, Any]:
-        payload = await self._client.request_json(
+        payload = await self._client.worker_call(
             "GET",
             f"/process/{int(pk)}/logs",
         )
@@ -129,7 +129,7 @@ class ManagedAiiDACapability:
         cleaned_node_type = str(node_type or "").strip()
         if cleaned_node_type:
             params["node_type"] = cleaned_node_type
-        payload = await self._client.request_json(
+        payload = await self._client.worker_call(
             "GET",
             "/management/recent-nodes",
             params=params,
@@ -137,7 +137,7 @@ class ManagedAiiDACapability:
         return payload if isinstance(payload, dict) else {"nodes": []}
 
     async def list_submission_plugins(self) -> dict[str, Any]:
-        payload = await self._client.request_json(
+        payload = await self._client.worker_call(
             "GET",
             "/plugins",
         )
@@ -154,7 +154,7 @@ class ManagedAiiDACapability:
         cleaned = str(workchain or "").strip()
         if not cleaned:
             raise ValueError("WorkChain entry point is required")
-        payload = await self._client.request_json(
+        payload = await self._client.worker_call(
             "GET",
             f"/submission/spec/{quote(cleaned, safe='')}",
         )
@@ -164,7 +164,7 @@ class ManagedAiiDACapability:
         self,
         request: dict[str, Any],
     ) -> dict[str, Any]:
-        payload = await self._client.request_json(
+        payload = await self._client.worker_call(
             "POST",
             "/submission/draft-builder",
             json=dict(request),
@@ -176,7 +176,7 @@ class ManagedAiiDACapability:
         self,
         draft: dict[str, Any],
     ) -> dict[str, Any]:
-        payload = await self._client.request_json(
+        payload = await self._client.worker_call(
             "POST",
             "/submission/validate",
             json={"draft": dict(draft)},

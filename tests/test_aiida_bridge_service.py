@@ -31,7 +31,7 @@ def test_get_status_uses_one_managed_worker_probe(monkeypatch) -> None:
         }
     )
     monkeypatch.setattr("src.aris_apps.aiida.client.get_worker_process_manager", lambda: worker)
-    service = AiiDAWorkerClient(bridge_url="stdio://managed-aiida-worker")
+    service = AiiDAWorkerClient()
 
     snapshot = asyncio.run(service.get_status(force_refresh=True))
 
@@ -43,7 +43,7 @@ def test_get_status_uses_one_managed_worker_probe(monkeypatch) -> None:
 def test_managed_worker_failure_marks_runtime_offline(monkeypatch) -> None:
     worker = _Worker(error=RuntimeError("worker offline"))
     monkeypatch.setattr("src.aris_apps.aiida.client.get_worker_process_manager", lambda: worker)
-    service = AiiDAWorkerClient(bridge_url="stdio://managed-aiida-worker")
+    service = AiiDAWorkerClient()
 
     snapshot = asyncio.run(service.get_status(force_refresh=True))
 
@@ -54,10 +54,7 @@ def test_managed_worker_failure_marks_runtime_offline(monkeypatch) -> None:
 def test_status_snapshot_is_cached(monkeypatch) -> None:
     worker = _Worker({"status": "online", "mode": "managed-subprocess"})
     monkeypatch.setattr("src.aris_apps.aiida.client.get_worker_process_manager", lambda: worker)
-    service = AiiDAWorkerClient(
-        bridge_url="stdio://managed-aiida-worker",
-        cache_ttl_seconds=60.0,
-    )
+    service = AiiDAWorkerClient(cache_ttl_seconds=60.0)
 
     first = asyncio.run(service.get_status(force_refresh=True))
     second = asyncio.run(service.get_status(force_refresh=False))

@@ -186,7 +186,7 @@ async def test_managed_aiida_capability_delegates_to_worker_client() -> None:
         async def get_system_info(self):
             return {"version": "2.7"}
 
-        async def request_json(self, method, path, **kwargs):
+        async def worker_call(self, method, path, **kwargs):
             self.requests.append((method, path, kwargs))
             return {"method": method, "path": path, **kwargs}
 

@@ -1,4 +1,4 @@
-import { aiidaClient } from "@/api/aiidaClient";
+import { aiidaClient } from "@/api";
 
 import React, { useCallback, useEffect, useState } from "react";
 import {
@@ -26,7 +26,7 @@ import type {
 import { cn } from "@/lib/utils";
 import {
     type SSHHostDetails,
-} from "@/lib/api";
+} from "@/api";
 import { useQuery } from "@tanstack/react-query";
 
 type QuickAddModalProps = {

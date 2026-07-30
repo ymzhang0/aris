@@ -417,7 +417,7 @@ export type SoftDeleteNodeResponse = {
   soft_deleted: boolean;
 };
 
-export type BridgeStatusResponse = {
+export type WorkerStatusResponse = {
   status: "online" | "offline";
   url: string;
   environment: string;
@@ -435,13 +435,13 @@ export type BridgeProfileItem = {
   is_active: boolean;
 };
 
-export type BridgeProfilesResponse = {
+export type WorkerProfilesResponse = {
   current_profile: string | null;
   default_profile: string | null;
   profiles: BridgeProfileItem[];
 };
 
-export type BridgeSwitchProfileResponse = {
+export type WorkerSwitchProfileResponse = {
   status: string;
   current_profile: string | null;
 };
@@ -458,21 +458,21 @@ export type BridgeSystemInfoResponse = {
   daemon_status: boolean;
 };
 
-export type BridgeComputerResource = {
+export type WorkerComputerResource = {
   label: string;
   hostname: string;
   description: string | null;
 };
 
-export type BridgeCodeResource = {
+export type WorkerCodeResource = {
   label: string;
   default_plugin: string | null;
   computer_label: string | null;
 };
 
-export type BridgeResourcesResponse = {
-  computers: BridgeComputerResource[];
-  codes: BridgeCodeResource[];
+export type WorkerResourcesResponse = {
+  computers: WorkerComputerResource[];
+  codes: WorkerCodeResource[];
 };
 
 export type ProcessTreeNode = {

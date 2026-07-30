@@ -1,4 +1,4 @@
-import { aiidaClient } from "@/api/aiidaClient";
+import { aiidaClient } from "@/api";
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import JsonView from "@uiw/react-json-view";
@@ -30,7 +30,7 @@ import {
   getRemoteFiles,
   getRepositoryFileContent,
   getRepositoryFiles,
-} from "@/lib/api";
+} from "@/api";
 import { cn } from "@/lib/utils";
 import type {
   FocusNode,

@@ -62,12 +62,12 @@ from .chat import (
 from .authorization import local_authorization_snapshot, require_permission
 from .capabilities import aiida_capability
 from .client import (
-    BridgeAPIError,
-    BridgeOfflineError,
+    WorkerRPCError,
+    WorkerOfflineError,
     aiida_worker_client,
     build_worker_context,
     reset_worker_request_context,
-    request_json,
+    worker_call,
     set_worker_request_context,
 )
 from .presenters.node_view import (
@@ -118,12 +118,12 @@ from .schemas import (
     SubmissionApprovalCancelRequest,
     SubmissionDraftRequest,
     SystemCountsResponse,
-    BridgeStatusResponse,
-    BridgeSystemInfoResponse,
-    BridgeResourcesResponse,
-    BridgeProfilesResponse,
+    WorkerStatusResponse,
+    WorkerSystemInfoResponse,
+    WorkerResourcesResponse,
+    WorkerProfilesResponse,
     BridgeSwitchProfileRequest,
-    BridgeSwitchProfileResponse,
+    WorkerSwitchProfileResponse,
     FrontendGroupCreateRequest,
     FrontendGroupRenameRequest,
     FrontendGroupAssignNodesRequest,
@@ -283,7 +283,7 @@ def _get_frontend_groups() -> list[dict[str, Any]]:
 
 
 async def _get_frontend_groups_async() -> list[dict[str, Any]]:
-    payload = await aiida_worker_client.request_json("GET", "/management/groups")
+    payload = await aiida_worker_client.call("group.list")
     return payload.get("items", []) if isinstance(payload, dict) else []
 
 
@@ -311,7 +311,7 @@ async def _get_frontend_nodes_async(
         params["group_label"] = group_label
     if node_type:
         params["node_type"] = node_type
-    payload = await aiida_worker_client.request_json("GET", "/management/recent-nodes", params=params)
+    payload = await aiida_worker_client.worker_call("node.recent", params)
     return payload.get("items", []) if isinstance(payload, dict) else []
 
 
@@ -647,10 +647,7 @@ async def _run_worker_json_script(script: str, *, timeout: float = 90.0) -> dict
         raise RuntimeError("Worker default environment did not expose a python interpreter path")
 
     payload = await asyncio.wait_for(
-        request_json(
-            "POST",
-            "/management/run-python",
-            json={
+        worker_call("process.run_python", {
                 "script_content": script,
                 "python_interpreter_path": python_interpreter_path,
             },
@@ -663,7 +660,7 @@ async def _run_worker_json_script(script: str, *, timeout: float = 90.0) -> dict
 
 async def _run_contextual_worker_json_script(script: str, *, timeout: float = 90.0) -> dict[str, Any] | None:
     payload = await asyncio.wait_for(
-        request_json(
+        worker_call(
             "POST",
             "/management/run-python",
             json={"script_content": script},
@@ -818,9 +815,9 @@ async def _fetch_scheduler_snapshot(computer_label: str | None) -> dict[str, Any
             )
         )
         return None
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         raise
-    except BridgeAPIError as error:
+    except WorkerRPCError as error:
         logger.warning(
             log_event(
                 "aiida.frontend.compute_health.scheduler_failed",
@@ -849,8 +846,8 @@ async def _request_optional_json(
     timeout: float = 10.0,
 ) -> Any | None:
     try:
-        return await request_json(method, path, params=params, json=json_payload, timeout=timeout)
-    except BridgeAPIError as error:
+        return await worker_call(method, path, params=params, json=json_payload, timeout=timeout)
+    except WorkerRPCError as error:
         if int(error.status_code or 0) in {400, 404, 422, 501}:
             return None
         raise
@@ -982,7 +979,7 @@ def _build_log_excerpt(logs_payload: dict[str, Any] | None) -> ProcessDiagnostic
 
 
 async def _fetch_process_detail_payload(identifier: str | int) -> dict[str, Any]:
-    payload = await request_json("GET", f"/process/{identifier}")
+    payload = await worker_call("process.detail", {"identifier": identifier})
     if not isinstance(payload, dict):
         raise HTTPException(status_code=502, detail={"error": "Worker returned an invalid process detail payload"})
     return await _enrich_process_detail_payload(payload)
@@ -1117,7 +1114,7 @@ async def _ensure_submission_group(label: str) -> dict[str, Any] | None:
 
     try:
         response = create_group(cleaned_label)
-    except BridgeAPIError as exc:
+    except WorkerRPCError as exc:
         if int(exc.status_code or 0) != 409:
             raise
         response = {"item": next((group for group in list_groups() if str(group.get("label") or "").strip() == cleaned_label), None)}
@@ -1152,9 +1149,9 @@ async def _auto_assign_submission_groups(
 
 
 def _raise_worker_http_error(exc: Exception) -> None:
-    if isinstance(exc, BridgeOfflineError):
+    if isinstance(exc, WorkerOfflineError):
         raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
-    if isinstance(exc, BridgeAPIError):
+    if isinstance(exc, WorkerRPCError):
         detail = exc.payload if isinstance(exc.payload, dict) else {"error": exc.message, "details": exc.payload}
         raise HTTPException(status_code=max(400, int(exc.status_code or 502)), detail=detail) from exc
     raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
@@ -1173,8 +1170,7 @@ def _fetch_genai_models() -> list[str]:
 
     client = genai.Client(
         api_key=api_key,
-        http_options={"api_version": settings.GEMINI_API_VERSION},
-    )
+        http_options={"api_version": settings.GEMINI_API_VERSION})
     discovered: list[str] = []
     for model in client.models.list():
         model_name = _normalize_model_name(getattr(model, "name", "") or "")
@@ -1224,11 +1220,11 @@ def _get_selected_model(state: Any, available_models: list[str]) -> str:
     return fallback
 
 
-@router.get("/status", response_model=BridgeStatusResponse, tags=[WORKER_PROXY_TAG])
-async def get_bridge_status() -> BridgeStatusResponse:
+@router.get("/status", response_model=WorkerStatusResponse, tags=[WORKER_PROXY_TAG])
+async def get_worker_status() -> WorkerStatusResponse:
     try:
         snapshot = await aiida_capability.get_status()
-        return BridgeStatusResponse(
+        return WorkerStatusResponse(
             status=snapshot.status,
             url=snapshot.url,
             environment=snapshot.environment,
@@ -1245,8 +1241,8 @@ async def get_bridge_status() -> BridgeStatusResponse:
         )
     except Exception as exc:  # noqa: BLE001
         error_message = f"{type(exc).__name__}: {exc}"
-        logger.warning(log_event("aiida.bridge.status.failed", error=error_message))
-        return BridgeStatusResponse(
+        logger.warning(log_event("aiida.worker.status.failed", error=error_message))
+        return WorkerStatusResponse(
             status="offline",
             url=aiida_capability.bridge_url,
             environment="Managed AiiDA runtime",
@@ -1265,15 +1261,15 @@ async def get_bridge_plugins() -> list[str]:
         return await aiida_capability.get_plugins()
     except Exception as exc:  # noqa: BLE001
         error_message = f"{type(exc).__name__}: {exc}"
-        logger.warning(log_event("aiida.bridge.plugins.failed", error=error_message))
+        logger.warning(log_event("aiida.worker.plugins.failed", error=error_message))
         return []
 
 
-@router.get("/system", response_model=BridgeSystemInfoResponse, tags=[WORKER_PROXY_TAG])
-async def get_bridge_system_info() -> BridgeSystemInfoResponse:
+@router.get("/system", response_model=WorkerSystemInfoResponse, tags=[WORKER_PROXY_TAG])
+async def get_bridge_system_info() -> WorkerSystemInfoResponse:
     try:
         snapshot = await aiida_capability.get_status()
-        return BridgeSystemInfoResponse(
+        return WorkerSystemInfoResponse(
             profile=snapshot.profile,
             counts=SystemCountsResponse(
                 computers=snapshot.resources.computers,
@@ -1284,46 +1280,46 @@ async def get_bridge_system_info() -> BridgeSystemInfoResponse:
         )
     except Exception as exc:  # noqa: BLE001
         error_message = f"{type(exc).__name__}: {exc}"
-        logger.warning(log_event("aiida.bridge.system.failed", error=error_message))
-        return BridgeSystemInfoResponse()
+        logger.warning(log_event("aiida.worker.system.failed", error=error_message))
+        return WorkerSystemInfoResponse()
 
 
-@router.get("/resources", response_model=BridgeResourcesResponse, tags=[WORKER_PROXY_TAG])
-async def get_bridge_resources() -> BridgeResourcesResponse:
+@router.get("/resources", response_model=WorkerResourcesResponse, tags=[WORKER_PROXY_TAG])
+async def get_bridge_resources() -> WorkerResourcesResponse:
     try:
         payload = await aiida_capability.get_resources()
-        return BridgeResourcesResponse.model_validate(payload)
+        return WorkerResourcesResponse.model_validate(payload)
     except Exception as exc:  # noqa: BLE001
         error_message = f"{type(exc).__name__}: {exc}"
-        logger.warning(log_event("aiida.bridge.resources.failed", error=error_message))
-        return BridgeResourcesResponse()
+        logger.warning(log_event("aiida.worker.resources.failed", error=error_message))
+        return WorkerResourcesResponse()
 
 
-@router.get("/profiles", response_model=BridgeProfilesResponse, tags=[WORKER_PROXY_TAG])
-async def get_bridge_profiles() -> BridgeProfilesResponse:
+@router.get("/profiles", response_model=WorkerProfilesResponse, tags=[WORKER_PROXY_TAG])
+async def get_bridge_profiles() -> WorkerProfilesResponse:
     try:
         payload = await aiida_capability.get_profiles()
-        return BridgeProfilesResponse.model_validate(payload)
+        return WorkerProfilesResponse.model_validate(payload)
     except Exception as exc:  # noqa: BLE001
         error_message = f"{type(exc).__name__}: {exc}"
-        logger.warning(log_event("aiida.bridge.profiles.failed", error=error_message))
-        return BridgeProfilesResponse()
+        logger.warning(log_event("aiida.worker.profiles.failed", error=error_message))
+        return WorkerProfilesResponse()
 
 
-@router.post("/profiles/switch", response_model=BridgeSwitchProfileResponse, tags=[WORKER_PROXY_TAG])
+@router.post("/profiles/switch", response_model=WorkerSwitchProfileResponse, tags=[WORKER_PROXY_TAG])
 async def switch_bridge_profile(
     payload: BridgeSwitchProfileRequest,
     _authorization: AuthorizationDecision = Depends(
         require_permission("/aris/profiles/current", "switch")
     ),
-) -> BridgeSwitchProfileResponse:
+) -> WorkerSwitchProfileResponse:
     try:
         raw = await aiida_capability.switch_profile(payload.profile)
-        return BridgeSwitchProfileResponse.model_validate(raw)
+        return WorkerSwitchProfileResponse.model_validate(raw)
     except Exception as exc:  # noqa: BLE001
         error_message = f"{type(exc).__name__}: {exc}"
-        logger.warning(log_event("aiida.bridge.profile_switch.failed", error=error_message))
-        return BridgeSwitchProfileResponse(status="error", current_profile=None)
+        logger.warning(log_event("aiida.worker.profile_switch.failed", error=error_message))
+        return WorkerSwitchProfileResponse(status="error", current_profile=None)
 
 
 @router.get("/management/infrastructure", response_model=list[InfrastructureComputer], tags=[WORKER_PROXY_TAG])
@@ -1333,7 +1329,7 @@ async def get_management_infrastructure():
         return await aiida_worker_client.inspect_infrastructure_v2()
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
-        logger.warning(log_event("aiida.bridge.infrastructure.unsupported", error=error_message))
+        logger.warning(log_event("aiida.worker.infrastructure.unsupported", error=error_message))
         return []
 
 
@@ -1348,7 +1344,7 @@ async def get_management_infrastructure_capabilities():
         return InfrastructureCapabilitiesResponse(**payload)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
-        logger.warning(log_event("aiida.bridge.infrastructure_capabilities.unsupported", error=error_message))
+        logger.warning(log_event("aiida.worker.infrastructure_capabilities.unsupported", error=error_message))
         return InfrastructureCapabilitiesResponse(aiida_core_version="unknown")
 
 
@@ -1370,7 +1366,7 @@ async def setup_management_infrastructure(
 async def test_management_infrastructure_connection(payload: dict[str, Any]):
     """Proxy to validate a computer/auth configuration without storing final infrastructure."""
     try:
-        return await request_json("POST", "/management/infrastructure/test-connection", json=payload)
+        return await worker_call("infrastructure.test_connection", payload)
     except Exception as exc:
         _raise_worker_http_error(exc)
 
@@ -1382,7 +1378,7 @@ async def test_management_infrastructure_connection(payload: dict[str, Any]):
 )
 async def export_management_computer(computer_pk: int = ApiPath(..., ge=1)):
     try:
-        payload = await request_json("GET", f"/management/infrastructure/computer/pk/{int(computer_pk)}/export")
+        payload = await worker_call("infrastructure.export_computer", {"pk": int(computer_pk)})
     except Exception as exc:
         _raise_worker_http_error(exc)
     if not isinstance(payload, dict):
@@ -1397,7 +1393,7 @@ async def export_management_computer(computer_pk: int = ApiPath(..., ge=1)):
 )
 async def export_management_code(code_pk: int = ApiPath(..., ge=1)):
     try:
-        payload = await request_json("GET", f"/management/infrastructure/code/{int(code_pk)}/export")
+        payload = await worker_call("infrastructure.export_code", {"pk": int(code_pk)})
     except Exception as exc:
         _raise_worker_http_error(exc)
     if not isinstance(payload, dict):
@@ -1473,7 +1469,7 @@ async def _submit_bridge_workchain_impl(
         if len(draft_payload) == 0:
             raise HTTPException(status_code=422, detail="Submission draft list cannot be empty")
         try:
-            raw = await request_json(
+            raw = await worker_call(
                 "POST",
                 "/submission/submit",
                 json=worker_payload,
@@ -1501,7 +1497,7 @@ async def _submit_bridge_workchain_impl(
         return batch_response
 
     try:
-        raw = await request_json(
+        raw = await worker_call(
             "POST",
             "/submission/submit",
             json=worker_payload,
@@ -1518,9 +1514,9 @@ async def _submit_bridge_workchain_impl(
                 response["auto_groups"] = auto_groups
         response["approval"] = approval_audit.model_dump(mode="json")
         return response
-    except BridgeOfflineError as exc:
+    except WorkerOfflineError as exc:
         raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
-    except BridgeAPIError as exc:
+    except WorkerRPCError as exc:
         detail = exc.payload if isinstance(exc.payload, dict) else {"error": exc.message, "details": exc.payload}
         raise HTTPException(status_code=max(400, int(exc.status_code or 502)), detail=detail) from exc
 
@@ -1568,7 +1564,7 @@ async def frontend_environment_inspect(payload: EnvironmentInspectRequest):
         return raw
 
     try:
-        raw = await request_json(
+        raw = await worker_call(
             "POST",
             "/management/environments/inspect",
             json={
@@ -1593,7 +1589,7 @@ async def frontend_environment_inspect(payload: EnvironmentInspectRequest):
 @router.get("/data/remote/{pk}/files", tags=[WORKER_PROXY_TAG])
 async def worker_remote_files(pk: int):
     try:
-        return await request_json("GET", f"/data/remote/{int(pk)}/files")
+        return await worker_call("data.remote_files", {"pk": int(pk)})
     except Exception as exc:  # noqa: BLE001
         _raise_worker_http_error(exc)
 
@@ -1601,7 +1597,7 @@ async def worker_remote_files(pk: int):
 @router.get("/data/bands/{pk}", tags=[WORKER_PROXY_TAG])
 async def worker_bands_data(pk: int):
     try:
-        return await request_json("GET", f"/data/bands/{int(pk)}")
+        return await worker_call("data.bands", {"pk": int(pk)})
     except Exception as exc:  # noqa: BLE001
         _raise_worker_http_error(exc)
 
@@ -1609,7 +1605,7 @@ async def worker_bands_data(pk: int):
 @router.get("/data/remote/{pk}/files/{filename:path}", tags=[WORKER_PROXY_TAG])
 async def worker_remote_file_content(pk: int, filename: str):
     try:
-        return await request_json("GET", f"/data/remote/{int(pk)}/files/{filename}")
+        return await worker_call("data.remote_file", {"pk": int(pk), "filename": filename})
     except Exception as exc:  # noqa: BLE001
         _raise_worker_http_error(exc)
 
@@ -1620,11 +1616,7 @@ async def worker_repository_files(
     source: str = Query(default="folder"),
 ):
     try:
-        return await request_json(
-            "GET",
-            f"/data/repository/{int(pk)}/files",
-            params={"source": source},
-        )
+        return await worker_call("data.repository_files", {"pk": int(pk), "source": source})
     except Exception as exc:  # noqa: BLE001
         _raise_worker_http_error(exc)
 
@@ -1636,7 +1628,7 @@ async def worker_repository_file_content(
     source: str = Query(default="folder"),
 ):
     try:
-        return await request_json(
+        return await worker_call(
             "GET",
             f"/data/repository/{int(pk)}/files/{filename}",
             params={"source": source},
@@ -1648,13 +1640,13 @@ async def worker_repository_file_content(
 @router.get("/process/{identifier}", tags=[WORKER_PROXY_TAG])
 async def worker_process_detail(identifier: str):
     try:
-        payload = await request_json("GET", f"/process/{identifier}")
+        payload = await worker_call("process.detail", {"identifier": identifier})
         if isinstance(payload, dict):
             return await _enrich_process_detail_payload(payload)
         return {"data": payload}
-    except BridgeOfflineError as exc:
+    except WorkerOfflineError as exc:
         raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
-    except BridgeAPIError as exc:
+    except WorkerRPCError as exc:
         detail = exc.payload if isinstance(exc.payload, dict) else {"error": exc.message, "details": exc.payload}
         raise HTTPException(status_code=max(400, int(exc.status_code or 502)), detail=detail) from exc
 
@@ -1662,11 +1654,11 @@ async def worker_process_detail(identifier: str):
 @router.get("/process/{identifier}/logs", tags=[WORKER_PROXY_TAG])
 async def worker_process_logs(identifier: str):
     try:
-        payload = await request_json("GET", f"/process/{identifier}/logs")
+        payload = await worker_call("process.logs", {"identifier": identifier})
         return payload if isinstance(payload, dict) else {"data": payload}
-    except BridgeOfflineError as exc:
+    except WorkerOfflineError as exc:
         raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
-    except BridgeAPIError as exc:
+    except WorkerRPCError as exc:
         detail = exc.payload if isinstance(exc.payload, dict) else {"error": exc.message, "details": exc.payload}
         raise HTTPException(status_code=max(400, int(exc.status_code or 502)), detail=detail) from exc
 
@@ -1674,11 +1666,11 @@ async def worker_process_logs(identifier: str):
 @router.get("/process/{identifier}/workgraph", tags=[WORKER_PROXY_TAG])
 async def worker_process_workgraph(identifier: str):
     try:
-        payload = await request_json("GET", f"/process/{identifier}/workgraph")
+        payload = await worker_call("process.workgraph", {"identifier": identifier})
         return payload if isinstance(payload, dict) else {"data": payload}
-    except BridgeOfflineError as exc:
+    except WorkerOfflineError as exc:
         raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
-    except BridgeAPIError as exc:
+    except WorkerRPCError as exc:
         detail = exc.payload if isinstance(exc.payload, dict) else {"error": exc.message, "details": exc.payload}
         raise HTTPException(status_code=max(400, int(exc.status_code or 502)), detail=detail) from exc
 
@@ -1976,7 +1968,7 @@ async def frontend_compute_health(
     offline_warning: str | None = None
     try:
         scheduler_snapshot = await _fetch_scheduler_snapshot(resolved_computer_label)
-    except BridgeOfflineError as exc:
+    except WorkerOfflineError as exc:
         offline_warning = str(exc)
     queue_raw = scheduler_snapshot.get("queue") if isinstance(scheduler_snapshot, dict) else {}
     running = max(0, _coerce_int_value((queue_raw or {}).get("running")) or 0)
@@ -2027,7 +2019,7 @@ async def frontend_compute_health(
 @router.get("/frontend/processes/{identifier}/clone-draft", tags=[FRONTEND_TAG])
 async def frontend_clone_process_draft(identifier: str):
     try:
-        payload = await request_json("GET", f"/process/{identifier}/clone-draft")
+        payload = await worker_call("process.clone_draft", {"identifier": identifier})
     except Exception as exc:  # noqa: BLE001
         _raise_worker_http_error(exc)
 
@@ -2075,9 +2067,9 @@ async def frontend_clone_process_draft(identifier: str):
 async def frontend_process_diagnostics(identifier: str):
     try:
         return await _build_process_diagnostics(identifier)
-    except BridgeOfflineError as exc:
+    except WorkerOfflineError as exc:
         raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
-    except BridgeAPIError as exc:
+    except WorkerRPCError as exc:
         detail = exc.payload if isinstance(exc.payload, dict) else {"error": exc.message, "details": exc.payload}
         raise HTTPException(status_code=max(400, int(exc.status_code or 502)), detail=detail) from exc
 
@@ -2105,7 +2097,7 @@ async def frontend_setup_code(
         logger.info(log_event("aiida.frontend.setup_code.success", pk=response.get("pk")))
         return response
     except Exception as exc:
-        error_payload = exc.payload if isinstance(exc, BridgeAPIError) else None
+        error_payload = exc.payload if isinstance(exc, WorkerRPCError) else None
         logger.error(log_event("aiida.frontend.setup_code.failed", error=str(exc), detail=error_payload))
         _raise_worker_http_error(exc)
 
@@ -2148,7 +2140,7 @@ async def frontend_node_hover_metadata(pk: int = ApiPath(..., ge=1)) -> NodeHove
 )
 async def frontend_node_script(pk: int = ApiPath(..., ge=1)) -> NodeScriptResponse:
     try:
-        payload = await request_json("GET", f"/management/nodes/{pk}/script")
+        payload = await worker_call("node.script", {"pk": pk})
     except Exception as exc:  # noqa: BLE001
         _raise_worker_http_error(exc)
     if not isinstance(payload, dict):

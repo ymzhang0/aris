@@ -5,9 +5,9 @@ from pathlib import Path
 from loguru import logger
 
 from src.aris_apps.aiida.client import (
-    BridgeAPIError,
-    BridgeOfflineError,
-    request_json_sync,
+    WorkerRPCError,
+    WorkerOfflineError,
+    worker_call_sync,
 )
 from src.aris_core.logging import log_event
 
@@ -25,12 +25,12 @@ class AiiDAHub:
             return
         logger.info(log_event("aiida.hub.start.begin", current_profile=self.current_profile))
         try:
-            payload = request_json_sync("GET", "/management/profiles", timeout=6.0)
+            payload = worker_call_sync("profile.list", timeout=6.0)
             self._apply_profiles_payload(payload)
             logger.success(log_event("aiida.hub.start.done", profiles=len(self._profiles)))
-        except BridgeOfflineError:
+        except WorkerOfflineError:
             logger.warning(log_event("aiida.hub.start.offline"))
-        except BridgeAPIError as exc:
+        except WorkerRPCError as exc:
             if int(exc.status_code or 0) == 404:
                 self._profiles_supported = False
                 self._profiles = []
@@ -93,13 +93,13 @@ class AiiDAHub:
         )
 
         try:
-            payload = request_json_sync(
+            payload = worker_call_sync(
                 "POST",
                 "/management/profiles/switch",
                 json={"profile": cleaned},
                 timeout=8.0,
             )
-        except (BridgeOfflineError, BridgeAPIError) as exc:
+        except (WorkerOfflineError, WorkerRPCError) as exc:
             logger.warning(log_event("aiida.profile.switch.failed", profile=cleaned, error=str(exc)))
             return
         except Exception as exc:  # noqa: BLE001
@@ -122,7 +122,7 @@ class AiiDAHub:
         archive_path = Path(path).expanduser().resolve()
 
         try:
-            payload = request_json_sync(
+            payload = worker_call_sync(
                 "POST",
                 "/management/profiles/load-archive",
                 json={"path": str(archive_path)},

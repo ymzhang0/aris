@@ -1,4 +1,4 @@
-import { aiidaClient } from "@/api/aiidaClient";
+import { aiidaClient } from "@/api";
 import { type DragEvent, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Code2, Cpu, Loader2, PlugZap, Plus } from "lucide-react";
@@ -6,7 +6,7 @@ import { AlertTriangle, Code2, Cpu, Loader2, PlugZap, Plus } from "lucide-react"
 import { CommandPaletteSelect } from "@/components/ui/command-palette-select";
 import { useEnvironmentActions, useEnvironmentStore } from "@/store/EnvironmentStore";
 import { cn } from "@/lib/utils";
-import type { BridgeCodeResource, BridgeComputerResource, ResourceAttachment } from "@/types/aiida";
+import type { WorkerCodeResource, WorkerComputerResource, ResourceAttachment } from "@/types/aiida";
 import { NewProfileDrawer } from "./new-profile-drawer";
 
 const STATUS_POLL_INTERVAL_MS = 10_000;
@@ -30,7 +30,7 @@ function formatCodeDetail(item: { label: string; default_plugin: string | null; 
   return `${item.label}${plugin}${computer}`;
 }
 
-function toComputerAttachment(item: BridgeComputerResource): ResourceAttachment {
+function toComputerAttachment(item: WorkerComputerResource): ResourceAttachment {
   const label = formatComputerDetail(item);
   const value = item.label?.trim() || item.hostname?.trim() || label;
   return {
@@ -43,7 +43,7 @@ function toComputerAttachment(item: BridgeComputerResource): ResourceAttachment 
   };
 }
 
-function toCodeAttachment(item: BridgeCodeResource): ResourceAttachment {
+function toCodeAttachment(item: WorkerCodeResource): ResourceAttachment {
   const codeLabel = item.label?.trim() || "code";
   const computerLabel = item.computer_label?.trim() || null;
   const value = computerLabel ? `${codeLabel}@${computerLabel}` : codeLabel;
@@ -79,7 +79,7 @@ function normalizeProfileName(value: string | null | undefined): string {
 
 function normalizeEnvironmentComputers(
   items: Array<{ label?: string | null; hostname?: string | null; description?: string | null }>,
-): BridgeComputerResource[] {
+): WorkerComputerResource[] {
   return items
     .map((item) => ({
       label: String(item.label || "").trim(),
@@ -91,7 +91,7 @@ function normalizeEnvironmentComputers(
 
 function normalizeEnvironmentCodes(
   items: Array<{ label?: string | null; default_plugin?: string | null; computer_label?: string | null }>,
-): BridgeCodeResource[] {
+): WorkerCodeResource[] {
   return items
     .map((item) => ({
       label: String(item.label || "").trim(),
@@ -116,7 +116,7 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
 
   const statusQuery = useQuery({
     queryKey: ["aiida-bridge-status"],
-    queryFn: () => aiidaClient.getBridgeStatus(),
+    queryFn: () => aiidaClient.getWorkerStatus(),
     refetchInterval: STATUS_POLL_INTERVAL_MS,
     refetchOnWindowFocus: false,
     staleTime: 2_000,
@@ -126,7 +126,7 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
 
   const profilesQuery = useQuery({
     queryKey: ["aiida-bridge-profiles"],
-    queryFn: () => aiidaClient.getBridgeProfiles(),
+    queryFn: () => aiidaClient.getWorkerProfiles(),
     enabled: isOnline,
     refetchInterval: isOnline ? DETAILS_POLL_INTERVAL_MS : false,
     refetchOnWindowFocus: false,
@@ -134,14 +134,14 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
 
   const resourcesQuery = useQuery({
     queryKey: ["aiida-bridge-resources"],
-    queryFn: () => aiidaClient.getBridgeResources(),
+    queryFn: () => aiidaClient.getWorkerResources(),
     enabled: isOnline,
     refetchInterval: isOnline ? DETAILS_POLL_INTERVAL_MS : false,
     refetchOnWindowFocus: false,
   });
 
   const switchProfileMutation = useMutation({
-    mutationFn: (args: string) => aiidaClient.switchBridgeProfile(args),
+    mutationFn: (args: string) => aiidaClient.switchWorkerProfile(args),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["bootstrap"] }),

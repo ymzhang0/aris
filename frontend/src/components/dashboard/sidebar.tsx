@@ -1,4 +1,4 @@
-import { aiidaClient } from "@/api/aiidaClient";
+import { aiidaClient } from "@/api";
 import {
   Bot,
   CheckSquare2,
@@ -27,14 +27,14 @@ import axios from "axios";
 
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
-import { BridgeStatus } from "@/components/dashboard/bridge-status";
+import { BridgeStatus } from "@/components/dashboard/worker-status";
 import { ComputeHealthCard } from "@/components/dashboard/compute-health-card";
 import { SidebarPageHeader } from "@/components/dashboard/sidebar-page-header";
 import { cn } from "@/lib/utils";
 import {
   getNodeScript,
   saveChatProjectFile,
-} from "@/lib/api";
+} from "@/api";
 import {
   buildProjectScriptSaveTarget,
   buildScriptSaveRecommendation,

@@ -23,12 +23,11 @@ from src.aris_core.runtime import WorkerProcessError, get_worker_process_manager
 from src.aris_apps.aiida.config import aiida_engine_settings
 from .schemas import CodeSetupRequest
 
-DEFAULT_BRIDGE_URL = aiida_engine_settings.default_bridge_url
 OFFLINE_WORKER_MESSAGE = aiida_engine_settings.offline_worker_message
 
-BridgeCallListener = Callable[[str], None]
-_bridge_call_listener: contextvars.ContextVar[BridgeCallListener | None] = contextvars.ContextVar(
-    "aiida_bridge_call_listener",
+WorkerCallListener = Callable[[str], None]
+_worker_call_listener: contextvars.ContextVar[WorkerCallListener | None] = contextvars.ContextVar(
+    "aiida_worker_call_listener",
     default=None,
 )
 _worker_request_context: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
@@ -36,47 +35,49 @@ _worker_request_context: contextvars.ContextVar[dict[str, str] | None] = context
     default=None,
 )
 
-BridgeConnectionState = Literal["online", "offline"]
+WorkerConnectionState = Literal["online", "offline"]
 
 
 @dataclass
-class BridgeAPIError(Exception):
+class WorkerRPCError(Exception):
     status_code: int
     message: str
     payload: Any
 
     def __str__(self) -> str:
-        return f"HTTP {self.status_code}: {self.message}"
+        return f"RPC Error {self.status_code}: {self.message}"
+
+class WorkerProtocolError(Exception):
+    pass
 
 
-class BridgeOfflineError(Exception):
+class WorkerOfflineError(Exception):
     def __str__(self) -> str:
         return OFFLINE_WORKER_MESSAGE
 
 
 @dataclass
-class BridgeResourceCounts:
+class WorkerResourceCounts:
     computers: int = 0
     codes: int = 0
     workchains: int = 0
 
 
 @dataclass
-class BridgeBinaryResponse:
+class WorkerBinaryResponse:
     content: bytes
     headers: dict[str, str] = field(default_factory=dict)
     media_type: str | None = None
 
 
 @dataclass
-class BridgeSnapshot:
-    status: BridgeConnectionState = "offline"
-    url: str = aiida_engine_settings.default_bridge_url
+class WorkerSnapshot:
+    status: WorkerConnectionState = "offline"
     environment: str = aiida_engine_settings.bridge_environment
     mode: str | None = None
     profile: str = "unknown"
     daemon_status: bool = False
-    resources: BridgeResourceCounts = field(default_factory=BridgeResourceCounts)
+    resources: WorkerResourceCounts = field(default_factory=WorkerResourceCounts)
     plugins: list[str] = field(default_factory=list)
     checked_at: float = 0.0
 
@@ -99,8 +100,8 @@ def _infer_bridge_call_name(method: str, path: str) -> str:
     return f"{method.upper()} {compact}"
 
 
-def _emit_bridge_call_event(method: str, path: str) -> None:
-    listener = _bridge_call_listener.get()
+def _emit_worker_call_event(method: str, path: str) -> None:
+    listener = _worker_call_listener.get()
     if listener is None:
         return
     try:
@@ -177,215 +178,23 @@ def _run_async_from_sync(coro: Any, timeout: float = 10.0) -> Any:
         return executor.submit(_run_in_thread).result(timeout=timeout)
 
 
-def _map_request_to_rpc(
-    request_method: str,
-    path: str,
-    params: Mapping[str, Any] | None = None,
-    json: Mapping[str, Any] | None = None,
-    context: Mapping[str, Any] | None = None,
-) -> tuple[str, dict[str, Any]] | None:
-    cleaned_path = str(path or "").strip()
-    if cleaned_path.startswith("/"):
-        cleaned_path = cleaned_path[1:]
-
-    if "?" in cleaned_path:
-        cleaned_path = cleaned_path.split("?", 1)[0]
-
-    parts = [p for p in cleaned_path.split("/") if p]
-    req_params: dict[str, Any] = {}
-    if params:
-        req_params.update(dict(params))
-    if json:
-        req_params.update(dict(json))
-    for field_name, value in (_merge_worker_context(context) or {}).items():
-        req_params.setdefault(field_name, value)
-
-    method_upper = request_method.upper()
-
-    if not parts or parts == ["status"]:
-        return ("runtime.status", req_params)
-    if parts == ["system", "info"]:
-        return ("system.info", req_params)
-    if parts == ["resources"]:
-        return ("resource.summary", req_params)
-    if parts == ["plugins"]:
-        return ("resource.plugins", req_params)
-
-    if parts and parts[0] == "management":
-        sub = parts[1:]
-        if sub == ["profiles"]:
-            return ("profile.list", req_params)
-        if sub == ["profiles", "current-user-info"]:
-            return ("profile.current_user", req_params)
-        if sub == ["profiles", "setup"]:
-            return ("profile.setup", req_params)
-        if sub == ["profiles", "switch"]:
-            return ("profile.switch", req_params)
-        if sub == ["profiles", "load-archive"]:
-            return ("profile.load_archive", req_params)
-        if sub == ["archives", "local"]:
-            return ("archive.list", req_params)
-        if sub == ["statistics"]:
-            return ("system.statistics", req_params)
-        if sub == ["database", "summary"]:
-            return ("system.database_summary", req_params)
-        if sub == ["environments", "default"]:
-            return ("environment.default", req_params)
-        if sub == ["environments", "inspect"]:
-            return ("environment.inspect", req_params)
-        if sub == ["run-python"]:
-            return ("execution.run_python", req_params)
-        if sub == ["infrastructure"]:
-            return ("infrastructure.inspect_v2", req_params)
-        if sub == ["infrastructure", "capabilities"]:
-            return ("infrastructure.capabilities", req_params)
-        if sub == ["infrastructure", "setup"]:
-            return ("infrastructure.setup", req_params)
-        if sub == ["infrastructure", "setup-code"]:
-            return ("infrastructure.setup_code", req_params)
-        if sub == ["infrastructure", "test-connection"]:
-            return ("infrastructure.test_connection", req_params)
-        if sub == ["infrastructure", "ssh-config"]:
-            return ("infrastructure.ssh_config", req_params)
-        if len(sub) == 5 and sub[:3] == ["infrastructure", "computer", "pk"] and sub[4] == "export":
-            req_params["pk"] = int(sub[3])
-            return ("infrastructure.export_computer", req_params)
-        if len(sub) == 4 and sub[:2] == ["infrastructure", "code"] and sub[3] == "export":
-            req_params["pk"] = int(sub[2])
-            return ("infrastructure.export_code", req_params)
-        if len(sub) == 4 and sub[0] == "infrastructure" and sub[1] == "computer" and sub[3] == "codes":
-            req_params["computer_label"] = sub[2]
-            return ("infrastructure.computer_codes", req_params)
-        if sub == ["groups"]:
-            return ("group.list", req_params)
-        if sub == ["groups", "labels"]:
-            return ("group.labels", req_params)
-        if sub == ["groups", "create"]:
-            return ("group.create", req_params)
-        if len(sub) == 2 and sub[0] == "groups" and sub[1].isdigit():
-            req_params["pk"] = int(sub[1])
-            if method_upper == "DELETE":
-                return ("group.delete", req_params)
-        if len(sub) == 2 and sub[0] == "groups":
-            req_params["group_name"] = unquote(sub[1])
-            return ("group.inspect", req_params)
-        if len(sub) == 3 and sub[0] == "groups" and sub[1].isdigit() and sub[2] == "label":
-            req_params["pk"] = int(sub[1])
-            return ("group.rename", req_params)
-        if len(sub) == 3 and sub[0] == "groups" and sub[1].isdigit() and sub[2] == "nodes":
-            req_params["pk"] = int(sub[1])
-            return ("group.add_nodes", req_params)
-        if len(sub) == 4 and sub[0] == "groups" and sub[1].isdigit() and sub[2] == "nodes":
-            req_params["pk"] = int(sub[1])
-            req_params["node_pk"] = int(sub[3])
-            return ("group.remove_node", req_params)
-        if len(sub) == 3 and sub[0] == "groups" and sub[1].isdigit() and sub[2] == "export":
-            req_params["pk"] = int(sub[1])
-            return ("group.export_archive", req_params)
-        if sub == ["recent-nodes"]:
-            return ("node.recent", req_params)
-        if sub == ["recent-processes"]:
-            return ("process.recent", req_params)
-        if sub == ["nodes", "context"]:
-            return ("node.context", req_params)
-        if len(sub) == 3 and sub[0] == "nodes" and sub[1].isdigit() and sub[2] == "soft-delete":
-            req_params["pk"] = int(sub[1])
-            return ("node.soft_delete", req_params)
-        if len(sub) == 3 and sub[0] == "nodes" and sub[1].isdigit() and sub[2] == "script":
-            req_params["pk"] = int(sub[1])
-            return ("node.script", req_params)
-        if len(sub) == 2 and sub[0] == "nodes" and sub[1].isdigit():
-            req_params["pk"] = int(sub[1])
-            return ("node.summary", req_params)
-        if sub == ["source-map"]:
-            return ("source_map", req_params)
-
-    if parts and parts[0] == "submission":
-        sub = parts[1:]
-        if len(sub) == 2 and sub[0] == "spec":
-            req_params["entry_point"] = sub[1]
-            return ("submission.spec", req_params)
-        if sub == ["validate"]:
-            return ("submission.validate", req_params)
-        if sub == ["draft-builder"] or sub == ["builder-draft"]:
-            return ("submission.builder_draft", req_params)
-        if sub == ["submit"]:
-            return ("submission.submit", req_params)
-        if sub == ["workgraph", "submit"]:
-            return ("submission.workgraph.submit", req_params)
-
-    if parts and parts[0] == "process":
-        sub = parts[1:]
-        if len(sub) == 1:
-            req_params["identifier"] = sub[0]
-            return ("process.detail", req_params)
-        if len(sub) == 2 and sub[1] == "workgraph":
-            req_params["identifier"] = sub[0]
-            return ("process.workgraph", req_params)
-        if len(sub) == 2 and sub[1] == "logs":
-            req_params["identifier"] = sub[0]
-            return ("process.logs", req_params)
-        if len(sub) == 2 and sub[1] == "clone-draft":
-            req_params["identifier"] = sub[0]
-            return ("process.clone_draft", req_params)
-
-    if parts and parts[0] == "registry":
-        if parts[1:] == ["list"]:
-            return ("registry.list", req_params)
-        if parts[1:] == ["register"]:
-            return ("registry.register", req_params)
-
-    if len(parts) == 2 and parts[0] == "execute":
-        req_params["script_name"] = unquote(parts[1])
-        return ("registry.execute", req_params)
-
-    if parts and parts[0] == "data":
-        sub = parts[1:]
-        if len(sub) == 2 and sub[0] == "node":
-            req_params["pk"] = int(sub[1])
-            return ("node.summary", req_params)
-        if len(sub) == 2 and sub[0] == "bands":
-            req_params["pk"] = int(sub[1])
-            return ("data.bands", req_params)
-        if len(sub) == 3 and sub[0] == "remote" and sub[2] == "files":
-            req_params["pk"] = int(sub[1])
-            return ("data.remote_files", req_params)
-        if len(sub) >= 4 and sub[0] == "remote" and sub[2] == "files":
-            req_params["pk"] = int(sub[1])
-            req_params["filename"] = unquote("/".join(sub[3:]))
-            return ("data.remote_file", req_params)
-        if len(sub) == 3 and sub[0] == "repository" and sub[2] == "files":
-            req_params["pk"] = int(sub[1])
-            return ("data.repository_files", req_params)
-        if len(sub) >= 4 and sub[0] == "repository" and sub[2] == "files":
-            req_params["pk"] = int(sub[1])
-            req_params["filename"] = unquote("/".join(sub[3:]))
-            return ("data.repository_file", req_params)
-        if len(sub) == 2 and sub[0] == "import":
-            req_params["data_type"] = unquote(sub[1])
-            return ("data.import", req_params)
-
-    return None
 
 
 class AiiDAWorkerClient:
     def __init__(
         self,
-        bridge_url: str,
         *,
         environment: str = aiida_engine_settings.bridge_environment,
         cache_ttl_seconds: float = 10.0,
         infra_cache_ttl_seconds: float = 8.0,
         request_timeout_seconds: float = 2.0,
     ) -> None:
-        normalized_url = (bridge_url or aiida_engine_settings.default_bridge_url).strip()
-        self._bridge_url = normalized_url.rstrip("/")
         self._environment = environment
         self._cache_ttl_seconds = max(1.0, float(cache_ttl_seconds))
         self._infra_cache_ttl_seconds = max(1.0, float(infra_cache_ttl_seconds))
         self._request_timeout_seconds = max(0.2, float(request_timeout_seconds))
 
-        self._snapshot = BridgeSnapshot(url=self._bridge_url, environment=self._environment)
+        self._snapshot = WorkerSnapshot(environment=self._environment)
         self._status_lock = asyncio.Lock()
         self._infrastructure_lock = asyncio.Lock()
         self._infrastructure_cache: dict[str, Any] | None = None
@@ -404,162 +213,83 @@ class AiiDAWorkerClient:
     def worker_mode(self) -> str | None:
         return self._snapshot.mode
 
+    async def call(
+        self,
+        method: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        context: Mapping[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> Any:
+        manager = get_worker_process_manager()
+        if manager is None:
+            raise WorkerOfflineError()
+            
+        req_params: dict[str, Any] = {}
+        if params:
+            req_params.update(dict(params))
+        for field_name, value in (_merge_worker_context(context) or {}).items():
+            req_params.setdefault(field_name, value)
+            
+        _emit_worker_call_event(method, "")
+        try:
+            result = await manager.request(method, req_params, timeout=timeout or self._request_timeout_seconds)
+        except WorkerProcessError as exc:
+            raise self._worker_error_from_worker(exc) from exc
+            
+        if method == "runtime.status":
+            self._mark_online()
+        return result
+
+    def call_sync(
+        self,
+        method: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        context: Mapping[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> Any:
+        return _run_async_from_sync(
+            self.call(method, params=params, context=context, timeout=timeout),
+            timeout=timeout or self._request_timeout_seconds
+        )
+
     @staticmethod
-    def _bridge_error_from_worker(exc: WorkerProcessError) -> BridgeAPIError:
-        return BridgeAPIError(
+    def _worker_error_from_worker(exc: WorkerProcessError) -> WorkerRPCError:
+        return WorkerRPCError(
             status_code=exc.status_code,
             message=exc.message,
             payload=exc.payload,
         )
 
-    async def request_json(
-        self,
-        method: str,
-        path: str,
-        *,
-        params: Mapping[str, Any] | None = None,
-        json: Mapping[str, Any] | None = None,
-        context: Mapping[str, Any] | None = None,
-        timeout: float = 10.0,
-        retries: int | None = None,
-    ) -> Any:
-        method_upper = method.upper()
-        manager = get_worker_process_manager()
-        if manager is None:
-            raise BridgeOfflineError()
-        rpc_target = _map_request_to_rpc(method, path, params=params, json=json, context=context)
-        if rpc_target is None:
-            raise self._unsupported_endpoint_error(self._normalize_request_path(path))
-        rpc_method, rpc_params = rpc_target
-        _emit_bridge_call_event(method_upper, path)
-        try:
-            result = await manager.request(rpc_method, rpc_params, timeout=timeout)
-        except WorkerProcessError as exc:
-            raise self._bridge_error_from_worker(exc) from exc
-        self._record_status_success(self._normalize_request_path(path))
-        return result
 
-    async def request_multipart(
-        self,
-        method: str,
-        path: str,
-        *,
-        files: Mapping[str, Any] | None = None,
-        data: Mapping[str, Any] | None = None,
-        context: Mapping[str, Any] | None = None,
-        timeout: float = 60.0,
-    ) -> Any:
-        rpc_target = _map_request_to_rpc(method, path, params=data, context=context)
-        if rpc_target is None or rpc_target[0] != "data.import":
-            raise self._unsupported_endpoint_error(self._normalize_request_path(path))
-        rpc_method, rpc_params = rpc_target
-        file_value = (files or {}).get("file")
-        if file_value is not None:
-            if not isinstance(file_value, (tuple, list)) or len(file_value) < 2:
-                raise BridgeAPIError(
-                    status_code=422,
-                    message="Invalid file payload",
-                    payload={"error": "Expected (filename, bytes, content_type)"},
-                )
-            filename, content = file_value[0], file_value[1]
-            if hasattr(content, "read"):
-                content = content.read()
-                if asyncio.iscoroutine(content):
-                    content = await content
-            if not isinstance(content, (bytes, bytearray)):
-                raise BridgeAPIError(
-                    status_code=422,
-                    message="Invalid file content",
-                    payload={"error": "Uploaded file content must be bytes"},
-                )
-            rpc_params["filename"] = str(filename or "uploaded_file")
-            rpc_params["content_base64"] = base64.b64encode(bytes(content)).decode("ascii")
-        manager = get_worker_process_manager()
-        if manager is None:
-            raise BridgeOfflineError()
-        _emit_bridge_call_event(method.upper(), path)
-        try:
-            return await manager.request(rpc_method, rpc_params, timeout=timeout)
-        except WorkerProcessError as exc:
-            raise self._bridge_error_from_worker(exc) from exc
-
-    def request_json_sync(
-        self,
-        method: str,
-        path: str,
-        *,
-        params: Mapping[str, Any] | None = None,
-        json: Mapping[str, Any] | None = None,
-        context: Mapping[str, Any] | None = None,
-        timeout: float = 10.0,
-        retries: int | None = None,
-    ) -> Any:
-        method_upper = method.upper()
-        manager = get_worker_process_manager()
-        if manager is None:
-            raise BridgeOfflineError()
-        rpc_target = _map_request_to_rpc(method, path, params=params, json=json, context=context)
-        if rpc_target is None:
-            raise self._unsupported_endpoint_error(self._normalize_request_path(path))
-        rpc_method, rpc_params = rpc_target
-        _emit_bridge_call_event(method_upper, path)
-        try:
-            result = _run_async_from_sync(
-                manager.request(rpc_method, rpc_params, timeout=timeout),
-                timeout=timeout,
-            )
-        except WorkerProcessError as exc:
-            raise self._bridge_error_from_worker(exc) from exc
-        self._record_status_success(self._normalize_request_path(path))
-        return result
-
-    def request_content_sync(
-        self,
-        method: str,
-        path: str,
-        *,
-        params: Mapping[str, Any] | None = None,
-        json: Mapping[str, Any] | None = None,
-        context: Mapping[str, Any] | None = None,
-        timeout: float = 10.0,
-        retries: int | None = None,
-    ) -> BridgeBinaryResponse:
-        payload = self.request_json_sync(
-            method,
-            path,
-            params=params,
-            json=json,
-            context=context,
-            timeout=timeout,
-            retries=retries,
-        )
         if not isinstance(payload, dict):
-            raise BridgeAPIError(500, "Invalid binary response", {"error": "Worker result must be an object"})
+            raise WorkerRPCError(500, "Invalid binary response", {"error": "Worker result must be an object"})
         encoded = payload.get("content_base64")
         if not isinstance(encoded, str):
-            raise BridgeAPIError(500, "Invalid binary response", payload)
+            raise WorkerRPCError(500, "Invalid binary response", payload)
         try:
             content = base64.b64decode(encoded, validate=True)
         except ValueError as exc:
-            raise BridgeAPIError(500, "Invalid binary response", payload) from exc
+            raise WorkerRPCError(500, "Invalid binary response", payload) from exc
         filename = str(payload.get("filename") or "archive.aiida")
         media_type = str(payload.get("media_type") or "application/octet-stream")
-        return BridgeBinaryResponse(
+        return WorkerBinaryResponse(
             content=content,
             headers={"content-type": media_type, "content-disposition": f'attachment; filename="{filename}"'},
             media_type=media_type,
         )
 
-    async def get_status(self, *, force_refresh: bool = False) -> BridgeSnapshot:
+    async def get_status(self, *, force_refresh: bool = False) -> WorkerSnapshot:
         await self._refresh_if_needed(force_refresh=force_refresh)
-        return BridgeSnapshot(
+        return WorkerSnapshot(
             status=self._snapshot.status,
-            url=self._snapshot.url,
+            
             environment=self._snapshot.environment,
             mode=self._snapshot.mode,
             profile=self._snapshot.profile,
             daemon_status=self._snapshot.daemon_status,
-            resources=BridgeResourceCounts(
+            resources=WorkerResourceCounts(
                 computers=self._snapshot.resources.computers,
                 codes=self._snapshot.resources.codes,
                 workchains=self._snapshot.resources.workchains,
@@ -573,57 +303,28 @@ class AiiDAWorkerClient:
         return snapshot.plugins
 
     async def get_system_info(self) -> dict[str, Any]:
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            return await manager.request("system.info", {})
-        payload = await self._fetch_json("/system/info", timeout_seconds=max(8.0, self._request_timeout_seconds))
+        payload = await self.call("system.info", timeout=8.0)
         return payload if isinstance(payload, dict) else {}
 
     async def get_resources(self) -> dict[str, Any]:
-        payload = await self._fetch_json("/resources", timeout_seconds=max(8.0, self._request_timeout_seconds))
+        payload = await self.call("resource.summary", timeout=8.0)
         return payload if isinstance(payload, dict) else {}
 
     async def get_profiles(self) -> dict[str, Any]:
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            return await manager.request("profile.list", {})
-        payload = await self._fetch_json("/management/profiles", timeout_seconds=max(8.0, self._request_timeout_seconds))
+        payload = await self.call("profile.list", timeout=8.0)
         if not isinstance(payload, dict):
             return {"current_profile": None, "default_profile": None, "profiles": []}
         return payload
 
     async def get_current_user_info(self) -> dict[str, Any]:
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            return await manager.request("profile.current_user", {})
-        payload = await self._fetch_json(
-            "/management/profiles/current-user-info",
-            timeout_seconds=max(5.0, self._request_timeout_seconds),
-        )
+        payload = await self.call("profile.current_user", timeout=5.0)
         return payload if isinstance(payload, dict) else {}
 
     async def setup_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            return await manager.request("profile.setup", payload, timeout=30.0)
-        return await self._post_json(
-            "/management/profiles/setup",
-            payload=payload,
-            timeout_seconds=max(30.0, self._request_timeout_seconds),
-        )
+        return await self.call("profile.setup", payload, timeout=30.0)
 
     async def switch_profile(self, profile: str) -> dict[str, Any]:
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            res = await manager.request("profile.switch", {"profile": profile}, timeout=8.0)
-            await self.get_status(force_refresh=True)
-            return res
-        payload = await self._post_json(
-            "/management/profiles/switch",
-            payload={"profile": profile},
-            timeout_seconds=max(8.0, self._request_timeout_seconds),
-            retries=0,
-        )
+        payload = await self.call("profile.switch", {"profile": profile}, timeout=8.0)
         await self.get_status(force_refresh=True)
         if not isinstance(payload, dict):
             return {"status": "switched", "current_profile": profile}
@@ -640,7 +341,7 @@ class AiiDAWorkerClient:
             system_payload = await self.get_system_info()
             resources_payload = await self.get_resources()
             if not isinstance(system_payload, dict) or not isinstance(resources_payload, dict):
-                raise BridgeAPIError(
+                raise WorkerRPCError(
                     status_code=0,
                     message="Bridge returned invalid infrastructure payload",
                     payload={"system": system_payload, "resources": resources_payload},
@@ -666,80 +367,36 @@ class AiiDAWorkerClient:
             return copy.deepcopy(payload)
 
     async def inspect_default_environment(self, *, force_refresh: bool = False) -> dict[str, Any]:
-        payload = await self.request_json(
-            "GET",
-            "/management/environments/default",
-            params={"force_refresh": bool(force_refresh)},
-            timeout=max(8.0, self._request_timeout_seconds),
-            retries=0,
-        )
+        payload = await self.call("environment.default", {"force_refresh": bool(force_refresh)}, timeout=8.0)
         return payload if isinstance(payload, dict) else {}
 
     async def inspect_infrastructure_v2(self) -> list[dict[str, Any]]:
         """Fetch nested infrastructure (Computers -> Codes)."""
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            res = await manager.request("infrastructure.inspect_v2", {})
-            infra = res.get("infrastructure")
-            return infra if isinstance(infra, list) else []
-        payload = await self._fetch_json("/management/infrastructure", timeout_seconds=max(8.0, self._request_timeout_seconds))
-        return payload if isinstance(payload, list) else []
+        res = await self.call("infrastructure.inspect_v2", timeout=8.0)
+        infra = res.get("infrastructure")
+        return infra if isinstance(infra, list) else []
 
     async def get_infrastructure_capabilities(self) -> dict[str, Any]:
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            return await manager.request("infrastructure.capabilities", {})
-        payload = await self._fetch_json(
-            "/management/infrastructure/capabilities",
-            timeout_seconds=max(5.0, self._request_timeout_seconds),
-        )
+        payload = await self.call("infrastructure.capabilities", timeout=5.0)
         return payload if isinstance(payload, dict) else {}
 
     async def setup_infrastructure(self, config: dict[str, Any]) -> dict[str, Any]:
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            return await manager.request("infrastructure.setup", config, timeout=10.0)
-        return await self._post_json(
-            "/management/infrastructure/setup",
-            payload=config,
-            timeout_seconds=max(10.0, self._request_timeout_seconds),
-        )
+        return await self.call("infrastructure.setup", config, timeout=10.0)
 
     async def setup_code(self, payload: CodeSetupRequest) -> dict[str, Any]:
         """Create a new code on a computer."""
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            return await manager.request("infrastructure.setup_code", payload.model_dump(), timeout=10.0)
-        return await self._post_json(
-            "/management/infrastructure/setup-code",
-            payload=payload.model_dump(),
-            timeout_seconds=max(10.0, self._request_timeout_seconds),
-        )
+        return await self.call("infrastructure.setup_code", payload.model_dump(), timeout=10.0)
 
     async def get_computer_codes(self, computer_label: str) -> list[dict[str, Any]]:
         """Fetch detailed codes for a specific computer."""
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            res = await manager.request("infrastructure.computer_codes", {"computer_label": computer_label})
-            codes = res.get("codes")
-            return codes if isinstance(codes, list) else []
-        payload = await self._fetch_json(
-            f"/management/infrastructure/computer/{computer_label}/codes",
-            timeout_seconds=max(8.0, self._request_timeout_seconds),
-        )
-        return payload if isinstance(payload, list) else []
+        res = await self.call("infrastructure.computer_codes", {"computer_label": computer_label}, timeout=8.0)
+        codes = res.get("codes")
+        return codes if isinstance(codes, list) else []
 
     async def get_ssh_config(self) -> list[dict[str, Any]]:
         """Fetch parsed SSH hosts from ~/.ssh/config via aiida-worker."""
-        manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
-            res = await manager.request("infrastructure.ssh_config", {})
-            return res.get("hosts", []) if isinstance(res, dict) else []
-        payload = await self._fetch_json(
-            "/management/infrastructure/ssh-config",
-            timeout_seconds=max(5.0, self._request_timeout_seconds),
-        )
-        return payload if isinstance(payload, list) else []
+        res = await self.call("infrastructure.ssh_config", timeout=5.0)
+        return res.get("hosts", []) if isinstance(res, dict) else []
 
     async def _refresh_if_needed(self, *, force_refresh: bool) -> None:
         if not force_refresh and self._is_cache_fresh():
@@ -800,35 +457,9 @@ class AiiDAWorkerClient:
             logger.info("[AiiDA Worker] Connected over managed stdio JSON-RPC")
             self._logged_first_handshake = True
 
-    async def _fetch_json(
-        self,
-        path: str,
-        *,
-        timeout_seconds: float | None = None,
-        retries: int | None = None,
-    ) -> Any:
-        return await self.request_json(
-            "GET",
-            path,
-            timeout=timeout_seconds or self._request_timeout_seconds,
-            retries=retries,
-        )
 
-    async def _post_json(
-        self,
-        path: str,
-        *,
-        payload: dict[str, Any] | None = None,
-        timeout_seconds: float | None = None,
-        retries: int | None = 0,
-    ) -> Any:
-        return await self.request_json(
-            "POST",
-            path,
-            json=payload or {},
-            timeout=timeout_seconds or self._request_timeout_seconds,
-            retries=retries,
-        )
+
+
 
     def _mark_online(self) -> None:
         self._snapshot.status = "online"
@@ -848,12 +479,12 @@ class AiiDAWorkerClient:
                 "mode": None,
                 "profile": "unknown",
                 "daemon_status": False,
-                "resources": BridgeResourceCounts(),
+                "resources": WorkerResourceCounts(),
                 "plugins": [],
             }
 
         raw_status = str(payload.get("status") or "online").strip().lower()
-        status: BridgeConnectionState = "offline" if raw_status in {
+        status: WorkerConnectionState = "offline" if raw_status in {
             "offline",
             "error",
             "failed",
@@ -885,8 +516,8 @@ class AiiDAWorkerClient:
             normalized = f"/{normalized}"
         return normalized
 
-    def _unsupported_endpoint_error(self, path: str) -> BridgeAPIError:
-        return BridgeAPIError(
+    def _unsupported_endpoint_error(self, path: str) -> WorkerRPCError:
+        return WorkerRPCError(
             status_code=404,
             message="Worker endpoint not supported",
             payload={"error": "Worker capability is not mapped to the stdio protocol", "path": path},
@@ -917,8 +548,8 @@ class AiiDAWorkerClient:
                     return False
         return False
 
-    def _extract_resource_counts(self, payload: dict[str, Any]) -> BridgeResourceCounts:
-        counts = BridgeResourceCounts()
+    def _extract_resource_counts(self, payload: dict[str, Any]) -> WorkerResourceCounts:
+        counts = WorkerResourceCounts()
 
         counts_payload = payload.get("counts")
         if isinstance(counts_payload, dict):
@@ -1086,7 +717,6 @@ def get_aiida_worker_client() -> AiiDAWorkerClient:
     global _aiida_worker_client
     if _aiida_worker_client is None:
         _aiida_worker_client = AiiDAWorkerClient(
-            bridge_url=aiida_engine_settings.resolved_bridge_url,
             environment=aiida_engine_settings.bridge_environment,
         )
     return _aiida_worker_client
@@ -1099,14 +729,14 @@ def bridge_url() -> str:
     return aiida_worker_client.bridge_url
 
 
-def set_bridge_call_listener(
-    listener: BridgeCallListener | None,
-) -> contextvars.Token[BridgeCallListener | None]:
-    return _bridge_call_listener.set(listener)
+def set_worker_call_listener(
+    listener: WorkerCallListener | None,
+) -> contextvars.Token[WorkerCallListener | None]:
+    return _worker_call_listener.set(listener)
 
 
-def reset_bridge_call_listener(token: contextvars.Token[BridgeCallListener | None]) -> None:
-    _bridge_call_listener.reset(token)
+def reset_worker_call_listener(token: contextvars.Token[WorkerCallListener | None]) -> None:
+    _worker_call_listener.reset(token)
 
 
 def set_worker_request_context(
@@ -1120,7 +750,7 @@ def reset_worker_request_context(token: contextvars.Token[dict[str, str] | None]
     _worker_request_context.reset(token)
 
 
-async def request_json(
+async def worker_call(
     method: str,
     path: str,
     *,
@@ -1130,7 +760,7 @@ async def request_json(
     timeout: float = 10.0,
     retries: int | None = None,
 ) -> Any:
-    return await aiida_worker_client.request_json(
+    return await aiida_worker_client.worker_call(
         method,
         path,
         params=params,
@@ -1141,7 +771,7 @@ async def request_json(
     )
 
 
-def request_json_sync(
+def worker_call_sync(
     method: str,
     path: str,
     *,
@@ -1151,7 +781,7 @@ def request_json_sync(
     timeout: float = 10.0,
     retries: int | None = None,
 ) -> Any:
-    return aiida_worker_client.request_json_sync(
+    return aiida_worker_client.worker_call_sync(
         method,
         path,
         params=params,
@@ -1171,7 +801,7 @@ def request_content_sync(
     context: Mapping[str, Any] | None = None,
     timeout: float = 10.0,
     retries: int | None = None,
-) -> BridgeBinaryResponse:
+) -> WorkerBinaryResponse:
     return aiida_worker_client.request_content_sync(
         method,
         path,
@@ -1184,9 +814,9 @@ def request_content_sync(
 
 
 def format_bridge_error(exc: Exception) -> dict[str, Any]:
-    if isinstance(exc, BridgeOfflineError):
+    if isinstance(exc, WorkerOfflineError):
         return {"error": OFFLINE_WORKER_MESSAGE}
-    if isinstance(exc, BridgeAPIError):
+    if isinstance(exc, WorkerRPCError):
         return {
             "error": exc.message,
             "status_code": exc.status_code,
@@ -1198,18 +828,18 @@ def format_bridge_error(exc: Exception) -> dict[str, Any]:
 __all__ = [
     "DEFAULT_BRIDGE_URL",
     "OFFLINE_WORKER_MESSAGE",
-    "BridgeAPIError",
-    "BridgeCallListener",
-    "BridgeOfflineError",
-    "BridgeConnectionState",
-    "BridgeResourceCounts",
-    "BridgeSnapshot",
+    "WorkerRPCError",
+    "WorkerCallListener",
+    "WorkerOfflineError",
+    "WorkerConnectionState",
+    "WorkerResourceCounts",
+    "WorkerSnapshot",
     "AiiDAWorkerClient",
     "get_aiida_worker_client",
     "aiida_worker_client",
     "bridge_url",
-    "set_bridge_call_listener",
-    "reset_bridge_call_listener",
+    "set_worker_call_listener",
+    "reset_worker_call_listener",
     "request_json",
     "request_json_sync",
     "format_bridge_error",

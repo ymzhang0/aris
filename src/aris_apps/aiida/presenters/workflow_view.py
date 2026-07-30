@@ -881,7 +881,7 @@ def _query_available_codes(required_plugin: str | None) -> list[dict[str, Any]]:
         return []
 
     try:
-        payload = aiida_worker_client.request_json_sync("GET", "/resources", timeout=0.8, retries=0)
+        payload = aiida_worker_client.call_sync("resource.summary", timeout=0.8)
     except Exception:
         return []
     if not isinstance(payload, dict):

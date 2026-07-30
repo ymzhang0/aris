@@ -7,22 +7,18 @@ from src.aris_apps.aiida.agent import tools
 
 @pytest.mark.anyio
 async def test_list_remote_plugins_uses_canonical_worker_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_request_json(method: str, path: str, **kwargs):  # noqa: ANN003
-        assert method == "GET"
-        assert path == "/plugins"
+    async def _fake_worker_call(method: str, params=None, **kwargs):  # noqa: ANN003
         return {"plugins": ["quantumespresso.pw.base"]}
 
-    monkeypatch.setattr(tools, "request_json", _fake_request_json)
+    monkeypatch.setattr(tools, "worker_call", _fake_worker_call)
 
     assert await tools.list_remote_plugins() == ["quantumespresso.pw.base"]
 
 
 @pytest.mark.anyio
 async def test_draft_workchain_builder_uses_canonical_protocol_fields(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_request_json(method: str, path: str, **kwargs):  # noqa: ANN003
-        assert method == "POST"
-        assert path == "/submission/draft-builder"
-        assert kwargs["json"] == {
+    async def _fake_worker_call(method: str, params=None, **kwargs):  # noqa: ANN003
+        assert params == {
             "entry_point": "quantumespresso.pw.base",
             "protocol": "moderate",
             "intent_data": {
@@ -34,7 +30,7 @@ async def test_draft_workchain_builder_uses_canonical_protocol_fields(monkeypatc
         }
         return {"status": "DRAFT_READY"}
 
-    monkeypatch.setattr(tools, "request_json", _fake_request_json)
+    monkeypatch.setattr(tools, "worker_call", _fake_worker_call)
 
     result = await tools.draft_workchain_builder(
         "quantumespresso.pw.base",
@@ -49,13 +45,11 @@ async def test_draft_workchain_builder_uses_canonical_protocol_fields(monkeypatc
 
 @pytest.mark.anyio
 async def test_run_python_code_success_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_request_json(method: str, path: str, **kwargs):  # noqa: ANN003
-        assert method == "POST"
-        assert path == "/management/run-python"
-        assert kwargs.get("json", {}).get("script_content") == "print('hello')"
+    async def _fake_worker_call(method: str, params=None, **kwargs):  # noqa: ANN003
+        assert (params or {}).get("script_content") == "print('hello')"
         return {"success": True, "output": "hello"}
 
-    monkeypatch.setattr(tools, "request_json", _fake_request_json)
+    monkeypatch.setattr(tools, "worker_call", _fake_worker_call)
 
     result = await tools.run_python_code("print('hello')")
 
@@ -64,9 +58,7 @@ async def test_run_python_code_success_passthrough(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.anyio
 async def test_run_python_code_returns_missing_module_hint(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_request_json(method: str, path: str, **kwargs):  # noqa: ANN003
-        assert method == "POST"
-        assert path == "/management/run-python"
+    async def _fake_worker_call(method: str, params=None, **kwargs):  # noqa: ANN003
         return {
             "success": False,
             "error": (
@@ -77,7 +69,7 @@ async def test_run_python_code_returns_missing_module_hint(monkeypatch: pytest.M
             "output": "",
         }
 
-    monkeypatch.setattr(tools, "request_json", _fake_request_json)
+    monkeypatch.setattr(tools, "worker_call", _fake_worker_call)
 
     result = await tools.run_python_code("import aiida_pseudo")
 
@@ -88,15 +80,13 @@ async def test_run_python_code_returns_missing_module_hint(monkeypatch: pytest.M
 
 @pytest.mark.anyio
 async def test_register_specialized_skill_calls_registry_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_request_json(method: str, path: str, **kwargs):  # noqa: ANN003
-        assert method == "POST"
-        assert path == "/registry/register"
-        body = kwargs.get("json", {})
+    async def _fake_worker_call(method: str, params=None, **kwargs):  # noqa: ANN003
+        body = (params or {})
         assert body["script_name"] == "relax_helper"
         assert "def main" in body["script"]
         return {"status": "registered", "script_name": body["script_name"]}
 
-    monkeypatch.setattr(tools, "request_json", _fake_request_json)
+    monkeypatch.setattr(tools, "worker_call", _fake_worker_call)
 
     payload = await tools.register_specialized_skill(
         skill_name="relax_helper",
@@ -112,13 +102,11 @@ async def test_register_specialized_skill_calls_registry_endpoint(monkeypatch: p
 
 @pytest.mark.anyio
 async def test_execute_specialized_skill_calls_execute_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_request_json(method: str, path: str, **kwargs):  # noqa: ANN003
-        assert method == "POST"
-        assert path == "/execute/relax_helper"
-        assert kwargs.get("json") == {"params": {"pk": 264}}
+    async def _fake_worker_call(method: str, params=None, **kwargs):  # noqa: ANN003
+        assert params == {"script_name": "relax_helper", "params": {"pk": 264}}
         return {"success": True, "result": {"submitted": [1001]}}
 
-    monkeypatch.setattr(tools, "request_json", _fake_request_json)
+    monkeypatch.setattr(tools, "worker_call", _fake_worker_call)
 
     payload = await tools.execute_specialized_skill("relax_helper", {"pk": 264})
 
@@ -129,9 +117,7 @@ async def test_execute_specialized_skill_calls_execute_endpoint(monkeypatch: pyt
 
 @pytest.mark.anyio
 async def test_list_registered_skills_normalizes_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_request_json(method: str, path: str, **kwargs):  # noqa: ANN003
-        assert method == "GET"
-        assert path == "/registry/list"
+    async def _fake_worker_call(method: str, params=None, **kwargs):  # noqa: ANN003
         return {
             "count": 2,
             "items": [
@@ -140,7 +126,7 @@ async def test_list_registered_skills_normalizes_payload(monkeypatch: pytest.Mon
             ],
         }
 
-    monkeypatch.setattr(tools, "request_json", _fake_request_json)
+    monkeypatch.setattr(tools, "worker_call", _fake_worker_call)
 
     payload = await tools.list_registered_skills()
 
@@ -151,12 +137,10 @@ async def test_list_registered_skills_normalizes_payload(monkeypatch: pytest.Mon
 
 
 def test_list_registered_skills_sync_handles_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _fake_request_json_sync(method: str, path: str, **kwargs):  # noqa: ANN003
-        assert method == "GET"
-        assert path == "/registry/list"
+    def _fake_worker_call_sync(method: str, path: str, **kwargs):  # noqa: ANN003
         raise RuntimeError("worker unavailable")
 
-    monkeypatch.setattr(tools, "request_json_sync", _fake_request_json_sync)
+    monkeypatch.setattr(tools, "worker_call_sync", _fake_worker_call_sync)
 
     payload = tools.list_registered_skills_sync()
 

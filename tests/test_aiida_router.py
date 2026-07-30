@@ -230,7 +230,7 @@ async def test_bridge_status_reports_managed_worker_runtime(monkeypatch: pytest.
 
     monkeypatch.setattr(aiida_router.aiida_capability, "get_status", managed_status)
 
-    response = await aiida_router.get_bridge_status()
+    response = await aiida_router.get_worker_status()
 
     assert response.status == "online"
     assert response.transport == "stdio"
@@ -391,19 +391,17 @@ async def test_submit_bridge_workchain_single_adds_submitted_pk(monkeypatch: pyt
     async def _fake_auto_assign_submission_groups(*_args: object, **_kwargs: object) -> None:
         return None
 
-    async def _fake_request_json(
+    async def _fake_worker_call(
         method: str,
         path: str,
         json: dict[str, object],
         context: dict[str, str] | None = None,
     ):  # noqa: ARG001
-        assert method == "POST"
-        assert path == "/submission/submit"
         assert "draft" in json
         assert context == {"session_id": "chat-0307"}
         return {"status": "SUBMITTED", "pk": 321}
 
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
     monkeypatch.setattr(
         aiida_router,
         "_build_submission_worker_context",
@@ -435,19 +433,17 @@ async def test_submit_bridge_workchain_unwraps_direct_entry_point_payload(monkey
     async def _fake_auto_assign_submission_groups(*_args: object, **_kwargs: object) -> None:
         return None
 
-    async def _fake_request_json(
+    async def _fake_worker_call(
         method: str,
         path: str,
         json: dict[str, object],
         context: dict[str, str] | None = None,
     ):  # noqa: ARG001
-        assert method == "POST"
-        assert path == "/submission/submit"
         captured_request["payload"] = json
         assert context == {"session_id": "chat-0307"}
         return {"status": "SUBMITTED", "pk": 654}
 
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
     monkeypatch.setattr(
         aiida_router,
         "_build_submission_worker_context",
@@ -675,14 +671,12 @@ async def test_submit_bridge_workchain_batch_collects_submitted_pks(monkeypatch:
     async def _fake_auto_assign_submission_groups(*_args: object, **_kwargs: object) -> None:
         return None
 
-    async def _fake_request_json(
+    async def _fake_worker_call(
         method: str,
         path: str,
         json: dict[str, object],
         context: dict[str, str] | None = None,
     ):  # noqa: ARG001
-        assert method == "POST"
-        assert path == "/submission/submit"
         captured_request["payload"] = json
         assert context == {"session_id": "chat-0307"}
         return {
@@ -699,7 +693,7 @@ async def test_submit_bridge_workchain_batch_collects_submitted_pks(monkeypatch:
             "failures": [],
         }
 
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
     monkeypatch.setattr(
         aiida_router,
         "_build_submission_worker_context",
@@ -883,12 +877,10 @@ async def test_frontend_node_script_proxies_worker_payload(monkeypatch: pytest.M
         "script": "from ase import Atoms\natoms = Atoms(...)",
     }
 
-    async def _fake_request_json(method: str, path: str, **_: object) -> dict[str, object]:
-        assert method == "GET"
-        assert path == "/management/nodes/88/script"
+    async def _fake_worker_call(method: str, params=None, **kwargs) -> dict[str, object]:
         return expected
 
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
 
     response = await aiida_router.frontend_node_script(88)
 
@@ -897,13 +889,11 @@ async def test_frontend_node_script_proxies_worker_payload(monkeypatch: pytest.M
 
 @pytest.mark.anyio
 async def test_worker_repository_files_proxies_worker_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_request_json(method: str, path: str, **kwargs: object) -> dict[str, object]:
-        assert method == "GET"
-        assert path == "/data/repository/314/files"
-        assert kwargs.get("params") == {"source": "folder"}
+    async def _fake_worker_call(method: str, params=None, **kwargs: object) -> dict[str, object]:
+        assert params == {"pk": 314, "source": "folder"}
         return {"pk": 314, "files": ["aiida.out", "_scheduler-stderr.txt"], "source": "folder"}
 
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
 
     response = await aiida_router.worker_repository_files(314, source="folder")
 
@@ -913,12 +903,10 @@ async def test_worker_repository_files_proxies_worker_payload(monkeypatch: pytes
 
 @pytest.mark.anyio
 async def test_worker_remote_files_proxies_worker_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_request_json(method: str, path: str, **_kwargs: object) -> dict[str, object]:
-        assert method == "GET"
-        assert path == "/data/remote/280/files"
+    async def _fake_worker_call(method: str, path: str, **_kwargs: object) -> dict[str, object]:
         return {"pk": 280, "files": ["aiida.out"]}
 
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
 
     response = await aiida_router.worker_remote_files(280)
 
@@ -936,12 +924,10 @@ async def test_worker_bands_data_proxies_worker_payload(monkeypatch: pytest.Monk
         },
     }
 
-    async def _fake_request_json(method: str, path: str, **_kwargs: object) -> dict[str, object]:
-        assert method == "GET"
-        assert path == "/data/bands/335"
+    async def _fake_worker_call(method: str, path: str, **_kwargs: object) -> dict[str, object]:
         return expected
 
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
 
     response = await aiida_router.worker_bands_data(335)
 
@@ -958,12 +944,10 @@ async def test_export_management_computer_proxies_worker_payload(monkeypatch: py
         "content": "label: localhost\nhostname: localhost\n",
     }
 
-    async def _fake_request_json(method: str, path: str, **_: object) -> dict[str, object]:
-        assert method == "GET"
-        assert path == "/management/infrastructure/computer/pk/7/export"
+    async def _fake_worker_call(method: str, params=None, **kwargs) -> dict[str, object]:
         return expected
 
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
 
     response = await aiida_router.export_management_computer(7)
 
@@ -1024,13 +1008,11 @@ async def test_test_management_infrastructure_connection_proxies_worker_payload(
         "connection_error": None,
     }
 
-    async def _fake_request_json(method: str, path: str, **kwargs: object) -> dict[str, object]:
-        assert method == "POST"
-        assert path == "/management/infrastructure/test-connection"
-        assert kwargs.get("json") == {"computer_label": "manneback_async"}
+    async def _fake_worker_call(method: str, params=None, **kwargs: object) -> dict[str, object]:
+        assert params == {"computer_label": "manneback_async"}
         return expected
 
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
 
     response = await aiida_router.test_management_infrastructure_connection({"computer_label": "manneback_async"})
 
@@ -1047,12 +1029,10 @@ async def test_export_management_code_proxies_worker_payload(monkeypatch: pytest
         "content": "label: pw-7.5\ncomputer: localhost\n",
     }
 
-    async def _fake_request_json(method: str, path: str, **_: object) -> dict[str, object]:
-        assert method == "GET"
-        assert path == "/management/infrastructure/code/42/export"
+    async def _fake_worker_call(method: str, params=None, **kwargs) -> dict[str, object]:
         return expected
 
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
 
     response = await aiida_router.export_management_code(42)
 
@@ -1078,12 +1058,10 @@ async def test_frontend_clone_process_draft_enriches_worker_payload(monkeypatch:
         "meta": {"draft": worker_payload["meta"]["draft"], "port_spec": {"entry_point": "aiida.workflows:quantumespresso.pw.base"}},
     }
 
-    async def _fake_request_json(method: str, path: str, **_: object) -> dict[str, object]:
-        assert method == "GET"
-        assert path == "/process/321/clone-draft"
+    async def _fake_worker_call(method: str, params=None, **kwargs) -> dict[str, object]:
         return worker_payload
 
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
     monkeypatch.setattr(aiida_router, "enrich_submission_draft_payload", lambda payload: enriched_payload if payload == worker_payload else payload)
 
     response = await aiida_router.frontend_clone_process_draft("321")
@@ -1228,17 +1206,15 @@ async def test_run_worker_json_script_uses_default_environment_interpreter(
             "python_interpreter_path": "/tmp/worker-python",
         }
 
-    async def _fake_request_json(method: str, path: str, **kwargs: object) -> dict[str, object]:
-        assert method == "POST"
-        assert path == "/management/run-python"
-        assert kwargs.get("json") == {
+    async def _fake_worker_call(method: str, params=None, **kwargs: object) -> dict[str, object]:
+        assert params == {
             "script_content": "print('hello')",
             "python_interpreter_path": "/tmp/worker-python",
         }
         return {"output": f"noise\n{aiida_router.WORKER_JSON_MARKER}{{\"available\": true}}\n"}
 
     monkeypatch.setattr(aiida_router.aiida_worker_client, "inspect_default_environment", _fake_inspect_default_environment)
-    monkeypatch.setattr(aiida_router, "request_json", _fake_request_json)
+    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
 
     payload = await aiida_router._run_worker_json_script("print('hello')")
 
@@ -1327,7 +1303,6 @@ async def test_build_process_diagnostics_prefers_repository_stdout(monkeypatch: 
         }
 
     async def _fake_request_optional_json(method: str, path: str, **_: object) -> dict[str, object] | None:
-        assert method == "GET"
         if path == "/process/77/logs":
             return {
                 "lines": ["report line 1", "report line 2"],

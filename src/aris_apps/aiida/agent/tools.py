@@ -16,8 +16,8 @@ from loguru import logger
 
 from src.aris_apps.aiida.client import (
     OFFLINE_WORKER_MESSAGE,
-    BridgeAPIError,
-    BridgeOfflineError,
+    WorkerRPCError,
+    WorkerOfflineError,
     aiida_worker_client,
     format_bridge_error,
 )
@@ -282,7 +282,7 @@ def _archive_script_finalize(
     )
 
 
-async def request_json(
+async def worker_call(
     method: str,
     path: str,
     *,
@@ -293,7 +293,7 @@ async def request_json(
 ) -> Any:
     """Tool-side worker JSON helper backed by unified singleton client."""
     retry_budget = 2 if method.upper() == "GET" else 0
-    return await aiida_worker_client.request_json(
+    return await aiida_worker_client.worker_call(
         method,
         path,
         params=params,
@@ -304,7 +304,7 @@ async def request_json(
     )
 
 
-def request_json_sync(
+def worker_call_sync(
     method: str,
     path: str,
     *,
@@ -316,7 +316,7 @@ def request_json_sync(
 ) -> Any:
     """Sync JSON helper for startup-time bridge calls."""
     retry_budget = 2 if retries is None and method.upper() == "GET" else retries
-    return aiida_worker_client.request_json_sync(
+    return aiida_worker_client.worker_call_sync(
         method,
         path,
         params=params,
@@ -330,9 +330,9 @@ def request_json_sync(
 async def list_system_profiles() -> dict[str, Any] | str:
     """List configured profiles from the worker (`GET /management/profiles`)."""
     try:
-        payload = await request_json("GET", "/management/profiles")
+        payload = await worker_call("profile.list")
         return payload if isinstance(payload, dict) else {"profiles": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -341,12 +341,12 @@ async def list_system_profiles() -> dict[str, Any] | str:
 async def list_local_archives(path: str = ".") -> list[str] | dict[str, Any] | str:
     """List local `.aiida`/`.zip` archives visible to worker (`GET /management/archives/local`)."""
     try:
-        payload = await request_json("GET", "/management/archives/local", params={"path": path})
+        payload = await worker_call("profile.load_archive", {"path": path})
         if isinstance(payload, dict):
             archives = payload.get("archives")
             return archives if isinstance(archives, list) else payload
         return payload
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -355,9 +355,9 @@ async def list_local_archives(path: str = ".") -> list[str] | dict[str, Any] | s
 async def switch_profile(profile: str) -> dict[str, Any] | str:
     """Switch active profile in worker (`POST /management/profiles/switch`)."""
     try:
-        payload = await request_json("POST", "/management/profiles/switch", json={"profile": profile})
+        payload = await worker_call("profile.switch", {"profile": profile})
         return payload if isinstance(payload, dict) else {"status": "switched", "result": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -366,9 +366,9 @@ async def switch_profile(profile: str) -> dict[str, Any] | str:
 async def load_archive_profile(filepath: str) -> dict[str, Any] | str:
     """Load an archive-backed profile in worker (`POST /management/profiles/load-archive`)."""
     try:
-        payload = await request_json("POST", "/management/profiles/load-archive", json={"path": filepath})
+        payload = await worker_call("profile.load_archive", {"path": filepath})
         return payload if isinstance(payload, dict) else {"status": "loaded", "result": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -378,9 +378,9 @@ async def get_unified_source_map(target: str | None = None) -> dict[str, Any] | 
     """Build profile/archive group map from worker (`GET /management/source-map`)."""
     params = {"target": target} if target else None
     try:
-        payload = await request_json("GET", "/management/source-map", params=params)
+        payload = await worker_call("source_map", params)
         return payload if isinstance(payload, dict) else {"result": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -396,9 +396,9 @@ async def get_statistics(profile_name: str | None = None) -> dict[str, Any] | st
             return switched
 
     try:
-        payload = await request_json("GET", "/management/statistics")
+        payload = await worker_call("system.statistics")
         return payload if isinstance(payload, dict) else {"statistics": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -408,12 +408,12 @@ async def list_groups(search_string: str | None = None) -> list[dict[str, Any]] 
     """List groups from worker (`GET /management/groups`) with optional filter."""
     params = {"search": search_string} if search_string else None
     try:
-        payload = await request_json("GET", "/management/groups", params=params)
+        payload = await worker_call("group.list", params)
         if isinstance(payload, dict):
             items = payload.get("items")
             return items if isinstance(items, list) else payload
         return payload
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -422,9 +422,9 @@ async def list_groups(search_string: str | None = None) -> list[dict[str, Any]] 
 async def get_database_summary() -> dict[str, Any] | str:
     """Get compact DB health summary (`GET /management/database/summary`)."""
     try:
-        payload = await request_json("GET", "/management/database/summary")
+        payload = await worker_call("system.database_summary")
         return payload if isinstance(payload, dict) else {"summary": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -433,12 +433,12 @@ async def get_database_summary() -> dict[str, Any] | str:
 async def get_recent_processes(limit: int = 5) -> list[dict[str, Any]] | dict[str, Any] | str:
     """Fetch recent processes (`GET /management/recent-processes`)."""
     try:
-        payload = await request_json("GET", "/management/recent-processes", params={"limit": int(limit)})
+        payload = await worker_call("process.recent", {"limit": int(limit)})
         if isinstance(payload, dict):
             items = payload.get("items")
             return items if isinstance(items, list) else payload
         return payload
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -448,12 +448,12 @@ async def list_group_labels(search_string: str | None = None) -> list[str] | dic
     """List group labels for dropdowns (`GET /management/groups/labels`)."""
     params = {"search": search_string} if search_string else None
     try:
-        payload = await request_json("GET", "/management/groups/labels", params=params)
+        payload = await worker_call("group.labels", params)
         if isinstance(payload, dict):
             items = payload.get("items")
             return items if isinstance(items, list) else payload
         return payload
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -472,12 +472,12 @@ async def get_recent_nodes(
         params["node_type"] = node_type
 
     try:
-        payload = await request_json("GET", "/management/recent-nodes", params=params)
+        payload = await worker_call("node.recent", params)
         if isinstance(payload, dict):
             items = payload.get("items")
             return items if isinstance(items, list) else payload
         return payload
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -486,13 +486,13 @@ async def get_recent_nodes(
 async def inspect_group(group_name: str, limit: int = 20) -> dict[str, Any] | str:
     """Inspect one group (`GET /management/groups/{group_name}`) with node attributes/extras."""
     try:
-        payload = await request_json(
+        payload = await worker_call(
             "GET",
             f"/management/groups/{group_name}",
             params={"limit": int(limit)},
         )
         return payload if isinstance(payload, dict) else {"group": group_name, "result": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -516,7 +516,7 @@ async def fetch_group_processes(
 ) -> list[dict[str, Any]] | dict[str, Any] | str:
     """Fetch recent process-like nodes constrained to a group (`GET /management/recent-nodes`)."""
     try:
-        payload = await request_json(
+        payload = await worker_call(
             "GET",
             "/management/recent-nodes",
             params={"limit": int(limit), "group_label": group_label, "node_type": "WorkChainNode"},
@@ -525,7 +525,7 @@ async def fetch_group_processes(
             items = payload.get("items")
             return items if isinstance(items, list) else payload
         return payload
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -542,9 +542,9 @@ async def create_group(group_label: str) -> dict[str, Any] | str:
 async def inspect_process(identifier: str) -> dict[str, Any] | str:
     """Inspect any ProcessNode by PK/UUID (`GET /process/{identifier}`)."""
     try:
-        payload = await request_json("GET", f"/process/{identifier}")
+        payload = await worker_call("process.detail", {"identifier": identifier})
         return payload if isinstance(payload, dict) else {"result": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -553,9 +553,9 @@ async def inspect_process(identifier: str) -> dict[str, Any] | str:
 async def get_process_log(pk: int) -> dict[str, Any] | str:
     """Fetch merged reports/stderr for one process (`GET /process/{pk}/logs`)."""
     try:
-        payload = await request_json("GET", f"/process/{int(pk)}/logs")
+        payload = await worker_call("process.logs", {"identifier": int(pk)})
         return payload if isinstance(payload, dict) else {"logs": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -564,12 +564,12 @@ async def get_process_log(pk: int) -> dict[str, Any] | str:
 async def fetch_recent_processes(limit: int = 15) -> list[dict[str, Any]] | dict[str, Any] | str:
     """Fetch recent processes for quick status snapshots."""
     try:
-        payload = await request_json("GET", "/management/recent-processes", params={"limit": int(limit)})
+        payload = await worker_call("process.recent", {"limit": int(limit)})
         if isinstance(payload, dict):
             items = payload.get("items")
             return items if isinstance(items, list) else payload
         return payload
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -602,9 +602,9 @@ def _normalize_plugins_payload(payload: Any) -> list[str]:
 async def list_remote_plugins() -> list[str] | str:
     """Source of truth for available WorkChains (`GET /plugins`)."""
     try:
-        payload = await request_json("GET", "/plugins")
+        payload = await worker_call("resource.plugins")
         return _normalize_plugins_payload(payload)
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -617,9 +617,9 @@ async def get_remote_workchain_spec(entry_point: str) -> dict[str, Any] | str:
         return "Please provide a valid WorkChain entry point name."
 
     try:
-        payload = await request_json("GET", f"/submission/spec/{quote(cleaned, safe='')}")
+        payload = await worker_call("submission.spec", {"entry_point": quote(cleaned, safe='')})
         return payload if isinstance(payload, dict) else {"spec": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -629,7 +629,7 @@ async def inspect_lab_infrastructure() -> dict[str, Any] | str:
     """Inspect worker profile/daemon/computers/codes before submission."""
     try:
         return await aiida_worker_client.inspect_infrastructure()
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -663,9 +663,9 @@ async def draft_workchain_builder(
     }
 
     try:
-        payload = await request_json("POST", "/submission/draft-builder", json=body)
+        payload = await worker_call("submission.builder_draft", body)
         return payload if isinstance(payload, dict) else {"draft": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -676,9 +676,9 @@ async def submit_workchain_builder(
 ) -> dict[str, Any] | str:
     """Submit one or many previously drafted builders (`POST /submission/submit`)."""
     try:
-        payload = await request_json("POST", "/submission/submit", json={"draft": draft_data})
+        payload = await worker_call("submission.submit", {"draft": draft_data})
         return payload if isinstance(payload, dict) else {"result": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -687,9 +687,9 @@ async def submit_workchain_builder(
 async def validate_workchain_builder(draft_data: dict[str, Any]) -> dict[str, Any] | str:
     """Validate a previously drafted builder (`POST /submission/validate`)."""
     try:
-        payload = await request_json("POST", "/submission/validate", json={"draft": draft_data})
+        payload = await worker_call("submission.validate", {"draft": draft_data})
         return payload if isinstance(payload, dict) else {"result": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -727,10 +727,7 @@ async def run_python_code(
     _ = turn_id
     try:
         # Custom worker scripts can be substantially slower than regular bridge calls.
-        payload = await request_json(
-            "POST",
-            "/management/run-python",
-            json={"script_content": script},
+        payload = await worker_call("process.run_python", {"script_content": script},
             timeout=180.0,
         )
         if isinstance(payload, dict):
@@ -775,7 +772,7 @@ async def run_python_code(
         payload_text = str(payload)
         created_pks = _extract_created_pks(payload, payload_text)
         return payload_text
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -808,9 +805,9 @@ def _normalize_skill_registry_payload(payload: Any) -> dict[str, Any]:
 async def list_registered_skills() -> dict[str, Any] | str:
     """List persistent worker-side specialized scripts (`GET /registry/list`)."""
     try:
-        payload = await request_json("GET", "/registry/list")
+        payload = await worker_call("registry.list")
         return _normalize_skill_registry_payload(payload)
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -819,9 +816,9 @@ async def list_registered_skills() -> dict[str, Any] | str:
 def list_registered_skills_sync() -> dict[str, Any]:
     """Synchronous variant for startup-time skill discovery."""
     try:
-        payload = request_json_sync("GET", "/registry/list", timeout=6.0, retries=1)
+        payload = worker_call_sync("registry.list", timeout=6.0)
         return _normalize_skill_registry_payload(payload)
-    except BridgeAPIError as exc:
+    except WorkerRPCError as exc:
         if int(exc.status_code or 0) == 404:
             return {"count": 0, "items": []}
         logger.warning(log_event("aiida.worker.registry.list.failed", error=str(exc)[:220]))
@@ -846,9 +843,9 @@ async def register_specialized_skill(
         "overwrite": bool(overwrite),
     }
     try:
-        payload = await request_json("POST", "/registry/register", json=body, timeout=30.0)
+        payload = await worker_call("registry.register", body, timeout=30.0)
         return payload if isinstance(payload, dict) else {"result": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -860,14 +857,9 @@ async def execute_specialized_skill(skill_name: str, args: Mapping[str, Any] | N
     if not cleaned:
         return {"error": "Skill name is required."}
     try:
-        payload = await request_json(
-            "POST",
-            f"/execute/{quote(cleaned, safe='')}",
-            json={"params": dict(args or {})},
-            timeout=180.0,
-        )
+        payload = await worker_call("registry.execute", {"script_name": cleaned, "params": dict(args or {})}, timeout=180.0)
         return payload if isinstance(payload, dict) else {"result": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -876,9 +868,9 @@ async def execute_specialized_skill(skill_name: str, args: Mapping[str, Any] | N
 async def get_bands_plot_data(pk: int) -> dict[str, Any] | str:
     """Retrieve plot-ready bands payload from worker (`GET /data/bands/{pk}`)."""
     try:
-        payload = await request_json("GET", f"/data/bands/{int(pk)}")
+        payload = await worker_call("data.bands", {"pk": int(pk)})
         return payload if isinstance(payload, dict) else {"data": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -887,12 +879,12 @@ async def get_bands_plot_data(pk: int) -> dict[str, Any] | str:
 async def list_remote_files(pk: int | str) -> list[str] | dict[str, Any] | str:
     """List files in a RemoteData node (`GET /data/remote/{pk}/files`)."""
     try:
-        payload = await request_json("GET", f"/data/remote/{pk}/files")
+        payload = await worker_call("data.remote_files", {"pk": pk})
         if isinstance(payload, dict):
             files = payload.get("files")
             return files if isinstance(files, list) else payload
         return payload
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -901,12 +893,12 @@ async def list_remote_files(pk: int | str) -> list[str] | dict[str, Any] | str:
 async def get_remote_file_content(pk: int | str, filename: str) -> str | dict[str, Any]:
     """Read one file from RemoteData (`GET /data/remote/{pk}/files/{filename}`)."""
     try:
-        payload = await request_json("GET", f"/data/remote/{pk}/files/{filename}")
+        payload = await worker_call("data.remote_file", {"pk": pk, "filename": filename})
         if isinstance(payload, dict):
             content = payload.get("content")
             return str(content) if isinstance(content, str) else payload
         return str(payload)
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -915,16 +907,15 @@ async def get_remote_file_content(pk: int | str, filename: str) -> str | dict[st
 async def get_node_file_content(pk: int | str, filename: str, source: str = "folder") -> str | dict[str, Any]:
     """Read text content from node storage (`GET /data/repository/{pk}/files/{filename}`)."""
     try:
-        payload = await request_json(
+        payload = await worker_call(
             "GET",
             f"/data/repository/{pk}/files/{filename}",
-            params={"source": source},
-        )
+            params={"source": source})
         if isinstance(payload, dict):
             content = payload.get("content")
             return str(content) if isinstance(content, str) else payload
         return str(payload)
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)
@@ -933,9 +924,9 @@ async def get_node_file_content(pk: int | str, filename: str, source: str = "fol
 async def get_node_summary(node_pk: int) -> dict[str, Any] | str:
     """Return a structured node summary from worker bridge for reasoning/UI use."""
     try:
-        payload = await request_json("GET", f"/management/nodes/{int(node_pk)}")
+        payload = await worker_call("node.summary", {"pk": int(node_pk)})
         return payload if isinstance(payload, dict) else {"data": payload}
-    except BridgeOfflineError:
+    except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
     except Exception as exc:  # noqa: BLE001
         return format_bridge_error(exc)

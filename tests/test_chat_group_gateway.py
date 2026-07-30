@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from src.aris_apps.aiida.chat import service as chat_service
 from src.aris_apps.aiida.chat.group_gateway import (
-    FrontendBridgeGroupGateway,
+    WorkerGroupGateway,
     build_project_group_label,
     build_session_group_label,
     normalize_group_label_segment,
@@ -28,7 +28,7 @@ def test_gateway_renames_existing_group_without_overwriting_target() -> None:
         list_calls += 1
         return [{"pk": 17, "label": "Project/old"}]
 
-    gateway = FrontendBridgeGroupGateway(
+    gateway = WorkerGroupGateway(
         list_groups_fn=_list_groups,
         rename_group_fn=lambda pk, label: rename_calls.append((pk, label)),
     )
@@ -45,7 +45,7 @@ def test_gateway_renames_existing_group_without_overwriting_target() -> None:
 
 def test_gateway_does_not_overwrite_existing_group_or_raise_bridge_errors() -> None:
     rename_calls: list[tuple[int, str]] = []
-    gateway = FrontendBridgeGroupGateway(
+    gateway = WorkerGroupGateway(
         list_groups_fn=lambda: [
             {"pk": 17, "label": "Project/old"},
             {"pk": 18, "label": "Project/new"},
@@ -56,7 +56,7 @@ def test_gateway_does_not_overwrite_existing_group_or_raise_bridge_errors() -> N
     assert gateway.rename_group_label_if_available("Project/old", "Project/new") is False
     assert rename_calls == []
 
-    failing_gateway = FrontendBridgeGroupGateway(
+    failing_gateway = WorkerGroupGateway(
         list_groups_fn=lambda: (_ for _ in ()).throw(RuntimeError("offline")),
     )
     assert failing_gateway.rename_group_label_if_available("Project/old", "Project/new") is False
@@ -70,7 +70,7 @@ def test_gateway_inspection_normalizes_label_limit_and_payload() -> None:
         captured["limit"] = limit
         return {"nodes": [{"pk": 1}]}
 
-    gateway = FrontendBridgeGroupGateway(inspect_group_fn=_inspect)
+    gateway = WorkerGroupGateway(inspect_group_fn=_inspect)
 
     assert gateway.inspect_group(" Project/session ", limit=0) == {
         "nodes": [{"pk": 1}]

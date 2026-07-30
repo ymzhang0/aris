@@ -19,11 +19,11 @@ from src.aris_core.logging import log_event
 
 from .client import (
     AiiDAWorkerClient,
-    BridgeAPIError,
-    BridgeConnectionState,
-    BridgeOfflineError,
-    BridgeResourceCounts,
-    BridgeSnapshot,
+    WorkerRPCError,
+    WorkerConnectionState,
+    WorkerOfflineError,
+    WorkerResourceCounts,
+    WorkerSnapshot,
     aiida_worker_client,
 )
 from .frontend_bridge import (
@@ -610,9 +610,9 @@ async def parse_infrastructure_via_ai(text: str, ssh_host_details: dict[str, Any
 
 __all__ = [
     "AiiDAWorkerClient",
-    "BridgeConnectionState",
-    "BridgeResourceCounts",
-    "BridgeSnapshot",
+    "WorkerConnectionState",
+    "WorkerResourceCounts",
+    "WorkerSnapshot",
     "aiida_worker_client",
     "AiiDAHub",
     "hub",

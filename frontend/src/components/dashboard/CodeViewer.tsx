@@ -6,7 +6,7 @@ import { EditorView } from "@codemirror/view";
 import { AlertCircle, CheckCircle2, Loader2, Play, Save, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { executeChatProjectFile, fetchFileContent, saveChatProjectFile } from "@/lib/api";
+import { executeChatProjectFile, fetchFileContent, saveChatProjectFile } from "@/api";
 import { cn } from "@/lib/utils";
 
 import type { WorkspaceExplorerFileSelection } from "./workspace-explorer-sidebar";

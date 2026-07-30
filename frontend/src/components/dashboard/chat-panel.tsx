@@ -1,4 +1,4 @@
-import { aiidaClient } from "@/api/aiidaClient";
+import { aiidaClient } from "@/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, ChevronDown, Code2, Copy, Cpu, Paperclip, Pin, PlugZap, PlusSquare, RefreshCw, RotateCcw, SendHorizontal, Square, X } from "lucide-react";
 import { type DragEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -20,7 +20,7 @@ import {
   getNodeHoverMetadata,
   saveChatProjectFile,
   type SubmissionApprovalRequest,
-} from "@/lib/api";
+} from "@/api";
 import { extractAssistantScriptArtifact, normalizeAssistantScriptCodeFences } from "@/lib/FileManager";
 import { useEnvironmentActions, useEnvironmentStore } from "@/store/EnvironmentStore";
 import { cn } from "@/lib/utils";

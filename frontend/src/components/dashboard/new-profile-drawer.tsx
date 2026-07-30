@@ -1,4 +1,4 @@
-import { aiidaClient } from "@/api/aiidaClient";
+import { aiidaClient } from "@/api";
 import React, { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -82,7 +82,7 @@ export function NewProfileDrawer({ isOpen, onClose, onSuccess }: NewProfileDrawe
         mutationFn: aiidaClient.setupProfile,
         onSuccess: async (data) => {
             if (form.set_as_default) {
-                await aiidaClient.switchBridgeProfile(data.profile_name);
+                await aiidaClient.switchWorkerProfile(data.profile_name);
             }
             queryClient.invalidateQueries({ queryKey: ["aiida-bridge-profiles"] });
             queryClient.invalidateQueries({ queryKey: ["aiida-bridge-status"] });

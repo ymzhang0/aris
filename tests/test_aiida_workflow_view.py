@@ -213,10 +213,10 @@ def test_enrich_submission_draft_prefers_builder_inputs_over_raw_node_envelopes(
 def test_query_available_codes_uses_worker_resources(monkeypatch) -> None:
     from src.aris_apps.aiida import client as aiida_client
 
-    def fake_request_json_sync(method: str, path: str, **kwargs):
+    def fake_call_sync(method: str, params=None, **kwargs):
         _ = kwargs
-        assert method == "GET"
-        assert path == "/resources"
+        
+        assert method == "resource.summary"
         return {
             "codes": [
                 {
@@ -235,7 +235,7 @@ def test_query_available_codes_uses_worker_resources(monkeypatch) -> None:
             ]
         }
 
-    monkeypatch.setattr(aiida_client.aiida_worker_client, "request_json_sync", fake_request_json_sync)
+    monkeypatch.setattr(aiida_client.aiida_worker_client, "call_sync", fake_call_sync)
 
     codes = workflow_view._query_available_codes("quantumespresso.pw")
     codes_by_value = {str(item.get("value")): item for item in codes}

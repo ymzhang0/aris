@@ -50,7 +50,7 @@ class ChatGroupGateway(Protocol):
     ) -> bool: ...
 
 
-class FrontendBridgeGroupGateway:
+class WorkerGroupGateway:
     """Adapt frontend-bridge group operations to the chat application boundary."""
 
     def __init__(
@@ -111,7 +111,7 @@ class FrontendBridgeGroupGateway:
 __all__ = [
     "ChatGroupGateway",
     "DEFAULT_PROJECT_GROUP_LABEL",
-    "FrontendBridgeGroupGateway",
+    "WorkerGroupGateway",
     "build_project_group_label",
     "build_session_group_label",
     "normalize_group_label_segment",

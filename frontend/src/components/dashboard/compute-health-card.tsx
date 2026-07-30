@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, AlertTriangle, ChevronRight, Clock3, Cpu, Loader2 } from "lucide-react";
 
-import { getComputeHealth } from "@/lib/api";
+import { getComputeHealth } from "@/api";
 import { cn } from "@/lib/utils";
 import type { ProcessItem } from "@/types/aiida";
 

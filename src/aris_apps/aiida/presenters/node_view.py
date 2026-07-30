@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Literal
 
-from src.aris_apps.aiida.client import BridgeAPIError, BridgeOfflineError, request_json
+from src.aris_apps.aiida.client import WorkerRPCError, WorkerOfflineError, worker_call
 from ..schemas import NodeHoverMetadataResponse
 
 
@@ -505,8 +505,8 @@ async def _request_optional_json(
     params: dict[str, Any] | None = None,
 ) -> Any | None:
     try:
-        return await request_json(method, path, params=params)
-    except (BridgeOfflineError, BridgeAPIError):
+        return await worker_call(method, path, params=params)
+    except (WorkerOfflineError, WorkerRPCError):
         return None
     except Exception:
         return None

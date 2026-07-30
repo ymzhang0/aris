@@ -6,7 +6,7 @@ import { FileExplorer, type FileExplorerNode } from "@/components/dashboard/File
 import { SidebarPageHeader } from "@/components/dashboard/sidebar-page-header";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
-import { getChatProjectWorkspace } from "@/lib/api";
+import { getChatProjectWorkspace } from "@/api";
 import type { ChatProject, ChatProjectWorkspaceResponse, WorkspaceEntry } from "@/types/aiida";
 
 type WorkspaceExplorerSidebarProps = {

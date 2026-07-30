@@ -120,7 +120,7 @@ class SystemCountsResponse(BaseModel):
     workchains: int = 0
 
 
-class BridgeStatusResponse(BaseModel):
+class WorkerStatusResponse(BaseModel):
     status: Literal["online", "offline"]
     url: str
     environment: str
@@ -132,7 +132,7 @@ class BridgeStatusResponse(BaseModel):
     plugins: list[str] = Field(default_factory=list)
 
 
-class BridgeSystemInfoResponse(BaseModel):
+class WorkerSystemInfoResponse(BaseModel):
     profile: str = "unknown"
     counts: SystemCountsResponse = Field(default_factory=SystemCountsResponse)
     daemon_status: bool = False
@@ -150,7 +150,7 @@ class CodeResourceResponse(BaseModel):
     computer_label: str | None = None
 
 
-class BridgeResourcesResponse(BaseModel):
+class WorkerResourcesResponse(BaseModel):
     computers: list[ComputerResourceResponse] = Field(default_factory=list)
     codes: list[CodeResourceResponse] = Field(default_factory=list)
 
@@ -161,7 +161,7 @@ class BridgeProfileResponse(BaseModel):
     is_active: bool = False
 
 
-class BridgeProfilesResponse(BaseModel):
+class WorkerProfilesResponse(BaseModel):
     current_profile: str | None = None
     default_profile: str | None = None
     profiles: list[BridgeProfileResponse] = Field(default_factory=list)
@@ -171,7 +171,7 @@ class BridgeSwitchProfileRequest(BaseModel):
     profile: str = Field(..., min_length=1)
 
 
-class BridgeSwitchProfileResponse(BaseModel):
+class WorkerSwitchProfileResponse(BaseModel):
     status: str = "switched"
     current_profile: str | None = None
 

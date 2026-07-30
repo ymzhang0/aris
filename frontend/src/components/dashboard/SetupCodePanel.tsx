@@ -17,7 +17,7 @@ import { parse as parseYaml } from "yaml";
 import { Button } from "@/components/ui/button";
 import { CommandPaletteSelect } from "@/components/ui/command-palette-select";
 import { cn } from "@/lib/utils";
-import { frontendApi } from "@/lib/api";
+import { frontendApi } from "@/api";
 
 interface CodeDetailed {
   pk: number;

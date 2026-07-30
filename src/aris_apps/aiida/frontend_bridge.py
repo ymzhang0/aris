@@ -4,12 +4,12 @@ from typing import Any
 from urllib.parse import quote
 
 from src.aris_apps.aiida.client import (
-    BridgeBinaryResponse,
-    BridgeAPIError,
-    BridgeOfflineError,
+    WorkerBinaryResponse,
+    WorkerRPCError,
+    WorkerOfflineError,
     aiida_worker_client,
     request_content_sync,
-    request_json_sync,
+    worker_call_sync,
 )
 
 
@@ -53,8 +53,8 @@ def _normalize_group_item(raw: Any) -> dict[str, Any] | None:
 def list_groups(search: str | None = None) -> list[dict[str, Any]]:
     params = {"search": search} if search else None
     try:
-        payload = request_json_sync("GET", "/management/groups", params=params, timeout=6.0)
-    except (BridgeOfflineError, BridgeAPIError):
+        payload = worker_call_sync("group.list", params, timeout=6.0)
+    except (WorkerOfflineError, WorkerRPCError):
         return []
     except Exception:  # noqa: BLE001
         return []
@@ -97,8 +97,8 @@ def get_recent_nodes(
         params["node_type"] = node_type
 
     try:
-        payload = request_json_sync("GET", "/management/recent-nodes", params=params, timeout=8.0)
-    except (BridgeOfflineError, BridgeAPIError):
+        payload = worker_call_sync("node.recent", params, timeout=8.0)
+    except (WorkerOfflineError, WorkerRPCError):
         return []
     except Exception:  # noqa: BLE001
         return []
@@ -115,8 +115,8 @@ def get_context_nodes(node_ids: list[int]) -> list[dict[str, Any]]:
         return []
 
     try:
-        payload = request_json_sync("POST", "/management/nodes/context", json={"ids": ids[:30]}, timeout=8.0)
-    except (BridgeOfflineError, BridgeAPIError):
+        payload = worker_call_sync("node.context", {"ids": ids[:30]}, timeout=8.0)
+    except (WorkerOfflineError, WorkerRPCError):
         return []
     except Exception:  # noqa: BLE001
         return []
@@ -133,13 +133,13 @@ def inspect_group(group_label: str, *, limit: int = 500) -> dict[str, Any] | Non
         return None
 
     try:
-        payload = request_json_sync(
+        payload = worker_call_sync(
             "GET",
             f"/management/groups/{quote(cleaned_label, safe='')}",
             params={"limit": max(1, int(limit))},
             timeout=8.0,
         )
-    except (BridgeOfflineError, BridgeAPIError):
+    except (WorkerOfflineError, WorkerRPCError):
         return None
     except Exception:  # noqa: BLE001
         return None
@@ -148,20 +148,20 @@ def inspect_group(group_label: str, *, limit: int = 500) -> dict[str, Any] | Non
 
 
 def create_group(label: str) -> dict[str, Any]:
-    return request_json_sync("POST", "/management/groups/create", json={"label": str(label)}, timeout=8.0)
+    return worker_call_sync("group.create", {"label": str(label)}, timeout=8.0)
 
 
 def delete_group(pk: int) -> dict[str, Any]:
-    return request_json_sync("DELETE", f"/management/groups/{int(pk)}", timeout=8.0)
+    return worker_call_sync("group.delete", {"pk": int(pk)}, timeout=8.0)
 
 
 def rename_group(pk: int, label: str) -> dict[str, Any]:
-    return request_json_sync("PUT", f"/management/groups/{int(pk)}/label", json={"label": str(label)}, timeout=8.0)
+    return worker_call_sync("group.rename", {"pk": int(pk), "label": str(label)}, timeout=8.0)
 
 
 def add_nodes_to_group(pk: int, node_pks: list[int]) -> dict[str, Any]:
     ids = [int(raw_pk) for raw_pk in node_pks if isinstance(raw_pk, int) or str(raw_pk).isdigit()]
-    return request_json_sync(
+    return worker_call_sync(
         "POST",
         f"/management/groups/{int(pk)}/nodes",
         json={"node_pks": ids[:200]},
@@ -169,12 +169,12 @@ def add_nodes_to_group(pk: int, node_pks: list[int]) -> dict[str, Any]:
     )
 
 
-def export_group_archive(pk: int) -> BridgeBinaryResponse:
+def export_group_archive(pk: int) -> WorkerBinaryResponse:
     return request_content_sync("GET", f"/management/groups/{int(pk)}/export", timeout=120.0)
 
 
 def soft_delete_node(pk: int, *, deleted: bool = True) -> dict[str, Any]:
-    return request_json_sync(
+    return worker_call_sync(
         "POST",
         f"/management/nodes/{int(pk)}/soft-delete",
         json={"deleted": bool(deleted)},

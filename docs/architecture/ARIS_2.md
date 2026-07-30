@@ -35,7 +35,7 @@ Application API / BFF
         |                                     v
         +-- Submission Domain Service --> AiiDA Capability
                                                |
-                                  +-- HTTP adapter (UI)
+                                  +-- JSON-RPC adapter (UI)
                                   +-- MCP facade (agents)
                                                |
                                           aiida-worker
@@ -87,9 +87,9 @@ ARIS-managed. Chat sessions
 share their project root rather than creating a second nested workspace.
 
 AiiDA group access is routed through `ChatGroupGateway`. The default
-`FrontendBridgeGroupGateway` owns bridge-specific inspection and rename calls,
+`FrontendWorkerGroupGateway` owns worker-specific inspection and rename calls,
 prevents a session rename from overwriting an existing group, and tolerates an
-offline bridge during best-effort title/group synchronization. A gateway can be
+offline worker during best-effort title/group synchronization. A gateway can be
 injected on application state for tests or a future MCP-backed implementation;
 group-label construction remains deterministic and provider-independent.
 
@@ -114,11 +114,11 @@ phrases must not be used to infer topology.
 ### AiiDA Capability
 
 Application and agent code depend on an `AiiDACapability` protocol. The current
-adapter delegates to `AiiDAWorkerClient` over HTTP. `AiiDAMCPFacade` and the
+adapter delegates to `AiiDAWorkerClient` over JSON-RPC. `AiiDAMCPFacade` and the
 `aris-aiida-mcp` stdio server expose agent-facing inspection and submission
 preview tools, resources, and a protocol prompt. The MCP surface intentionally
 has no submission-execution tool: typed approval and execution remain in the
-ARIS application. Deterministic UI routes continue to use HTTP.
+ARIS application. Deterministic UI routes continue to use JSON-RPC.
 
 ## UI events
 
