@@ -1,3 +1,4 @@
+import { aiidaClient } from "@/api/aiidaClient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, ChevronDown, Code2, Copy, Cpu, Paperclip, Pin, PlugZap, PlusSquare, RefreshCw, RotateCcw, SendHorizontal, Square, X } from "lucide-react";
 import { type DragEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -16,11 +17,8 @@ import { Button } from "@/components/ui/button";
 import { CommandPaletteSelect } from "@/components/ui/command-palette-select";
 import { Panel } from "@/components/ui/panel";
 import {
-  cancelPendingSubmission,
-  getActiveSpecializations,
   getNodeHoverMetadata,
   saveChatProjectFile,
-  submitPreviewDraft,
   type SubmissionApprovalRequest,
 } from "@/lib/api";
 import { extractAssistantScriptArtifact, normalizeAssistantScriptCodeFences } from "@/lib/FileManager";
@@ -1713,7 +1711,7 @@ export function ChatPanel({
       sessionEnvironmentAuto ? "auto" : "manual",
     ],
     queryFn: () =>
-      getActiveSpecializations({
+      aiidaClient.getActiveSpecializations({
         contextNodeIds: effectiveContextNodes.map((node) => node.pk),
         projectTags,
         resourcePlugins: effectiveResourcePlugins,
@@ -2239,7 +2237,7 @@ export function ChatPanel({
         [turnId]: submittingState,
       }));
       try {
-        const response = await submitPreviewDraft(
+        const response = await aiidaClient.submitPreviewDraft(
           draftPayload ?? preview.submitDraft,
           preview.approvalRequest,
         );
@@ -2316,7 +2314,7 @@ export function ChatPanel({
       [turnId]: cancelledState,
     }));
     try {
-      await cancelPendingSubmission();
+      await aiidaClient.cancelPendingSubmission();
     } catch (error) {
       console.error("Failed to clear pending submission", error);
     }

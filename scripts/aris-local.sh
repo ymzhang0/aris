@@ -53,21 +53,18 @@ wait_for_url() {
 
 start_app_services() {
   "${PM2_SCRIPT}" stop web >/dev/null 2>&1 || true
-  if http_ready "${WORKER_URL}/status" && http_ready "${API_URL}/status" && http_ready "${API_URL}"; then
-    printf 'ready  %-12s %s\n' "AiiDA worker" "${WORKER_URL}/status"
+  if http_ready "${API_URL}/status" && http_ready "${API_URL}"; then
     printf 'ready  %-12s %s\n' "ARIS API" "${API_URL}/status"
     printf 'ready  %-12s %s\n' "ARIS app" "${API_URL}"
     return
   fi
   "${PM2_SCRIPT}" start core
-  wait_for_url "AiiDA worker" "${WORKER_URL}/status"
   wait_for_url "ARIS API" "${API_URL}/status"
   wait_for_url "ARIS app" "${API_URL}"
 }
 
 start_dev_services() {
   "${PM2_SCRIPT}" start dev
-  wait_for_url "AiiDA worker" "${WORKER_URL}/status"
   wait_for_url "ARIS API" "${API_URL}/status"
   wait_for_url "Vite" "${ARIS_URL}"
 }
@@ -108,7 +105,6 @@ doctor() {
     fi
   done
 
-  status_line "AiiDA worker" "${WORKER_URL}/status"
   status_line "ARIS API" "${API_URL}/status"
   status_line "ARIS web" "${ARIS_URL}"
   return "${failed}"
@@ -128,12 +124,10 @@ main() {
     restart)
       "${PM2_SCRIPT}" restart core
       "${PM2_SCRIPT}" stop web >/dev/null 2>&1 || true
-      wait_for_url "AiiDA worker" "${WORKER_URL}/status"
       wait_for_url "ARIS API" "${API_URL}/status"
       wait_for_url "ARIS app" "${API_URL}"
       ;;
     status)
-      status_line "AiiDA worker" "${WORKER_URL}/status"
       status_line "ARIS API" "${API_URL}/status"
       status_line "ARIS web" "${ARIS_URL}"
       ;;

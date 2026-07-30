@@ -68,33 +68,11 @@ def bootstrap_home_config(settings: object) -> list[dict[str, str]]:
     config_root = Path(raw_config_root).expanduser()
 
     mappings = [
-        (_REPO_ROOT / "config" / "apps" / "aiida" / "presets.yaml", config_root / "apps" / "aiida" / "presets.yaml"),
-        (_REPO_ROOT / "config" / "apps" / "aiida" / "settings.yaml", config_root / "apps" / "aiida" / "settings.yaml"),
-        (
-            _REPO_ROOT / "config" / "apps" / "aiida" / "specializations",
-            config_root / "apps" / "aiida" / "specializations",
-        ),
+        (_REPO_ROOT / "config" / "apps", config_root / "apps"),
     ]
 
     bootstrapped: list[dict[str, str]] = []
     for source, target in mappings:
         bootstrapped.extend(_bootstrap_config_path(source, target))
-
-    if not getattr(settings, "ARIS_PRESETS_FILE", "").strip() or not os.getenv("ARIS_AIIDA_PRESETS_FILE"):
-        presets_target = config_root / "apps" / "aiida" / "presets.yaml"
-        if presets_target.exists():
-            setattr(settings, "ARIS_PRESETS_FILE", str(presets_target))
-
-    if not getattr(settings, "ARIS_AIIDA_SETTINGS_FILE", "").strip() or not os.getenv("ARIS_AIIDA_SETTINGS_FILE"):
-        aiida_settings_target = config_root / "apps" / "aiida" / "settings.yaml"
-        if aiida_settings_target.exists():
-            setattr(settings, "ARIS_AIIDA_SETTINGS_FILE", str(aiida_settings_target))
-
-    if not getattr(settings, "ARIS_AIIDA_SPECIALIZATIONS_ROOT", "").strip() or not os.getenv(
-        "ARIS_AIIDA_SPECIALIZATIONS_ROOT"
-    ):
-        specializations_target = config_root / "apps" / "aiida" / "specializations"
-        if specializations_target.exists():
-            setattr(settings, "ARIS_AIIDA_SPECIALIZATIONS_ROOT", str(specializations_target))
 
     return bootstrapped

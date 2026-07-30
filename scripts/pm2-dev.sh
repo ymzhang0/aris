@@ -162,7 +162,7 @@ pm2_logs() {
   fi
 
   if [[ "${target}" == "core" ]]; then
-    (cd "${ARIS_DIR}" && "${PM2_CMD[@]}" logs aiida-worker aris-api)
+    (cd "${ARIS_DIR}" && "${PM2_CMD[@]}" logs aris-api)
     return
   fi
 

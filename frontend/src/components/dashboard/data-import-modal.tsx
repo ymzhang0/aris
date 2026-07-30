@@ -1,3 +1,4 @@
+import { aiidaClient } from "@/api/aiidaClient";
 
 import React, { useState, useEffect, useMemo } from "react";
 import {
@@ -17,7 +18,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { importData, addNodesToGroup, createGroup } from "@/lib/api";
+import { addNodesToGroup, createGroup } from "@/lib/api";
 
 type DataImportModalProps = {
     isOpen: boolean;
@@ -95,7 +96,7 @@ export function DataImportModal({ isOpen, onClose, onSuccess, groupPk, groupLabe
         setError(null);
 
         try {
-            const result = await importData(dataType, file, label, description, sourceType, rawText);
+            const result = await aiidaClient.importData(dataType, file, label, description, sourceType, rawText);
 
             // If it's an archive, it doesn't return a single PK usually, or returns a success status
             if (dataType === "Archive") {

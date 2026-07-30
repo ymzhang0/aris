@@ -32,7 +32,6 @@ def test_aris_core_surface_is_available() -> None:
     assert settings.ARIS_PROJECTS_ROOT
     assert Path(settings.ARIS_PROJECTS_ROOT).is_absolute()
     assert Path(settings.ARIS_PRESETS_FILE).as_posix().endswith("config/apps/aiida/presets.yaml")
-    assert Path(settings.ARIS_AIIDA_SETTINGS_FILE).as_posix().endswith("config/apps/aiida/settings.yaml")
     assert settings.ARIS_SCRIPT_ARCHIVE_DIR
     assert Path(settings.ARIS_SCRIPT_ARCHIVE_DIR).is_absolute()
     assert BaseARISDeps.__name__ == "BaseARISDeps"
@@ -116,6 +115,7 @@ def test_bootstrap_home_config_copies_repo_defaults(tmp_path, monkeypatch) -> No
     home_root = tmp_path / ".aris"
     fake_settings = SimpleNamespace(
         ARIS_CONFIG_ROOT=str(home_root / "config"),
+        ARIS_PRESETS_FILE=str(home_root / "config/apps/aiida/presets.yaml"),
     )
 
     monkeypatch.setattr(runtime_config, "_REPO_ROOT", repo_root)
@@ -128,9 +128,3 @@ def test_bootstrap_home_config_copies_repo_defaults(tmp_path, monkeypatch) -> No
     assert (home_root / "config" / "apps" / "aiida" / "specializations" / "qe.yaml").is_file()
     assert not (home_root / "config" / "pm2" / "ecosystem.config.js").exists()
     assert Path(fake_settings.ARIS_PRESETS_FILE).as_posix().endswith(".aris/config/apps/aiida/presets.yaml")
-    assert Path(fake_settings.ARIS_AIIDA_SETTINGS_FILE).as_posix().endswith(
-        ".aris/config/apps/aiida/settings.yaml"
-    )
-    assert Path(fake_settings.ARIS_AIIDA_SPECIALIZATIONS_ROOT).as_posix().endswith(
-        ".aris/config/apps/aiida/specializations"
-    )

@@ -104,12 +104,12 @@ export const frontendApi = axios.create({
   timeout: 15000,
 });
 
-const aiidaApi = axios.create({
+export const aiidaApi = axios.create({
   baseURL: aiidaBaseURL,
   timeout: 5000,
 });
 
-const specializationsApi = axios.create({
+export const specializationsApi = axios.create({
   baseURL: specializationsBaseURL,
   timeout: 8000,
 });
@@ -161,7 +161,7 @@ function createApprovalId(): string {
     : localId;
 }
 
-function createSubmissionApprovalDecision(
+export function createSubmissionApprovalDecision(
   request: SubmissionApprovalRequest,
 ): SubmissionExecutionApprovalDecision {
   return {
@@ -176,7 +176,7 @@ function createSubmissionApprovalDecision(
   };
 }
 
-function createPendingCancellationDecision(): SubmissionCancellationDecision {
+export function createPendingCancellationDecision(): SubmissionCancellationDecision {
   return {
     protocol_version: "1",
     approval_id: createApprovalId(),
@@ -304,7 +304,7 @@ function summarizeEnvironmentPlugins(plugins: string[]): string {
   return hiddenCount > 0 ? `${visibleFamilies.join("; ")}; +${hiddenCount} more families` : visibleFamilies.join("; ");
 }
 
-function buildInterpreterInfo(): InterpreterInfo {
+export function buildInterpreterInfo(): InterpreterInfo {
   const state = getEnvironmentState();
   return {
     python_path: state.useWorkerDefault ? null : state.pythonPath,
@@ -320,7 +320,7 @@ function buildEnvironmentSystemPrompt(): string | null {
   return `Context: Current environment is ${projectName}. Mode: ${modeLabel}. Available AiiDA plugins: ${pluginSummary}. Submission draft generation is supported in both worker-default and project-interpreter modes when the worker can validate the request. Please generate code compatible with these plugins. ${buildProjectLayoutSystemPrompt()}`;
 }
 
-function buildEnvironmentMetadata(): Record<string, unknown> {
+export function buildEnvironmentMetadata(): Record<string, unknown> {
   const state = getEnvironmentState();
   const interpreterInfo = buildInterpreterInfo();
   const inspection = state.inspection;
@@ -350,62 +350,6 @@ export async function getBootstrap(): Promise<BootstrapResponse> {
   return data;
 }
 
-export async function getActiveSpecializations(params: {
-  contextNodeIds?: number[];
-  projectTags?: string[];
-  resourcePlugins?: string[];
-  selectedEnvironment?: string | null;
-  autoSwitch?: boolean;
-}): Promise<ActiveSpecializationsResponse> {
-  const searchParams = new URLSearchParams();
-  (params.contextNodeIds ?? []).forEach((value) => {
-    searchParams.append("context_node_ids", String(value));
-  });
-  (params.projectTags ?? []).forEach((value) => {
-    searchParams.append("project_tags", value);
-  });
-  (params.resourcePlugins ?? []).forEach((value) => {
-    searchParams.append("resource_plugins", value);
-  });
-  if (params.selectedEnvironment?.trim()) {
-    searchParams.append("selected_environment", params.selectedEnvironment.trim());
-  }
-  if (typeof params.autoSwitch === "boolean") {
-    searchParams.append("auto_switch", String(params.autoSwitch));
-  }
-
-  const { data } = await specializationsApi.get<ActiveSpecializationsResponse>("/active", {
-    params: searchParams,
-  });
-  return data;
-}
-
-export async function uploadArchive(file: File): Promise<UploadArchiveResponse> {
-  const formData = new FormData();
-  formData.append("file", file);
-
-  const { data } = await frontendApi.post<UploadArchiveResponse>("/archives/upload", formData, {
-    headers: {
-      "Content-Type": "multipart/form-data",
-    },
-  });
-  return data;
-}
-
-export async function getProcesses(
-  limit = 15,
-  groupLabel?: string,
-  nodeType?: string,
-  label?: string,
-  processState?: string,
-  rootOnly = true,
-): Promise<ProcessesResponse> {
-  const { data } = await frontendApi.get<ProcessesResponse>("/processes", {
-    params: { limit, group_label: groupLabel, node_type: nodeType, label, process_state: processState, root_only: rootOnly },
-  });
-  return data;
-}
-
 export async function getNodeHoverMetadata(pk: number): Promise<NodeHoverMetadataResponse> {
   const { data } = await frontendApi.get<NodeHoverMetadataResponse>(`/nodes/${pk}/metadata`);
   return data;
@@ -416,16 +360,6 @@ export async function getNodeScript(pk: number): Promise<NodeScriptResponse> {
   return data;
 }
 
-export async function getProcessCloneDraft(identifier: number | string): Promise<ProcessCloneDraftResponse> {
-  const { data } = await frontendApi.get<ProcessCloneDraftResponse>(`/processes/${identifier}/clone-draft`);
-  return data;
-}
-
-export async function getGroups(): Promise<GroupsResponse> {
-  const { data } = await frontendApi.get<GroupsResponse>("/groups");
-  return data;
-}
-
 export async function createGroup(label: string): Promise<GroupMutationResponse> {
   const { data } = await frontendApi.post<GroupMutationResponse>("/groups/create", { label });
   return data;
@@ -433,11 +367,6 @@ export async function createGroup(label: string): Promise<GroupMutationResponse>
 
 export async function renameGroup(pk: number, label: string): Promise<GroupMutationResponse> {
   const { data } = await frontendApi.put<GroupMutationResponse>(`/groups/${pk}/label`, { label });
-  return data;
-}
-
-export async function deleteGroup(pk: number): Promise<GroupDeleteResponse> {
-  const { data } = await frontendApi.delete<GroupDeleteResponse>(`/groups/${pk}`);
   return data;
 }
 
@@ -678,21 +607,6 @@ export async function stopChat(turnId?: number): Promise<{ status: string; turn_
   return data;
 }
 
-export async function getProcessDetail(identifier: number | string): Promise<ProcessDetailResponse> {
-  const { data } = await aiidaApi.get<ProcessDetailResponse>(`/process/${identifier}`);
-  return data;
-}
-
-export async function getProcessLogs(identifier: number | string): Promise<ProcessLogsResponse> {
-  const { data } = await aiidaApi.get<ProcessLogsResponse>(`/process/${identifier}/logs`);
-  return data;
-}
-
-export async function getProcessWorkgraph(identifier: number | string): Promise<ProcessWorkgraphResponse> {
-  const { data } = await aiidaApi.get<ProcessWorkgraphResponse>(`/process/${identifier}/workgraph`);
-  return data;
-}
-
 export async function getComputeHealth(params?: {
   reference_process_pk?: number;
   computer_label?: string | null;
@@ -703,11 +617,6 @@ export async function getComputeHealth(params?: {
       computer_label: params?.computer_label ?? undefined,
     },
   });
-  return data;
-}
-
-export async function getProcessDiagnostics(identifier: number | string): Promise<ProcessDiagnosticsResponse> {
-  const { data } = await frontendApi.get<ProcessDiagnosticsResponse>(`/processes/${identifier}/diagnostics`);
   return data;
 }
 
@@ -750,110 +659,6 @@ export async function getRepositoryFileContent(
   return data;
 }
 
-export async function submitPreviewDraft(
-  draft: SubmissionSubmitDraftPayload,
-  approvalRequest: SubmissionApprovalRequest,
-): Promise<SubmissionResponse> {
-  const isBatch = Array.isArray(draft);
-  const expectedScope = isBatch ? "batch" : "single";
-  if (approvalRequest.scope !== expectedScope) {
-    throw new Error(
-      `Submission approval scope must be ${expectedScope}.`,
-    );
-  }
-  const endpoint = isBatch ? "/submission/submit_batch" : "/submission/submit";
-  const { data } = await aiidaApi.post<SubmissionResponse>(endpoint, {
-    draft,
-    interpreter_info: buildInterpreterInfo(),
-    metadata: buildEnvironmentMetadata(),
-    approval: createSubmissionApprovalDecision(approvalRequest),
-  });
-  return data;
-}
-
-export async function cancelPendingSubmission(): Promise<{ status: string }> {
-  const { data } = await frontendApi.post<{ status: string }>("/submission/pending/cancel", {
-    approval: createPendingCancellationDecision(),
-  });
-  return data;
-}
-
-const DEFAULT_BRIDGE_PROFILES: BridgeProfilesResponse = {
-  current_profile: null,
-  default_profile: null,
-  profiles: [],
-};
-
-const DEFAULT_BRIDGE_RESOURCES: BridgeResourcesResponse = {
-  computers: [],
-  codes: [],
-};
-
-export async function getBridgeStatus(): Promise<BridgeStatusResponse> {
-  const { data } = await aiidaApi.get<BridgeStatusResponse>("/status");
-  return data;
-}
-
-export async function getBridgeProfiles(): Promise<BridgeProfilesResponse> {
-  try {
-    const { data } = await aiidaApi.get<BridgeProfilesResponse>("/profiles");
-    return data;
-  } catch {
-    return DEFAULT_BRIDGE_PROFILES;
-  }
-}
-
-export async function getCurrentUserInfo(): Promise<UserInfoResponse> {
-  const { data } = await aiidaApi.get<UserInfoResponse>("/management/profiles/current-user-info");
-  return data;
-}
-
-export async function setupProfile(payload: ProfileSetupRequest): Promise<{ status: string; profile_name: string }> {
-  const { data } = await aiidaApi.post<{ status: string; profile_name: string }>("/management/profiles/setup", payload);
-  return data;
-}
-
-export async function switchBridgeProfile(profile: string): Promise<BridgeSwitchProfileResponse> {
-  const { data } = await aiidaApi.post<BridgeSwitchProfileResponse>("/profiles/switch", { profile });
-  return data;
-}
-
-export async function getBridgeResources(): Promise<BridgeResourcesResponse> {
-  try {
-    const { data } = await aiidaApi.get<BridgeResourcesResponse>("/resources");
-    return data;
-  } catch {
-    return DEFAULT_BRIDGE_RESOURCES;
-  }
-}
-
-export async function getInfrastructure(): Promise<InfrastructureComputer[]> {
-  const { data } = await aiidaApi.get<InfrastructureComputer[]>("/management/infrastructure");
-  return data;
-}
-
-export async function getInfrastructureCapabilities(): Promise<InfrastructureCapabilitiesResponse> {
-  const { data } = await aiidaApi.get<InfrastructureCapabilitiesResponse>("/management/infrastructure/capabilities");
-  return data;
-}
-
-export async function setupInfrastructure(config: InfrastructureSetupPayload): Promise<any> {
-  const { data } = await aiidaApi.post("/management/infrastructure/setup", config);
-  return data;
-}
-
-export async function exportComputerConfig(computerPk: number): Promise<InfrastructureExportResponse> {
-  const { data } = await aiidaApi.get<InfrastructureExportResponse>(
-    `/management/infrastructure/computer/pk/${computerPk}/export`,
-  );
-  return data;
-}
-
-export async function exportCodeConfig(codePk: number): Promise<InfrastructureExportResponse> {
-  const { data } = await aiidaApi.get<InfrastructureExportResponse>(`/management/infrastructure/code/${codePk}/export`);
-  return data;
-}
-
 export interface SSHHostDetails {
   alias: string;
   hostname?: string;
@@ -862,19 +667,6 @@ export interface SSHHostDetails {
   proxy_jump?: string;
   proxy_command?: string;
   identity_file?: string;
-}
-
-export async function getSshHosts(): Promise<SSHHostDetails[]> {
-  const { data } = await frontendApi.get<{ items: SSHHostDetails[] }>("/ssh-hosts");
-  return data.items;
-}
-
-export async function parseInfrastructure(text: string, sshHostDetails?: SSHHostDetails | null): Promise<ParseInfrastructureResponse> {
-  const { data } = await frontendApi.post<ParseInfrastructureResponse>("/parse-infrastructure", {
-    text,
-    ssh_host_details: sshHostDetails || null
-  });
-  return data;
 }
 
 export async function importData(

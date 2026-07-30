@@ -17,6 +17,15 @@ module.exports = {
             }
         },
         {
+            name: 'aiida-worker',
+            cwd: workerDir,
+            script: path.join(workerDir, '.venv', 'bin', 'python'),
+            args: 'main.py',
+            env: {
+                PYTHONPATH: workerDir
+            }
+        },
+        {
             name: 'aris-web',
             cwd: path.join(arisDir, 'frontend'),
             script: 'npm',

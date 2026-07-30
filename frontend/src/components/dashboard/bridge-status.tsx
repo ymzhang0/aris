@@ -1,13 +1,10 @@
+import { aiidaClient } from "@/api/aiidaClient";
 import { type DragEvent, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Code2, Cpu, Loader2, PlugZap, Plus } from "lucide-react";
 
 import {
-  getBridgeProfiles,
-  getBridgeResources,
-  getBridgeStatus,
-  switchBridgeProfile,
-} from "@/lib/api";
+  } from "@/lib/api";
 import { CommandPaletteSelect } from "@/components/ui/command-palette-select";
 import { useEnvironmentActions, useEnvironmentStore } from "@/store/EnvironmentStore";
 import { cn } from "@/lib/utils";
@@ -86,7 +83,7 @@ function normalizeEnvironmentComputers(
   items: Array<{ label?: string | null; hostname?: string | null; description?: string | null }>,
 ): BridgeComputerResource[] {
   return items
-    .map((item) => ({
+    .map((item: any) => ({
       label: String(item.label || "").trim(),
       hostname: String(item.hostname || "").trim(),
       description: typeof item.description === "string" && item.description.trim() ? item.description.trim() : null,
@@ -98,7 +95,7 @@ function normalizeEnvironmentCodes(
   items: Array<{ label?: string | null; default_plugin?: string | null; computer_label?: string | null }>,
 ): BridgeCodeResource[] {
   return items
-    .map((item) => ({
+    .map((item: any) => ({
       label: String(item.label || "").trim(),
       default_plugin: typeof item.default_plugin === "string" && item.default_plugin.trim() ? item.default_plugin.trim() : null,
       computer_label: typeof item.computer_label === "string" && item.computer_label.trim() ? item.computer_label.trim() : null,
@@ -121,7 +118,7 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
 
   const statusQuery = useQuery({
     queryKey: ["aiida-bridge-status"],
-    queryFn: getBridgeStatus,
+    queryFn: () => aiidaClient.getBridgeStatus(),
     refetchInterval: STATUS_POLL_INTERVAL_MS,
     refetchOnWindowFocus: false,
     staleTime: 2_000,
@@ -131,7 +128,7 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
 
   const profilesQuery = useQuery({
     queryKey: ["aiida-bridge-profiles"],
-    queryFn: getBridgeProfiles,
+    queryFn: () => aiidaClient.getBridgeProfiles(),
     enabled: isOnline,
     refetchInterval: isOnline ? DETAILS_POLL_INTERVAL_MS : false,
     refetchOnWindowFocus: false,
@@ -139,14 +136,14 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
 
   const resourcesQuery = useQuery({
     queryKey: ["aiida-bridge-resources"],
-    queryFn: getBridgeResources,
+    queryFn: () => aiidaClient.getBridgeResources(),
     enabled: isOnline,
     refetchInterval: isOnline ? DETAILS_POLL_INTERVAL_MS : false,
     refetchOnWindowFocus: false,
   });
 
   const switchProfileMutation = useMutation({
-    mutationFn: switchBridgeProfile,
+    mutationFn: (args: string) => aiidaClient.switchBridgeProfile(args),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["bootstrap"] }),
@@ -247,7 +244,7 @@ export function BridgeStatus({ onInfrastructureClick, onSwitchProfileStart, onSw
     if (hoveredDetail === "plugins") {
       return pluginNames
         .filter((pluginName) => pluginName.trim())
-        .map((pluginName) => {
+        .map((pluginName: string) => {
           const attachment = toPluginAttachment(pluginName);
           return {
             id: `plugin:${attachment.value}`,

@@ -21,11 +21,11 @@ class BaseARISDeps:
 
     def log_step(self, message: str) -> None:
         self.step_history.append(message)
-        logger.info(log_event("aiida.agent.step", step=message))
+        logger.info(log_event("agent.step", step=message))
         callback = self.step_callback
         if callable(callback):
             try:
                 callback(message)
             except Exception:  # noqa: BLE001
-                logger.warning(log_event("aiida.agent.step.callback_failed", step=message))
+                logger.warning(log_event("agent.step.callback_failed", step=message))
 __all__ = ["BaseARISDeps"]

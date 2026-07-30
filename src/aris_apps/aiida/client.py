@@ -32,10 +32,12 @@ _bridge_call_listener: contextvars.ContextVar[BridgeCallListener | None] = conte
     "aiida_bridge_call_listener",
     default=None,
 )
-WORKSPACE_PATH_HEADER = "X-ARIS-Active-Workspace-Path"
-SESSION_ID_HEADER = "X-ARIS-Session-Id"
-PROJECT_ID_HEADER = "X-ARIS-Project-Id"
-PYTHON_PATH_HEADER = "X-ARIS-Active-Python-Path"
+from src.aris_core.protocols.worker_constants import (
+    HEADER_WORKSPACE_PATH as WORKSPACE_PATH_HEADER,
+    HEADER_SESSION_ID as SESSION_ID_HEADER,
+    HEADER_PROJECT_ID as PROJECT_ID_HEADER,
+    HEADER_PYTHON_PATH as PYTHON_PATH_HEADER,
+)
 _bridge_request_headers: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
     "aiida_bridge_request_headers",
     default=None,
@@ -374,8 +376,9 @@ class AiiDAWorkerClient:
         normalized_path = self._normalize_request_path(path)
 
         manager = get_worker_process_manager()
-        if manager is not None and manager.is_running:
+        if manager is not None:
             rpc_target = _map_http_request_to_rpc(method, path, params=params, json=json)
+
             if rpc_target is not None:
                 rpc_method, rpc_params = rpc_target
                 _emit_bridge_call_event(method_upper, path)

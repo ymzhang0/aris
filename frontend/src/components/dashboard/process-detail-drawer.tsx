@@ -1,3 +1,4 @@
+import { aiidaClient } from "@/api/aiidaClient";
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import JsonView from "@uiw/react-json-view";
@@ -25,10 +26,6 @@ import {
 
 import {
   getBandsPlotData,
-  getProcessDetail,
-  getProcessDiagnostics,
-  getProcessLogs,
-  getProcessWorkgraph,
   getRemoteFileContent,
   getRemoteFiles,
   getRepositoryFileContent,
@@ -1935,7 +1932,7 @@ function InspectorPanel({
 
   const detailQuery = useQuery({
     queryKey: ["process-detail", target.pk],
-    queryFn: () => getProcessDetail(target.pk),
+    queryFn: () => aiidaClient.getProcessDetail(target.pk),
     enabled: Boolean(target.pk),
     staleTime: 4_000,
   });
@@ -1947,7 +1944,7 @@ function InspectorPanel({
 
   const logsQuery = useQuery({
     queryKey: ["process-logs", target.pk],
-    queryFn: () => getProcessLogs(target.pk),
+    queryFn: () => aiidaClient.getProcessLogs(target.pk),
     enabled: Boolean(target.pk) && isProcessTarget,
     staleTime: 4_000,
   });
@@ -1969,7 +1966,7 @@ function InspectorPanel({
   const hasStandaloneLinks = Object.keys(directInputs).length > 0 || Object.keys(directOutputs).length > 0;
   const workgraphQuery = useQuery({
     queryKey: ["process-workgraph", target.pk],
-    queryFn: () => getProcessWorkgraph(target.pk),
+    queryFn: () => aiidaClient.getProcessWorkgraph(target.pk),
     enabled: Boolean(target.pk) && isWorkgraphTarget,
     staleTime: 4_000,
   });
@@ -1979,7 +1976,7 @@ function InspectorPanel({
     Boolean(detailQuery.data?.workchain?.provenance_tree);
   const diagnosticsQuery = useQuery({
     queryKey: ["process-diagnostics", target.pk],
-    queryFn: () => getProcessDiagnostics(target.pk),
+    queryFn: () => aiidaClient.getProcessDiagnostics(target.pk),
     enabled: Boolean(target.pk) && isProcessTarget && (panelMode === "diagnostics" || isFailedTarget),
     staleTime: 4_000,
   });

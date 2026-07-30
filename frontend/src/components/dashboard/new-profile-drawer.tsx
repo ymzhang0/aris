@@ -1,3 +1,4 @@
+import { aiidaClient } from "@/api/aiidaClient";
 import React, { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -13,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { CommandPaletteSelect } from "@/components/ui/command-palette-select";
 import { cn } from "@/lib/utils";
-import { getCurrentUserInfo, setupProfile, switchBridgeProfile } from "@/lib/api";
+import { } from "@/lib/api";
 import type { ProfileSetupRequest } from "@/types/aiida";
 
 type NewProfileDrawerProps = {
@@ -48,7 +49,7 @@ export function NewProfileDrawer({ isOpen, onClose, onSuccess }: NewProfileDrawe
 
     const userInfoQuery = useQuery({
         queryKey: ["current-user-info"],
-        queryFn: getCurrentUserInfo,
+        queryFn: aiidaClient.getCurrentUserInfo,
         enabled: isOpen,
         staleTime: 0,
     });
@@ -79,10 +80,10 @@ export function NewProfileDrawer({ isOpen, onClose, onSuccess }: NewProfileDrawe
     }, [userInfoQuery.data]);
 
     const setupMutation = useMutation({
-        mutationFn: setupProfile,
+        mutationFn: aiidaClient.setupProfile,
         onSuccess: async (data) => {
             if (form.set_as_default) {
-                await switchBridgeProfile(data.profile_name);
+                await aiidaClient.switchBridgeProfile(data.profile_name);
             }
             queryClient.invalidateQueries({ queryKey: ["aiida-bridge-profiles"] });
             queryClient.invalidateQueries({ queryKey: ["aiida-bridge-status"] });

@@ -1,3 +1,4 @@
+import { aiidaClient } from "@/api/aiidaClient";
 
 import React, { useCallback, useEffect, useState } from "react";
 import {
@@ -24,10 +25,6 @@ import type {
 } from "@/types/aiida";
 import { cn } from "@/lib/utils";
 import {
-    getInfrastructureCapabilities,
-    getSshHosts,
-    parseInfrastructure,
-    setupInfrastructure,
     type SSHHostDetails,
 } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
@@ -237,7 +234,7 @@ export function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddModalProps
 
     const capabilitiesQuery = useQuery({
         queryKey: ["infrastructure-capabilities"],
-        queryFn: getInfrastructureCapabilities,
+        queryFn: aiidaClient.getInfrastructureCapabilities,
     });
     const capabilities = capabilitiesQuery.data;
     const recommendedTransport = capabilities?.recommended_transport || SYNC_SSH_TRANSPORT;
@@ -247,7 +244,7 @@ export function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddModalProps
 
     const sshHostsQuery = useQuery({
         queryKey: ["ssh-hosts"],
-        queryFn: getSshHosts,
+        queryFn: aiidaClient.getSshHosts,
     });
     const sshHosts = sshHostsQuery.data || [];
 
@@ -384,7 +381,7 @@ export function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddModalProps
             const hostDetails = sshHosts.find(h => h.alias === selectedSshHost) || null;
             const textToParse = pasteText.trim() || `Configure computer for SSH host ${selectedSshHost}`;
 
-            const response = await parseInfrastructure(textToParse, hostDetails);
+            const response = await aiidaClient.parseInfrastructure(textToParse, hostDetails);
             if (response.status === "success" && response.data) {
                 setParseResult(mergeParseResult(response.data, recommendedTransport));
                 setActiveTab("form");
@@ -491,7 +488,7 @@ export function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddModalProps
                 payload.code_append_text = code.append_text || "";
             }
 
-            const response = await setupInfrastructure(payload);
+            const response = await aiidaClient.setupInfrastructure(payload);
             if (response.connection_status === "failed") {
                 setError(`Setup partial via DB, but connection test failed: ${response.connection_error}`);
             } else {

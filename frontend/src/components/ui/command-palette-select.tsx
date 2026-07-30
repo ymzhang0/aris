@@ -24,6 +24,7 @@ type CommandPaletteSelectProps = {
   options: CommandPaletteSelectOption[];
   onChange: (value: string) => void;
   label?: string;
+  icon?: React.ReactNode;
   placeholder?: string;
   fallbackLabel?: string;
   emptyLabel?: string;
@@ -32,6 +33,8 @@ type CommandPaletteSelectProps = {
   searchable?: boolean;
   className?: string;
   triggerClassName?: string;
+  labelClassName?: string;
+  valueClassName?: string;
   menuClassName?: string;
   optionClassName?: string;
   minMenuWidth?: number;
@@ -60,14 +63,17 @@ export function CommandPaletteSelect({
   options,
   onChange,
   label,
+  icon,
   placeholder = "Select",
   fallbackLabel,
   emptyLabel = "No options available",
   searchPlaceholder = "Search options",
   disabled = false,
-  searchable,
+  searchable = true,
   className,
   triggerClassName,
+  labelClassName,
+  valueClassName,
   menuClassName,
   optionClassName,
   minMenuWidth = DEFAULT_MIN_MENU_WIDTH,
@@ -292,10 +298,12 @@ export function CommandPaletteSelect({
           )}
           onClick={() => setIsOpen((current) => !current)}
         >
-          {label ? (
-            <span className="shrink-0 text-zinc-500 dark:text-zinc-400">{label}:</span>
+          {icon ? (
+            <span className={cn("shrink-0", labelClassName || "text-zinc-500 dark:text-zinc-400")}>{icon}</span>
+          ) : label ? (
+            <span className={cn("shrink-0", labelClassName || "text-zinc-500 dark:text-zinc-400")}>{label}:</span>
           ) : null}
-          <span className="min-w-0 flex-1 truncate text-left font-medium text-zinc-900 dark:text-zinc-100">
+          <span className={cn("min-w-0 flex-1 truncate text-left font-medium", valueClassName || "text-zinc-900 dark:text-zinc-100")}>
             {selectedLabel}
           </span>
           <ChevronDown

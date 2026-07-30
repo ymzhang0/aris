@@ -1,3 +1,4 @@
+import { aiidaClient } from "@/api/aiidaClient";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -10,27 +11,20 @@ import {
   PROCESSES_STREAM_URL,
   activateChatSession,
   addNodesToGroup,
-  cancelPendingSubmission,
   createChatProject,
   createChatSession,
   createGroup,
   deleteChatItems,
   deleteChatProject,
   deleteChatSession,
-  deleteGroup,
   exportGroup,
   getBootstrap,
   getChatSessions,
-  getGroups,
   getLogs,
-  getProcessCloneDraft,
-  getProcesses,
   renameGroup,
   sendChat,
   softDeleteNode,
   stopChat,
-  submitPreviewDraft,
-  uploadArchive,
   updateChatSession,
   updateChatSessionTitle,
   type SubmissionApprovalRequest,
@@ -709,7 +703,7 @@ export default function App() {
   const processesQuery = useQuery({
     queryKey: ["processes", selectedGroup, selectedGroupLabel, processLimit, nodeTypeFilter],
     queryFn: () => {
-      return getProcesses(
+      return aiidaClient.getProcesses(
         processLimit,
         selectedGroupLabel ?? undefined,
         resolveProcessNodeType(nodeTypeFilter),
@@ -724,7 +718,7 @@ export default function App() {
 
   const groupsQuery = useQuery({
     queryKey: ["groups"],
-    queryFn: getGroups,
+    queryFn: aiidaClient.getGroups,
     enabled: bootstrapQuery.isSuccess,
     refetchInterval: 60_000,
   });
@@ -1090,7 +1084,7 @@ export default function App() {
   ]);
 
   const uploadMutation = useMutation({
-    mutationFn: uploadArchive,
+    mutationFn: aiidaClient.uploadArchive,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["groups"] });
       queryClient.invalidateQueries({ queryKey: ["processes"] });
@@ -1125,7 +1119,7 @@ export default function App() {
   const deleteGroupsMutation = useMutation({
     mutationFn: async (pks: number[]) => {
       const normalizedPks = [...new Set(pks.filter((pk) => Number.isFinite(pk) && pk > 0))];
-      const results = await Promise.allSettled(normalizedPks.map((pk) => deleteGroup(pk)));
+      const results = await Promise.allSettled(normalizedPks.map((pk) => aiidaClient.deleteGroup(pk)));
       const deletedPks: number[] = [];
       const failed: Array<{ pk: number; message: string }> = [];
       results.forEach((result, index) => {
@@ -1730,7 +1724,7 @@ export default function App() {
   const handleCloneProcess = useCallback(async (process: ProcessItem) => {
     setIsCloneDraftLoading(true);
     try {
-      const payload = await getProcessCloneDraft(process.pk);
+      const payload = await aiidaClient.getProcessCloneDraft(process.pk);
       setCloneDraft(payload.submission_draft as SubmissionDraftPayload);
       setCloneApprovalRequest(payload.approval_request);
       setCloneTurnId(process.pk);
@@ -1765,7 +1759,7 @@ export default function App() {
       }
       setCloneModalState({ status: "submitting", processPk: null, processPks: [], errorText: null });
       try {
-        const response = await submitPreviewDraft(
+        const response = await aiidaClient.submitPreviewDraft(
           draftPayload,
           cloneApprovalRequest,
         );
@@ -1804,7 +1798,7 @@ export default function App() {
     }
     setCloneModalState({ status: "cancelled", processPk: null, processPks: [], errorText: null });
     try {
-      await cancelPendingSubmission();
+      await aiidaClient.cancelPendingSubmission();
     } catch (error) {
       console.error("Failed to clear pending submission", error);
     }

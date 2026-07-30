@@ -84,25 +84,8 @@ class Settings(BaseSettings):
         default=str(_ARIS_CONFIG_ROOT),
     )
     ARIS_PRESETS_FILE: str = _env_value(
-        "ARIS_AIIDA_PRESETS_FILE",
-        default=_resolve_preferred_path(
-            "ARIS_AIIDA_PRESETS_FILE",
-            preferred_path=_ARIS_CONFIG_ROOT / "apps" / "aiida" / "presets.yaml",
-            fallback_path=_REPO_ROOT / "config" / "apps" / "aiida" / "presets.yaml",
-        ),
-    )
-    ARIS_AIIDA_SETTINGS_FILE: str = _env_value(
-        "ARIS_AIIDA_SETTINGS_FILE",
-        default=_resolve_preferred_path(
-            "ARIS_AIIDA_SETTINGS_FILE",
-            preferred_path=_ARIS_CONFIG_ROOT / "apps" / "aiida" / "settings.yaml",
-            fallback_path=_REPO_ROOT / "config" / "apps" / "aiida" / "settings.yaml",
-        ),
-    )
-    ARIS_AIIDA_SPECIALIZATIONS_ROOT: str = _resolve_preferred_path(
-        "ARIS_AIIDA_SPECIALIZATIONS_ROOT",
-        preferred_path=_ARIS_CONFIG_ROOT / "apps" / "aiida" / "specializations",
-        fallback_path=_REPO_ROOT / "config" / "apps" / "aiida" / "specializations",
+        "ARIS_PRESETS_FILE",
+        default=str(_ARIS_CONFIG_ROOT / "apps/aiida/presets.yaml"),
     )
     ARIS_PROJECTS_ROOT: str = _env_value(
         "ARIS_PROJECTS_ROOT",

@@ -669,6 +669,7 @@ def _serialize_chat_project_summary(project: dict[str, Any], store: dict[str, An
         "session_count": len(project_sessions),
         "active": str(store.get("active_project_id") or "") == project_id,
         "environment_mode_default": _project_default_environment_mode(project),
+        "python_env": str(project.get("python_env") or "") or None,
     }
 
 
@@ -1020,6 +1021,43 @@ def archive_chat_session(state: Any, session_id: str) -> dict[str, Any] | None:
     )
 
 
+def _get_project_config_path(root_path: str | None) -> Path | None:
+    if not root_path:
+        return None
+    try:
+        p = Path(root_path)
+        if p.is_dir():
+            return p / ".aris" / "config.json"
+    except Exception:
+        pass
+    return None
+
+def _write_project_config(project: dict[str, Any]) -> None:
+    config_path = _get_project_config_path(project.get("root_path"))
+    if not config_path:
+        return
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_data = {
+            "version": "1.0",
+            "project_name": project.get("name") or project.get("title") or project.get("group_label") or "",
+            "python_env": project.get("python_env") or "",
+            "group_label": project.get("group_label") or "",
+        }
+        config_path.write_text(json.dumps(config_data, indent=2, ensure_ascii=False))
+    except Exception as exc:
+        logger.warning(log_event("aiida.frontend.project_config.write_failed", error=str(exc)))
+
+def _read_project_config(root_path: str | None) -> dict[str, Any]:
+    config_path = _get_project_config_path(root_path)
+    if config_path and config_path.is_file():
+        try:
+            return json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning(log_event("aiida.frontend.project_config.read_failed", error=str(exc)))
+    return {}
+
+
 def create_chat_project(
     state: Any,
     *,
@@ -1027,12 +1065,41 @@ def create_chat_project(
     root_path: str | None = None,
     activate: bool = True,
 ) -> dict[str, Any]:
-    return _get_session_application_service().create_project(
+    config = _read_project_config(root_path)
+    project_name = name or config.get("project_name") or "New Project"
+    
+    project = _get_session_application_service().create_project(
         state,
-        name=name,
+        name=project_name,
         root_path=root_path,
         activate=activate,
     )
+    
+    python_env = config.get("python_env")
+    if python_env:
+        project = _get_session_application_service().update_project(
+            state,
+            project_id=project["id"],
+            python_env=python_env,
+        )
+    
+    _write_project_config(project)
+    return project
+
+
+def update_chat_project(
+    state: Any,
+    project_id: str,
+    *,
+    python_env: str | None = None,
+) -> dict[str, Any]:
+    project = _get_session_application_service().update_project(
+        state,
+        project_id=project_id,
+        python_env=python_env,
+    )
+    _write_project_config(project)
+    return project
 
 
 def create_chat_session(

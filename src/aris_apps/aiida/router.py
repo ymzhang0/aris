@@ -14,13 +14,14 @@ from typing import Any, Literal
 import httpx
 import yaml
 from ag_ui.core import RunErrorEvent, RunStartedEvent
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Path as ApiPath, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path as ApiPath, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from google import genai
 from loguru import logger
 from sse_starlette.sse import EventSourceResponse
 
 from src.aris_core.config import settings
+from .config import aiida_engine_settings
 from src.aris_core.logging import get_log_buffer_snapshot, log_event
 from src.aris_core.policy import AuthorizationDecision
 from src.aris_core.runtime import get_worker_process_manager
@@ -38,6 +39,7 @@ from .chat import (
     build_chat_project_worker_headers,
     cancel_chat_turn,
     create_chat_project,
+    update_chat_project,
     create_chat_session,
     delete_chat_items,
     describe_chat_project_file,
@@ -112,6 +114,7 @@ from .schemas import (
     FrontendChatProjectFileWriteRequest,
     FrontendChatProjectFileWriteResponse,
     FrontendChatProjectCreateRequest,
+    FrontendChatProjectUpdateRequest,
     FrontendChatSessionCreateRequest,
     FrontendChatSessionTitleUpdateRequest,
     FrontendChatSessionUpdateRequest,
@@ -179,7 +182,7 @@ PENDING_SUBMISSION_KEY = "aiida_pending_submission"
 def _get_quick_prompts() -> list[dict[str, str]]:
     """Load quick prompts from external settings file."""
     try:
-        settings_path = settings.ARIS_AIIDA_SETTINGS_FILE
+        settings_path = aiida_engine_settings.settings_file
         if not os.path.exists(settings_path):
             return []
         with open(settings_path, "r", encoding="utf-8") as f:
@@ -312,6 +315,16 @@ async def _get_frontend_nodes_async(
     if node_type:
         params["node_type"] = node_type
     payload = await aiida_worker_client.request_json("GET", "/management/recent-nodes", params=params)
+    return payload.get("items", []) if isinstance(payload, dict) else []
+
+
+async def _get_frontend_processes_async(
+    limit: int = 15,
+    *,
+    root_only: bool = True,
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"limit": limit, "root_only": root_only}
+    payload = await aiida_worker_client.request_json("GET", "/management/recent-processes", params=params)
     return payload.get("items", []) if isinstance(payload, dict) else []
 
 
@@ -1664,52 +1677,6 @@ async def frontend_environment_inspect(payload: EnvironmentInspectRequest):
     return raw
 
 
-@router.get("/process/events", tags=[WORKER_PROXY_TAG])
-async def worker_process_events(request: Request):
-    """Proxy SSE stream of real-time process state changes from the worker."""
-    worker_url = bridge_endpoint("/process/events")
-
-    async def _proxy_generator():
-        try:
-            async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
-                async with client.stream("GET", worker_url) as response:
-                    if response.status_code != 200:
-                        yield {
-                            "event": "error",
-                            "data": json.dumps({"error": f"Worker returned {response.status_code}"}),
-                        }
-                        return
-                    buffer = ""
-                    async for chunk in response.aiter_text():
-                        buffer += chunk
-                        while "\n\n" in buffer:
-                            raw_event, buffer = buffer.split("\n\n", 1)
-                            lines = raw_event.strip().split("\n")
-                            event_name = "message"
-                            data_lines = []
-                            for line in lines:
-                                if line.startswith("event:"):
-                                    event_name = line[6:].strip()
-                                elif line.startswith("data:"):
-                                    data_lines.append(line[5:].strip())
-                                elif line.startswith(":"):
-                                    continue  # comment / keepalive
-                            if data_lines:
-                                yield {"event": event_name, "data": "\n".join(data_lines)}
-        except httpx.ConnectError:
-            yield {
-                "event": "error",
-                "data": json.dumps({"error": "AiiDA Worker is offline"}),
-            }
-        except Exception as exc:
-            logger.warning(log_event("aiida.process_events.proxy.failed", error=str(exc)))
-            yield {
-                "event": "error",
-                "data": json.dumps({"error": str(exc)}),
-            }
-
-    return EventSourceResponse(_proxy_generator())
-
 
 @router.get("/data/remote/{pk}/files", tags=[WORKER_PROXY_TAG])
 async def worker_remote_files(pk: int):
@@ -1901,37 +1868,39 @@ async def frontend_groups():
     return {"items": _serialize_groups(items)}
 
 
-@router.get("/frontend/groups/stream", tags=[FRONTEND_TAG])
-async def frontend_groups_stream(request: Request):
-    async def event_generator():
-        stream_id = id(request)
-        last_digest = ""
-        heartbeat_ts = time.monotonic()
-        logger.info(log_event("aiida.frontend.groups_stream.connected", stream_id=stream_id))
+@router.websocket("/frontend/groups/ws")
+async def frontend_groups_ws(websocket: WebSocket):
+    await websocket.accept()
+    stream_id = id(websocket)
+    last_digest = ""
+    heartbeat_ts = time.monotonic()
+    logger.info(log_event("aiida.frontend.groups_ws.connected", stream_id=stream_id))
 
+    try:
         while True:
-            if await request.is_disconnected():
-                logger.info(log_event("aiida.frontend.groups_stream.disconnected", stream_id=stream_id))
-                break
-
             try:
-                groups = _serialize_groups(_get_frontend_groups())
+                groups = _serialize_groups(await _get_frontend_groups_async())
                 digest = hashlib.sha1(json.dumps(groups, sort_keys=True).encode("utf-8")).hexdigest()
                 now = time.monotonic()
                 should_push = (digest != last_digest) or ((now - heartbeat_ts) >= 15)
                 if should_push:
-                    yield {"event": "groups", "data": json.dumps({"items": groups})}
+                    await websocket.send_json({"event": "groups", "data": {"items": groups}})
                     last_digest = digest
                     heartbeat_ts = now
+            except (WebSocketDisconnect, RuntimeError):
+                raise
             except Exception as error:  # noqa: BLE001
                 logger.exception(
-                    log_event("aiida.frontend.groups_stream.failed", stream_id=stream_id, error=str(error))
+                    log_event("aiida.frontend.groups_ws.failed", stream_id=stream_id, error=str(error))
                 )
-                yield {"event": "groups", "data": json.dumps({"items": []})}
+                try:
+                    await websocket.send_json({"event": "groups", "data": {"items": []}})
+                except Exception:
+                    pass
 
             await asyncio.sleep(2.5)
-
-    return EventSourceResponse(event_generator())
+    except (WebSocketDisconnect, RuntimeError):
+        logger.info(log_event("aiida.frontend.groups_ws.disconnected", stream_id=stream_id))
 
 
 @router.post("/frontend/groups/create", tags=[FRONTEND_TAG])
@@ -2039,7 +2008,12 @@ async def frontend_processes(
     root_only: bool = Query(default=True),
 ):
     try:
-        processes = _get_frontend_nodes(limit=limit, group_label=group_label, node_type=node_type, root_only=root_only)
+        processes = await _get_frontend_nodes_async(
+            limit=limit,
+            group_label=group_label,
+            node_type=node_type,
+            root_only=root_only,
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:  # noqa: BLE001
@@ -2288,82 +2262,98 @@ async def frontend_node_soft_delete(
     return response if isinstance(response, dict) else {"pk": int(pk), "soft_deleted": deleted}
 
 
-@router.get("/frontend/processes/stream", tags=[FRONTEND_TAG])
-async def frontend_processes_stream(
-    request: Request,
+@router.websocket("/frontend/processes/ws")
+async def frontend_processes_ws(
+    websocket: WebSocket,
     limit: int = Query(default=15, ge=1, le=100),
     group_label: str | None = Query(default=None),
     node_type: str | None = Query(default=None),
     root_only: bool = Query(default=True),
 ):
     try:
-        _get_frontend_nodes(limit=1, group_label=group_label, node_type=node_type, root_only=root_only)
+        await _get_frontend_nodes_async(
+            limit=1,
+            group_label=group_label,
+            node_type=node_type,
+            root_only=root_only,
+        )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        await websocket.close(code=1003, reason=str(error))
+        return
 
-    async def event_generator():
-        stream_id = id(request)
-        last_digest = ""
-        heartbeat_ts = time.monotonic()
-        logger.info(log_event("aiida.frontend.process_stream.connected", stream_id=stream_id))
+    await websocket.accept()
+    stream_id = id(websocket)
+    last_digest = ""
+    heartbeat_ts = time.monotonic()
+    logger.info(log_event("aiida.frontend.process_ws.connected", stream_id=stream_id))
+
+    try:
         while True:
-            if await request.is_disconnected():
-                logger.info(log_event("aiida.frontend.process_stream.disconnected", stream_id=stream_id))
-                break
-
             try:
                 processes = _serialize_processes(
-                    _get_frontend_nodes(limit=limit, group_label=group_label, node_type=node_type, root_only=root_only)
+                    await _get_frontend_nodes_async(
+                        limit=limit,
+                        group_label=group_label,
+                        node_type=node_type,
+                        root_only=root_only,
+                    )
                 )
                 digest = hashlib.sha1(json.dumps(processes, sort_keys=True).encode("utf-8")).hexdigest()
                 now = time.monotonic()
                 should_push = (digest != last_digest) or ((now - heartbeat_ts) >= 15)
                 if should_push:
-                    yield {"event": "processes", "data": json.dumps({"items": processes})}
+                    await websocket.send_json({"event": "processes", "data": {"items": processes}})
                     last_digest = digest
                     heartbeat_ts = now
+            except (WebSocketDisconnect, RuntimeError):
+                raise
             except Exception as error:  # noqa: BLE001
                 logger.exception(
-                    log_event("aiida.frontend.process_stream.failed", stream_id=stream_id, error=str(error))
+                    log_event("aiida.frontend.process_ws.failed", stream_id=stream_id, error=str(error))
                 )
-                yield {"event": "processes", "data": json.dumps({"items": []})}
+                try:
+                    await websocket.send_json({"event": "processes", "data": {"items": []}})
+                except Exception:
+                    pass
 
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(3.0)
+    except (WebSocketDisconnect, RuntimeError):
+        logger.info(log_event("aiida.frontend.process_ws.disconnected", stream_id=stream_id))
 
-    return EventSourceResponse(event_generator())
 
+@router.websocket("/frontend/infrastructure/ws")
+async def frontend_infrastructure_ws(websocket: WebSocket):
+    await websocket.accept()
+    stream_id = id(websocket)
+    last_digest = ""
+    heartbeat_ts = time.monotonic()
+    logger.info(log_event("aiida.frontend.infrastructure_ws.connected", stream_id=stream_id))
 
-@router.get("/frontend/infrastructure/stream", tags=[FRONTEND_TAG])
-async def frontend_infrastructure_stream(request: Request):
-    async def event_generator():
-        stream_id = id(request)
-        last_digest = ""
-        heartbeat_ts = time.monotonic()
-        logger.info(log_event("aiida.frontend.infrastructure_stream.connected", stream_id=stream_id))
-
+    try:
         while True:
-            if await request.is_disconnected():
-                logger.info(log_event("aiida.frontend.infrastructure_stream.disconnected", stream_id=stream_id))
-                break
-
             try:
                 infrastructure = await aiida_worker_client.inspect_infrastructure_v2()
                 digest = hashlib.sha1(json.dumps(infrastructure, sort_keys=True).encode("utf-8")).hexdigest()
                 now = time.monotonic()
                 should_push = (digest != last_digest) or ((now - heartbeat_ts) >= 15)
                 if should_push:
-                    yield {"event": "infrastructure", "data": json.dumps({"items": infrastructure})}
+                    await websocket.send_json({"event": "infrastructure", "data": {"items": infrastructure}})
                     last_digest = digest
                     heartbeat_ts = now
+            except (WebSocketDisconnect, RuntimeError):
+                raise
             except Exception as error:  # noqa: BLE001
                 logger.exception(
-                    log_event("aiida.frontend.infrastructure_stream.failed", stream_id=stream_id, error=str(error))
+                    log_event("aiida.frontend.infrastructure_ws.failed", stream_id=stream_id, error=str(error))
                 )
-                yield {"event": "error", "data": json.dumps({"error": str(error)})}
+                try:
+                    await websocket.send_json({"event": "error", "data": {"error": str(error)}})
+                except Exception:
+                    pass
 
-            await asyncio.sleep(2.5)
-
-    return EventSourceResponse(event_generator())
+            await asyncio.sleep(5.0)
+    except (WebSocketDisconnect, RuntimeError):
+        logger.info(log_event("aiida.frontend.infrastructure_ws.disconnected", stream_id=stream_id))
 
 
 @router.get("/frontend/logs", tags=[FRONTEND_TAG])
@@ -2372,35 +2362,38 @@ async def frontend_logs(limit: int = Query(default=240, ge=20, le=1000)):
     return {"version": version, "lines": lines}
 
 
-@router.get("/frontend/logs/stream", tags=[FRONTEND_TAG])
-async def frontend_logs_stream(request: Request, limit: int = Query(default=240, ge=20, le=1000)):
-    async def event_generator():
-        stream_id = id(request)
-        last_version = -1
-        heartbeat_ts = time.monotonic()
-        logger.info(log_event("aiida.frontend.log_stream.connected", stream_id=stream_id))
-        while True:
-            if await request.is_disconnected():
-                logger.info(log_event("aiida.frontend.log_stream.disconnected", stream_id=stream_id))
-                break
+@router.websocket("/frontend/logs/ws")
+async def frontend_logs_ws(websocket: WebSocket, limit: int = Query(default=240, ge=20, le=1000)):
+    await websocket.accept()
+    stream_id = id(websocket)
+    last_version = -1
+    heartbeat_ts = time.monotonic()
+    logger.info(log_event("aiida.frontend.log_ws.connected", stream_id=stream_id))
 
+    try:
+        while True:
             try:
                 version, lines = get_log_buffer_snapshot(limit=limit)
                 now = time.monotonic()
                 should_push = (version != last_version) or ((now - heartbeat_ts) >= 8.0)
                 if should_push:
-                    yield {"event": "logs", "data": json.dumps({"version": version, "lines": lines})}
+                    await websocket.send_json({"event": "logs", "data": {"version": version, "lines": lines}})
                     last_version = version
                     heartbeat_ts = now
+            except (WebSocketDisconnect, RuntimeError):
+                raise
             except Exception as error:  # noqa: BLE001
                 logger.exception(
-                    log_event("aiida.frontend.log_stream.failed", stream_id=stream_id, error=str(error))
+                    log_event("aiida.frontend.log_ws.failed", stream_id=stream_id, error=str(error))
                 )
-                yield {"event": "logs", "data": json.dumps({"version": -1, "lines": []})}
+                try:
+                    await websocket.send_json({"event": "logs", "data": {"version": -1, "lines": []}})
+                except Exception:
+                    pass
 
-            await asyncio.sleep(0.75)
-
-    return EventSourceResponse(event_generator())
+            await asyncio.sleep(1.5)
+    except (WebSocketDisconnect, RuntimeError):
+        logger.info(log_event("aiida.frontend.log_ws.disconnected", stream_id=stream_id))
 
 
 @router.post("/frontend/submission/pending/cancel", tags=[FRONTEND_TAG])
@@ -2432,8 +2425,9 @@ async def frontend_cancel_pending_submission(
 
 
 @router.get("/frontend/chat/sessions", tags=[FRONTEND_TAG])
-async def frontend_chat_sessions(request: Request):
+async def frontend_chat_sessions(request: Request, response: Response):
     state = request.app.state
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return _chat_sessions_payload(state)
 
 
@@ -2454,6 +2448,25 @@ async def frontend_chat_projects(request: Request):
     }
 
 
+@router.post("/frontend/chat/projects/browse-directory", tags=[FRONTEND_TAG])
+async def frontend_browse_chat_project_directory(request: Request):
+    """Open a native MacOS folder picker dialog and return the selected path."""
+    import subprocess
+    try:
+        script = '''
+        tell application (path to frontmost application as text)
+            set folderPath to choose folder with prompt "Select Project Folder"
+            POSIX path of folderPath
+        end tell
+        '''
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+        if result.returncode == 0:
+            return {"path": result.stdout.strip(), "success": True}
+        return {"path": None, "success": False, "error": "User cancelled or error occurred."}
+    except Exception as e:
+        return {"path": None, "success": False, "error": str(e)}
+
+
 @router.post("/frontend/chat/projects", tags=[FRONTEND_TAG])
 async def frontend_create_chat_project(request: Request, payload: FrontendChatProjectCreateRequest):
     state = request.app.state
@@ -2472,6 +2485,27 @@ async def frontend_create_chat_project(request: Request, payload: FrontendChatPr
             await _ensure_named_groups([project_group_label])
         except Exception as exc:  # noqa: BLE001
             logger.warning(log_event("aiida.frontend.project_group.ensure_failed", error=str(exc), label=project_group_label))
+    return {
+        "project": project,
+        "active_project_id": get_active_chat_project_id(state),
+        "projects": list_chat_projects(state),
+    }
+
+
+@router.patch("/frontend/chat/projects/{project_id}", tags=[FRONTEND_TAG])
+async def frontend_update_chat_project(
+    request: Request, project_id: str, payload: FrontendChatProjectUpdateRequest
+):
+    state = request.app.state
+    try:
+        project = update_chat_project(
+            state,
+            project_id=project_id,
+            python_env=payload.python_env,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
     return {
         "project": project,
         "active_project_id": get_active_chat_project_id(state),
@@ -2517,14 +2551,26 @@ async def frontend_delete_chat_project(
     ),
 ):
     state = request.app.state
-    labels = _collect_chat_group_labels_for_deletion(state, project_ids=[project_id])
+    
+    # Collect group labels before deleting the chat project
+    target_labels = []
+    for p in list_chat_projects(state):
+        if p.get("id") == project_id and p.get("group_label"):
+            target_labels.append(p["group_label"])
+            
     deleted = delete_chat_items(state, project_ids=[project_id])
     if project_id not in set(deleted.get("deleted_project_ids") or []):
         raise HTTPException(status_code=404, detail="Chat project not found")
-    try:
-        await _delete_named_groups(labels)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(log_event("aiida.frontend.project_groups.delete_failed", error=str(exc), labels=labels))
+        
+    for target in target_labels:
+        for group in list_groups():
+            gl = str(group.get("label") or "")
+            if gl == target or gl.startswith(f"{target}/"):
+                try:
+                    delete_group(int(group["pk"]))
+                except Exception:
+                    pass
+                    
     return _chat_delete_response(state, deleted)
 
 
@@ -2537,14 +2583,26 @@ async def frontend_delete_chat_session(
     ),
 ):
     state = request.app.state
-    labels = _collect_chat_group_labels_for_deletion(state, session_ids=[session_id])
+    
+    # Collect group labels before deleting the chat session
+    target_labels = []
+    for s in list_chat_sessions(state):
+        if s.get("id") == session_id and s.get("session_group_label"):
+            target_labels.append(s["session_group_label"])
+            
     deleted = delete_chat_items(state, session_ids=[session_id])
     if session_id not in set(deleted.get("deleted_session_ids") or []):
         raise HTTPException(status_code=404, detail="Chat session not found")
-    try:
-        await _delete_named_groups(labels)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(log_event("aiida.frontend.session_groups.delete_failed", error=str(exc), labels=labels))
+        
+    for target in target_labels:
+        for group in list_groups():
+            gl = str(group.get("label") or "")
+            if gl == target or gl.startswith(f"{target}/"):
+                try:
+                    delete_group(int(group["pk"]))
+                except Exception:
+                    pass
+                    
     return _chat_delete_response(state, deleted)
 
 
@@ -2562,18 +2620,9 @@ async def frontend_delete_chat_items(
     if not project_ids and not session_ids:
         raise HTTPException(status_code=400, detail={"error": "No project_ids or session_ids provided"})
 
-    labels = _collect_chat_group_labels_for_deletion(
-        state,
-        project_ids=project_ids,
-        session_ids=session_ids,
-    )
     deleted = delete_chat_items(state, project_ids=project_ids, session_ids=session_ids)
     if not (deleted.get("deleted_project_ids") or deleted.get("deleted_session_ids")):
-        raise HTTPException(status_code=404, detail="No matching chat items found")
-    try:
-        await _delete_named_groups(labels)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(log_event("aiida.frontend.chat_groups.bulk_delete_failed", error=str(exc), labels=labels))
+        raise HTTPException(status_code=404, detail="No items found to delete")
     return _chat_delete_response(state, deleted)
 
 

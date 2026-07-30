@@ -1,3 +1,4 @@
+import { aiidaClient } from "@/api/aiidaClient";
 import {
   Bot,
   CheckSquare2,
@@ -31,9 +32,6 @@ import { ComputeHealthCard } from "@/components/dashboard/compute-health-card";
 import { SidebarPageHeader } from "@/components/dashboard/sidebar-page-header";
 import { cn } from "@/lib/utils";
 import {
-  exportCodeConfig,
-  exportComputerConfig,
-  getInfrastructure,
   getNodeScript,
   saveChatProjectFile,
 } from "@/lib/api";
@@ -645,7 +643,7 @@ export function Sidebar({
   const queryClient = useQueryClient();
   const infraQuery = useQuery({
     queryKey: ["aiida-infrastructure"],
-    queryFn: getInfrastructure,
+    queryFn: aiidaClient.getInfrastructure,
     refetchOnWindowFocus: true,
     staleTime: 1_000,
   });
@@ -907,7 +905,7 @@ export function Sidebar({
 
   const handleExportComputer = useCallback(async (computerPk: number, computerLabel: string) => {
     try {
-      const payload = await exportComputerConfig(computerPk);
+      const payload = await aiidaClient.exportComputerConfig(computerPk);
       await handleInfrastructureExport(payload, `Export computer ${computerLabel}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : `Failed to export computer ${computerLabel}.`;
@@ -917,7 +915,7 @@ export function Sidebar({
 
   const handleExportCode = useCallback(async (codePk: number, codeLabel: string) => {
     try {
-      const payload = await exportCodeConfig(codePk);
+      const payload = await aiidaClient.exportCodeConfig(codePk);
       await handleInfrastructureExport(payload, `Export code ${codeLabel}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : `Failed to export code ${codeLabel}.`;

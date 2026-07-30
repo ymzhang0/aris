@@ -153,6 +153,7 @@ export type ChatProject = {
   session_count: number;
   active: boolean;
   environment_mode_default?: "worker-default" | "project-auto" | string;
+  python_env?: string | null;
 };
 
 export type ChatProjectMutationResponse = {

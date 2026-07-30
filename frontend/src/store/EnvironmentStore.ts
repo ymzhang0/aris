@@ -326,8 +326,8 @@ function createEnvironmentStore(): EnvironmentStoreApi {
     const normalizedProjectPath = normalizePath(project?.root_path ?? null);
     const nextDefaultMode: ProjectEnvironmentDefaultMode =
       project?.environment_mode_default === "project-auto" ? "project-auto" : "worker-default";
-    const shouldUseWorkerDefault = nextDefaultMode === "worker-default";
-    const autoPythonPath = buildAutoPythonPath(normalizedProjectPath);
+    const shouldUseWorkerDefault = nextDefaultMode === "worker-default" && !project?.python_env;
+    const autoPythonPath = project?.python_env ? normalizePath(project.python_env) : buildAutoPythonPath(normalizedProjectPath);
     const projectChanged = normalizedProjectPath !== state.currentProjectPath;
     const shouldResetToAuto = projectChanged || state.pythonPathSource === "auto";
 
@@ -351,19 +351,19 @@ function createEnvironmentStore(): EnvironmentStoreApi {
       };
     },
     setProjectContext: (project) => {
-      const normalizedProjectPath = normalizePath(project?.root_path ?? null);
+      const incomingProjectPath = normalizePath(project?.root_path ?? null);
       const nextDefaultMode: ProjectEnvironmentDefaultMode =
         project?.environment_mode_default === "project-auto" ? "project-auto" : "worker-default";
-      const shouldUseWorkerDefault = nextDefaultMode === "worker-default";
-      const autoPythonPath = buildAutoPythonPath(normalizedProjectPath);
-      const nextPythonPath = state.pythonPathSource === "manual" && normalizedProjectPath === state.currentProjectPath
+      const shouldUseWorkerDefault = nextDefaultMode === "worker-default" && !project?.python_env;
+      const autoPythonPath = project?.python_env ? normalizePath(project.python_env) : buildAutoPythonPath(incomingProjectPath);
+      const nextPythonPath = state.pythonPathSource === "manual" && incomingProjectPath === state.currentProjectPath
         ? state.pythonPath
         : autoPythonPath;
-      const nextPythonSource = state.pythonPathSource === "manual" && normalizedProjectPath === state.currentProjectPath
+      const nextPythonSource = state.pythonPathSource === "manual" && incomingProjectPath === state.currentProjectPath
         ? state.pythonPathSource
         : "auto";
       if (
-        normalizedProjectPath === state.currentProjectPath
+        incomingProjectPath === state.currentProjectPath
         && nextDefaultMode === state.projectDefaultMode
         && nextPythonPath === state.pythonPath
         && nextPythonSource === state.pythonPathSource

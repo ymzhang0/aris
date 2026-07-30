@@ -117,6 +117,7 @@ async def lifespan(app: FastAPI):
                 "aris_aiida_worker",
             ],
             cwd=settings.ARIS_WORKER_RUNTIME_CWD,
+            request_timeout=60.0,
         )
         configure_worker_process_manager(worker_process_manager)
         app.state.worker_process_manager = worker_process_manager
@@ -174,9 +175,10 @@ async def lifespan(app: FastAPI):
             )
         )
 
+        import asyncio
         for hub in ACTIVE_HUBS:
             if hasattr(hub, 'start'):
-                hub.start()
+                await asyncio.to_thread(hub.start)
                 
     except Exception as e:
         logger.exception(log_event("engine.bootstrap.failed", engine=engine_name, error=str(e)))

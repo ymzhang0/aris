@@ -138,6 +138,26 @@ class ChatSessionApplicationService:
         self._deps.persist_store(state)
         return self._deps.serialize_project(project, store)
 
+    def update_project(
+        self,
+        state: Any,
+        project_id: str,
+        *,
+        python_env: str | None = None,
+    ) -> dict[str, Any]:
+        store = self._deps.get_store(state)
+        project = next((p for p in store.get("projects", []) if p["id"] == project_id), None)
+        if not project:
+            raise ValueError("Project not found")
+
+        if python_env is not None:
+            project["python_env"] = python_env if python_env.strip() else None
+
+        project["updated_at"] = self._deps.now_iso()
+        self._deps.touch_sessions(state)
+        self._deps.persist_store(state)
+        return self._deps.serialize_project(project, store)
+
     def create_session(
         self,
         state: Any,

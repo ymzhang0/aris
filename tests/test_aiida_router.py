@@ -307,11 +307,11 @@ async def test_enrich_process_detail_payload_always_exposes_link_arrays() -> Non
 async def test_frontend_processes_defaults_to_root_only(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def _fake_get_frontend_nodes(**kwargs: object) -> list[dict[str, object]]:
+    async def _fake_get_frontend_nodes(**kwargs: object) -> list[dict[str, object]]:
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr(aiida_router, "_get_frontend_nodes", _fake_get_frontend_nodes)
+    monkeypatch.setattr(aiida_router, "_get_frontend_nodes_async", _fake_get_frontend_nodes)
 
     response = await aiida_router.frontend_processes(
         limit=15,

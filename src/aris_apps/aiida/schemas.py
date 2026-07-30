@@ -41,6 +41,10 @@ class FrontendChatProjectCreateRequest(BaseModel):
     root_path: str | None = None
 
 
+class FrontendChatProjectUpdateRequest(BaseModel):
+    python_env: str | None = None
+
+
 class FrontendChatProjectFileWriteRequest(BaseModel):
     relative_path: str = Field(..., min_length=1, max_length=512)
     content: str = Field(default="")

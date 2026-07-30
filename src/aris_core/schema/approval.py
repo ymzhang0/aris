@@ -87,7 +87,7 @@ def build_submission_approval_request(
     return ApprovalRequest(
         scope=scope,
         resource_digest=submission_resource_digest(draft),
-        summary="Submit the prepared AiiDA workflow" if scope == "single" else "Submit the prepared AiiDA batch",
+        summary="Submit the prepared workflow" if scope == "single" else "Submit the prepared batch",
     )
 
 

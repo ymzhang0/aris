@@ -8,10 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 def _payload_contains_submission_preview(payload: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(payload, dict):
         return False
-    if isinstance(payload.get("submission_draft"), dict):
-        return True
-    payload_type = str(payload.get("type") or payload.get("status") or "").strip().upper()
-    if payload_type == "SUBMISSION_DRAFT":
+    if isinstance(payload.get("submission_draft"), dict) or isinstance(payload.get("submission_draft"), list):
         return True
     return False
 

@@ -22,6 +22,7 @@ from .service import (
     serialize_chat_history,
     start_chat_turn,
     touch_chat,
+    update_chat_project,
     update_chat_session,
     write_chat_project_file,
 )
@@ -86,6 +87,7 @@ __all__ = [
     "SubmissionPreviewRules",
     "SubmissionPreviewService",
     "touch_chat",
+    "update_chat_project",
     "update_chat_session",
     "write_chat_project_file",
 ]

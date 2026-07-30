@@ -6,13 +6,13 @@ from typing import Any, Dict
 
 import yaml
 
-from src.aris_core.config import settings
+from src.aris_apps.aiida.config import aiida_engine_settings
 
 
 class InfrastructureManager:
     @property
     def config_path(self) -> Path:
-        return Path(settings.ARIS_PRESETS_FILE)
+        return Path(aiida_engine_settings.presets_file)
 
     def __init__(self):
         # We load presets on demand or at least don't hardcode the path in __init__ 

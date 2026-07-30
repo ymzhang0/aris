@@ -1624,6 +1624,32 @@ def add_referenced_nodes_prompt(ctx: RunContext[AiiDADeps]) -> str:
 
 
 @aiida_researcher.system_prompt(dynamic=True)
+def add_project_python_env_prompt(ctx: RunContext[AiiDADeps]) -> str:
+    app_state = ctx.deps.app_state
+    if app_state is None:
+        return ""
+    from aris_apps.aiida.chat.service import get_active_chat_project_id, list_chat_projects
+    project_id = get_active_chat_project_id(app_state)
+    if not project_id:
+        return ""
+    
+    projects = list_chat_projects(app_state)
+    project = next((p for p in projects if p["id"] == project_id), None)
+    if not project:
+        return ""
+
+    python_env = str(project.get("python_env") or "").strip()
+    if python_env:
+        return (
+            f"\n### PYTHON ENVIRONMENT\n"
+            f"The user has configured a specific Python environment for this project at: {python_env}\n"
+            f"If you need to run python scripts, check packages via pip, or perform any python-related tasks for this project, "
+            f"you MUST use this environment (e.g., by executing its bin/python directly or activating it).\n"
+        )
+    return ""
+
+
+@aiida_researcher.system_prompt(dynamic=True)
 def add_specialized_skills_prompt(ctx: RunContext[AiiDADeps]) -> str:  # noqa: ARG001
     if not _STARTUP_SPECIALIZED_SKILLS:
         return ""

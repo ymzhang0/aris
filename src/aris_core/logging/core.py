@@ -200,9 +200,9 @@ def _event_style(event: str | None) -> str:
     normalized = event.strip().lower()
     if normalized.startswith("error."):
         return "bold red"
-    if normalized.startswith("aiida.agent."):
+    if "agent" in normalized:
         return "green"
-    if normalized.startswith("aiida.worker."):
+    if "worker" in normalized:
         return "blue"
     if normalized.startswith("engine."):
         return "magenta"
@@ -288,7 +288,7 @@ class ARISRichHandler(RichHandler):
         self._last_turn_id: str | None = None
 
     def _maybe_render_turn_rule(self, event: str | None, fields: dict[str, str]) -> None:
-        if event != "aiida.chat_turn.start":
+        if not event or not event.endswith(".chat_turn.start"):
             return
         turn_id = _turn_id_from_fields(fields)
         if turn_id and self._last_turn_id == turn_id:

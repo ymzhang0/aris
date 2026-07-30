@@ -203,11 +203,17 @@ class WorkerProcessManager:
     async def _invalidate_process_locked(self) -> None:
         process = self._process
         if process is not None and process.returncode is None:
-            process.terminate()
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
             try:
                 await asyncio.wait_for(process.wait(), timeout=1.0)
             except asyncio.TimeoutError:
-                process.kill()
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
                 await process.wait()
         await self._finish_stderr_task()
 
