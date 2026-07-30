@@ -64,6 +64,7 @@ import type {
   SessionParameter,
 } from "@/types/aiida";
 import { Database, FolderOpen, History, Moon, Sun } from "lucide-react";
+import { AppShell } from "@/components/shell/AppShell";
 
 const THEME_STORAGE_KEY = "aris.dashboard.theme";
 const CURRENT_SESSION_STORAGE_KEY = "current_session_id";
@@ -1806,9 +1807,10 @@ export default function App() {
 
   return (
     <main className="dashboard-shell h-screen overflow-hidden">
-      <div className="flex h-full min-h-0 w-full flex-col xl:flex-row">
-        <section className="flex h-full min-h-0 w-full shrink-0 overflow-hidden border-r border-zinc-200/80 bg-white lg:w-[360px] dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex h-full w-12 flex-col items-center justify-between border-r border-zinc-200/70 bg-zinc-50/85 px-1.5 py-3 dark:border-zinc-800/70 dark:bg-zinc-900/60">
+      <AppShell
+        leftSidebar={
+          <div className="flex h-full min-h-0 w-full flex-row">
+            <div className="flex h-full w-12 shrink-0 flex-col items-center justify-between border-r border-zinc-200/70 bg-zinc-50/85 px-1.5 py-3 dark:border-zinc-800/70 dark:bg-zinc-900/60">
             <div className="flex flex-col items-center gap-2">
               <div
                 className="mb-1 flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-zinc-200/70 dark:bg-zinc-950 dark:ring-zinc-800"
@@ -1944,61 +1946,66 @@ export default function App() {
               />
             )}
           </div>
-        </section>
-
-        <MainWorkspace
-          activeView={activeView}
-          viewerFile={viewerFile}
-          theme={theme}
-          onCloseViewer={closeViewer}
-          chatContent={
-            isReady ? (
-              <ChatPanel
-                activeProject={activeSessionProject ?? null}
-                messages={chatMessages}
-                models={models}
-                selectedModel={selectedModel}
-                composerResetVersion={composerResetVersion}
-                currentProjectName={activeChatSession?.project_label ?? null}
-                currentSessionName={activeChatSession?.title ?? null}
-                isLoading={isChatBusy}
-                activeTurnId={activeTurnId}
-                canExecuteSubmissions={canExecuteSubmissions}
-                canCancelSubmissions={canCancelSubmissions}
-                onNewConversation={() => {
-                  void handleCreateChatSession();
-                }}
-                contextNodes={contextNodes}
-                pinnedNodes={pinnedNodes}
-                sessionEnvironment={sessionEnvironment}
-                sessionEnvironmentAuto={sessionEnvironmentAuto}
-                promptOverride={promptOverride}
-                sessionParameters={sessionParameters}
-                selectedGroup={resolveSelectedGroupDisplayLabel(selectedGroup, currentContextGroupLabel) ?? selectedGroupLabel ?? undefined}
-                onSendMessage={handleSendMessage}
-                onStopResponse={handleStopResponse}
-                onModelChange={setSelectedModel}
-                onAttachFile={(file) => uploadMutation.mutate(file)}
-                onAddContextNode={appendContextNode}
-                onPinNode={handlePinNode}
-                onUnpinNode={handleUnpinNode}
-                onRemoveContextNode={handleRemoveContextNode}
-                onOpenDetail={handleOpenDetail}
-                onRestoreContextNodes={handleRestoreContextNodes}
-                onSessionEnvironmentChange={setSessionEnvironment}
-                onSessionEnvironmentAutoChange={setSessionEnvironmentAuto}
-                onPromptOverrideChange={setPromptOverride}
-                onSessionParametersChange={setSessionParameters}
-              />
-            ) : (
-              <section className="flex flex-1 items-center justify-center bg-zinc-50/70 dark:bg-zinc-950">
-                <p className="text-sm text-zinc-600 dark:text-zinc-300">{loadingMessage}</p>
-              </section>
-            )
-          }
-          terminalContent={<RuntimeTerminal lines={logs} />}
-        />
-      </div>
+        </div>
+      }
+        mainContent={
+          <MainWorkspace
+            activeView={activeView}
+            viewerFile={viewerFile}
+            theme={theme}
+            onCloseViewer={closeViewer}
+            chatContent={
+              isReady ? (
+                <ChatPanel
+                  activeProject={activeSessionProject ?? null}
+                  messages={chatMessages}
+                  models={models}
+                  selectedModel={selectedModel}
+                  composerResetVersion={composerResetVersion}
+                  currentProjectName={activeChatSession?.project_label ?? null}
+                  currentSessionName={activeChatSession?.title ?? null}
+                  isLoading={isChatBusy}
+                  activeTurnId={activeTurnId}
+                  canExecuteSubmissions={canExecuteSubmissions}
+                  canCancelSubmissions={canCancelSubmissions}
+                  onNewConversation={() => {
+                    void handleCreateChatSession();
+                  }}
+                  contextNodes={contextNodes}
+                  pinnedNodes={pinnedNodes}
+                  sessionEnvironment={sessionEnvironment}
+                  sessionEnvironmentAuto={sessionEnvironmentAuto}
+                  promptOverride={promptOverride}
+                  sessionParameters={sessionParameters}
+                  selectedGroup={resolveSelectedGroupDisplayLabel(selectedGroup, currentContextGroupLabel) ?? selectedGroupLabel ?? undefined}
+                  onSendMessage={handleSendMessage}
+                  onStopResponse={handleStopResponse}
+                  onModelChange={setSelectedModel}
+                  onAttachFile={(file) => uploadMutation.mutate(file)}
+                  onAddContextNode={appendContextNode}
+                  onPinNode={handlePinNode}
+                  onUnpinNode={handleUnpinNode}
+                  onRemoveContextNode={handleRemoveContextNode}
+                  onOpenDetail={handleOpenDetail}
+                  onRestoreContextNodes={handleRestoreContextNodes}
+                  onSessionEnvironmentChange={setSessionEnvironment}
+                  onSessionEnvironmentAutoChange={setSessionEnvironmentAuto}
+                  onPromptOverrideChange={setPromptOverride}
+                  onSessionParametersChange={setSessionParameters}
+                />
+              ) : (
+                <section className="flex flex-1 items-center justify-center bg-zinc-50/70 dark:bg-zinc-950">
+                  <p className="text-sm text-zinc-600 dark:text-zinc-300">{loadingMessage}</p>
+                </section>
+              )
+            }
+            terminalContent={null}
+          />
+        }
+        rightSidebar={
+          <RuntimeTerminal lines={logs} />
+        }
+      />
       <ProcessDetailDrawer
         process={activeProcess}
         onClose={() => setActiveProcess(null)}
