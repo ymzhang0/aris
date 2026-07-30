@@ -6,8 +6,15 @@ from types import SimpleNamespace
 import pytest
 
 from src.aris_apps.aiida import router as aiida_router
+
+from src.aris_apps.aiida.routers import frontend as frontend_router
+from src.aris_apps.aiida.routers import data as data_router
+from src.aris_apps.aiida.routers import management as management_router
+from src.aris_apps.aiida.routers import process as process_router
+from src.aris_apps.aiida.routers import submission as submission_router
+
 from src.aris_apps.aiida.presenters import node_view as aiida_node_view
-from src.aris_apps.aiida.router import (
+from src.aris_apps.aiida.routers.frontend import (
     _coerce_chat_metadata,
     _extract_folder_preview,
     _serialize_processes,
@@ -17,9 +24,9 @@ from src.aris_core.schema.approval import ApprovalDecision, submission_resource_
 
 def _submission_request(
     draft: dict[str, object] | list[dict[str, object]],
-) -> aiida_router.SubmissionDraftRequest:
+) -> submission_router.SubmissionDraftRequest:
     scope = "batch" if isinstance(draft, list) else "single"
-    return aiida_router.SubmissionDraftRequest(
+    return submission_router.SubmissionDraftRequest(
         draft=draft,
         approval=ApprovalDecision(
             approval_id="approval-test",
@@ -163,7 +170,7 @@ def test_attach_tree_links_sets_inputs_and_outputs_on_each_tree_node() -> None:
         11: (root_inputs, [], None, None),
     }
 
-    aiida_router._attach_tree_links(tree, links_by_pk)
+    frontend_router._attach_tree_links(tree, links_by_pk)
 
     assert tree["inputs"] == {
         "structure": {"link_label": "structure", "node_type": "StructureData", "pk": 5}
@@ -185,7 +192,7 @@ def test_attach_tree_links_prefers_direct_links_for_tree_nodes() -> None:
         11: (verbose_inputs, [], direct_inputs, direct_outputs),
     }
 
-    aiida_router._attach_tree_links(tree, links_by_pk)
+    frontend_router._attach_tree_links(tree, links_by_pk)
 
     assert tree["inputs"] == {
         "structure": {"link_label": "structure", "node_type": "StructureData", "pk": 7}
@@ -228,9 +235,9 @@ async def test_bridge_status_reports_managed_worker_runtime(monkeypatch: pytest.
             plugins=["quantumespresso.pw.base"],
         )
 
-    monkeypatch.setattr(aiida_router.aiida_capability, "get_status", managed_status)
+    monkeypatch.setattr(data_router.aiida_capability, "get_status", managed_status)
 
-    response = await aiida_router.get_worker_status()
+    response = await data_router.get_worker_status()
 
     assert response.status == "online"
     assert response.transport == "stdio"
@@ -240,9 +247,8 @@ async def test_bridge_status_reports_managed_worker_runtime(monkeypatch: pytest.
 
 @pytest.mark.anyio
 async def test_frontend_export_group_returns_archive_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(aiida_router.hub, "_current_profile", "codex-test-profile")
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router.hub, "_current_profile", "codex-test-profile")
+    monkeypatch.setattr(frontend_router,
         "export_group_archive",
         lambda pk: SimpleNamespace(  # noqa: ARG005
             content=b"fake-aiida-archive",
@@ -251,7 +257,7 @@ async def test_frontend_export_group_returns_archive_response(monkeypatch: pytes
         ),
     )
 
-    response = await aiida_router.frontend_export_group(42)
+    response = await frontend_router.frontend_export_group(42)
 
     assert response.body == b"fake-aiida-archive"
     assert response.media_type == "application/octet-stream"
@@ -276,14 +282,13 @@ async def test_frontend_chat_project_workspace_returns_payload(monkeypatch: pyte
             }
         ],
     }
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "list_chat_project_workspace_files",
         lambda state, project_id, relative_path=None: payload,  # noqa: ARG005
     )
 
     request = SimpleNamespace(app=SimpleNamespace(state=object()))
-    response = await aiida_router.frontend_chat_project_workspace(
+    response = await frontend_router.frontend_chat_project_workspace(
         request,
         "proj-1",
         relative_path="results",
@@ -296,7 +301,7 @@ async def test_frontend_chat_project_workspace_returns_payload(monkeypatch: pyte
 async def test_enrich_process_detail_payload_always_exposes_link_arrays() -> None:
     payload = {"summary": {"pk": None}}
 
-    enriched = await aiida_router._enrich_process_detail_payload(payload)
+    enriched = await process_router._enrich_process_detail_payload(payload)
 
     assert enriched["inputs"] == {}
     assert enriched["outputs"] == {}
@@ -310,9 +315,9 @@ async def test_frontend_processes_defaults_to_root_only(monkeypatch: pytest.Monk
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr(aiida_router, "_get_frontend_nodes_async", _fake_get_frontend_nodes)
+    monkeypatch.setattr(frontend_router, "_get_frontend_nodes_async", _fake_get_frontend_nodes)
 
-    response = await aiida_router.frontend_processes(
+    response = await frontend_router.frontend_processes(
         limit=15,
         group_label=None,
         node_type=None,
@@ -337,9 +342,9 @@ def test_clear_pending_submission_memory_sets_none() -> None:
 
     state = type("State", (), {"memory": _DummyMemory()})()
 
-    aiida_router._clear_pending_submission_memory(state)
+    submission_router._clear_pending_submission_memory(state)
 
-    assert captured[aiida_router.PENDING_SUBMISSION_KEY] is None
+    assert captured[submission_router.PENDING_SUBMISSION_KEY] is None
 
 
 @pytest.mark.anyio
@@ -366,9 +371,9 @@ async def test_frontend_active_specializations_normalizes_query_values(
             },
         }
 
-    monkeypatch.setattr(aiida_router, "build_active_specializations_payload", _fake_build_active_specializations_payload)
+    monkeypatch.setattr(frontend_router, "build_active_specializations_payload", _fake_build_active_specializations_payload)
 
-    response = await aiida_router.frontend_active_specializations(
+    response = await frontend_router.frontend_active_specializations(
         context_node_ids=[11, 22],
         project_tags=[" qe, quantumespresso ", "QE"],
         resource_plugins=[" quantumespresso.pw , quantumespresso.pw "],
@@ -393,21 +398,19 @@ async def test_submit_bridge_workchain_single_adds_submitted_pk(monkeypatch: pyt
 
     async def _fake_worker_call(
         method: str,
-        path: str,
-        json: dict[str, object],
-        context: dict[str, str] | None = None,
+        params: dict[str, object] = None,
+        **kwargs: object
     ):  # noqa: ARG001
-        assert "draft" in json
-        assert context == {"session_id": "chat-0307"}
+        assert "draft" in params
+        assert kwargs.get("context") == {"session_id": "chat-0307"}
         return {"status": "SUBMITTED", "pk": 321}
 
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(submission_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(submission_router,
         "_build_submission_worker_context",
         lambda _state: {"session_id": "chat-0307"},
     )
-    monkeypatch.setattr(aiida_router, "_auto_assign_submission_groups", _fake_auto_assign_submission_groups)
+    monkeypatch.setattr(submission_router, "_auto_assign_submission_groups", _fake_auto_assign_submission_groups)
 
     captured: dict[str, object] = {}
 
@@ -419,11 +422,11 @@ async def test_submit_bridge_workchain_single_adds_submitted_pk(monkeypatch: pyt
     request = SimpleNamespace(app=SimpleNamespace(state=state))
     payload = _submission_request({"builder": {"structure_pk": 11}})
 
-    response = await aiida_router.submit_bridge_workchain(request, payload)
+    response = await submission_router.submit_bridge_workchain(request, payload)
 
     assert response["submitted_pks"] == [321]
     assert response["process_pks"] == [321]
-    assert captured[aiida_router.PENDING_SUBMISSION_KEY] is None
+    assert captured[submission_router.PENDING_SUBMISSION_KEY] is None
 
 
 @pytest.mark.anyio
@@ -435,21 +438,19 @@ async def test_submit_bridge_workchain_unwraps_direct_entry_point_payload(monkey
 
     async def _fake_worker_call(
         method: str,
-        path: str,
-        json: dict[str, object],
-        context: dict[str, str] | None = None,
+        params: dict[str, object] = None,
+        **kwargs: object
     ):  # noqa: ARG001
-        captured_request["payload"] = json
-        assert context == {"session_id": "chat-0307"}
+        captured_request["payload"] = params
+        assert kwargs.get("context") == {"session_id": "chat-0307"}
         return {"status": "SUBMITTED", "pk": 654}
 
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(submission_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(submission_router,
         "_build_submission_worker_context",
         lambda _state: {"session_id": "chat-0307"},
     )
-    monkeypatch.setattr(aiida_router, "_auto_assign_submission_groups", _fake_auto_assign_submission_groups)
+    monkeypatch.setattr(submission_router, "_auto_assign_submission_groups", _fake_auto_assign_submission_groups)
 
     captured: dict[str, object] = {}
 
@@ -469,7 +470,7 @@ async def test_submit_bridge_workchain_unwraps_direct_entry_point_payload(monkey
         },
     )
 
-    response = await aiida_router.submit_bridge_workchain(request, payload)
+    response = await submission_router.submit_bridge_workchain(request, payload)
 
     captured_payload = captured_request["payload"]
     assert isinstance(captured_payload, dict)
@@ -481,7 +482,7 @@ async def test_submit_bridge_workchain_unwraps_direct_entry_point_payload(monkey
     assert captured_payload["metadata"]["aris_approval"]["approval_id"] == "approval-test"
     assert response["submitted_pks"] == [654]
     assert response["process_pks"] == [654]
-    assert captured[aiida_router.PENDING_SUBMISSION_KEY] is None
+    assert captured[submission_router.PENDING_SUBMISSION_KEY] is None
 
 
 @pytest.mark.anyio
@@ -490,23 +491,22 @@ async def test_frontend_create_chat_project_ensures_project_group(monkeypatch: p
     request = SimpleNamespace(app=SimpleNamespace(state=state))
     ensured: list[str] = []
 
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "create_chat_project",
         lambda *_args, **_kwargs: {"id": "project-1", "group_label": "Test_multitask_Si_Thermal_Expansion"},
     )
-    monkeypatch.setattr(aiida_router, "get_active_chat_project_id", lambda _state: "project-1")
-    monkeypatch.setattr(aiida_router, "list_chat_projects", lambda _state: [{"id": "project-1"}])
+    monkeypatch.setattr(frontend_router, "get_active_chat_project_id", lambda _state: "project-1")
+    monkeypatch.setattr(frontend_router, "list_chat_projects", lambda _state: [{"id": "project-1"}])
 
     async def _fake_ensure_named_groups(labels: list[str]) -> dict[str, str]:
         ensured.extend(labels)
         return {label: label for label in labels}
 
-    monkeypatch.setattr(aiida_router, "_ensure_named_groups", _fake_ensure_named_groups)
+    monkeypatch.setattr(frontend_router, "_ensure_named_groups", _fake_ensure_named_groups)
 
-    response = await aiida_router.frontend_create_chat_project(
+    response = await frontend_router.frontend_create_chat_project(
         request,
-        aiida_router.FrontendChatProjectCreateRequest(name="Test_multitask_Si_Thermal_Expansion"),
+        frontend_router.FrontendChatProjectCreateRequest(name="Test_multitask_Si_Thermal_Expansion"),
     )
 
     assert response["project"]["id"] == "project-1"
@@ -518,8 +518,7 @@ async def test_frontend_write_chat_project_file_proxies_service_result(monkeypat
     state = SimpleNamespace()
     request = SimpleNamespace(app=SimpleNamespace(state=state))
 
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "write_chat_project_file",
         lambda *_args, **_kwargs: {
             "project_id": "project-1",
@@ -535,10 +534,10 @@ async def test_frontend_write_chat_project_file_proxies_service_result(monkeypat
         },
     )
 
-    response = await aiida_router.frontend_write_chat_project_file(
+    response = await frontend_router.frontend_write_chat_project_file(
         request,
         "project-1",
-        aiida_router.FrontendChatProjectFileWriteRequest(
+        frontend_router.FrontendChatProjectFileWriteRequest(
             relative_path="codes/submit_si_eos_20260314.py",
             content="print('si eos')\n",
             overwrite=True,
@@ -557,8 +556,7 @@ async def test_frontend_create_chat_session_ensures_project_and_session_groups(
     request = SimpleNamespace(app=SimpleNamespace(state=state))
     ensured: list[str] = []
 
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "create_chat_session",
         lambda *_args, **_kwargs: {
             "id": "chat-0307",
@@ -566,20 +564,20 @@ async def test_frontend_create_chat_session_ensures_project_and_session_groups(
             "session_group_label": "Test_multitask_Si_Thermal_Expansion/chat-0307",
         },
     )
-    monkeypatch.setattr(aiida_router, "get_chat_snapshot", lambda _state: {"messages": []})
-    monkeypatch.setattr(aiida_router, "get_active_chat_session_id", lambda _state: "chat-0307")
-    monkeypatch.setattr(aiida_router, "get_active_chat_project_id", lambda _state: "project-1")
-    monkeypatch.setattr(aiida_router, "list_chat_projects", lambda _state: [{"id": "project-1"}])
+    monkeypatch.setattr(frontend_router, "get_chat_snapshot", lambda _state: {"messages": []})
+    monkeypatch.setattr(frontend_router, "get_active_chat_session_id", lambda _state: "chat-0307")
+    monkeypatch.setattr(frontend_router, "get_active_chat_project_id", lambda _state: "project-1")
+    monkeypatch.setattr(frontend_router, "list_chat_projects", lambda _state: [{"id": "project-1"}])
 
     async def _fake_ensure_named_groups(labels: list[str]) -> dict[str, str]:
         ensured.extend(labels)
         return {label: label for label in labels}
 
-    monkeypatch.setattr(aiida_router, "_ensure_named_groups", _fake_ensure_named_groups)
+    monkeypatch.setattr(frontend_router, "_ensure_named_groups", _fake_ensure_named_groups)
 
-    response = await aiida_router.frontend_create_chat_session(
+    response = await frontend_router.frontend_create_chat_session(
         request,
-        aiida_router.FrontendChatSessionCreateRequest(title="Session"),
+        frontend_router.FrontendChatSessionCreateRequest(title="Session"),
     )
 
     assert response["session"]["id"] == "chat-0307"
@@ -597,34 +595,30 @@ async def test_frontend_delete_chat_project_deletes_project_and_session_groups(
     request = SimpleNamespace(app=SimpleNamespace(state=state))
     deleted_group_pks: list[int] = []
 
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "list_chat_projects",
         lambda _state: [{"id": "project-1", "group_label": "Project One"}],
     )
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "list_chat_sessions",
         lambda _state: [{"id": "session-1", "project_id": "project-1", "session_group_label": "Project One/session-1"}],
     )
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "delete_chat_items",
         lambda *_args, **_kwargs: {"deleted_project_ids": ["project-1"], "deleted_session_ids": ["session-1"]},
     )
-    monkeypatch.setattr(aiida_router, "get_chat_snapshot", lambda _state: {"session_id": None, "messages": [], "snapshot": {}})
-    monkeypatch.setattr(aiida_router, "_chat_sessions_payload", lambda _state: {"version": 4, "active_session_id": None, "active_project_id": None, "projects": [], "items": []})
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router, "get_chat_snapshot", lambda _state: {"session_id": None, "messages": [], "snapshot": {}})
+    monkeypatch.setattr(frontend_router, "_chat_sessions_payload", lambda _state: {"version": 4, "active_session_id": None, "active_project_id": None, "projects": [], "items": []})
+    monkeypatch.setattr(frontend_router,
         "list_groups",
         lambda: [
             {"pk": 11, "label": "Project One"},
             {"pk": 12, "label": "Project One/session-1"},
         ],
     )
-    monkeypatch.setattr(aiida_router, "delete_group", lambda pk: deleted_group_pks.append(pk))
+    monkeypatch.setattr(frontend_router, "delete_group", lambda pk: deleted_group_pks.append(pk))
 
-    response = await aiida_router.frontend_delete_chat_project(request, "project-1")
+    response = await frontend_router.frontend_delete_chat_project(request, "project-1")
 
     assert response["deleted_project_ids"] == ["project-1"]
     assert response["deleted_session_ids"] == ["session-1"]
@@ -638,25 +632,23 @@ async def test_frontend_delete_chat_items_supports_mixed_bulk_delete(
     state = SimpleNamespace(chat_sessions_version=3)
     request = SimpleNamespace(app=SimpleNamespace(state=state))
 
-    monkeypatch.setattr(aiida_router, "list_chat_projects", lambda _state: [])
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router, "list_chat_projects", lambda _state: [])
+    monkeypatch.setattr(frontend_router,
         "list_chat_sessions",
         lambda _state: [{"id": "session-2", "project_id": "project-2", "session_group_label": "Project Two/session-2"}],
     )
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "delete_chat_items",
         lambda *_args, **_kwargs: {"deleted_project_ids": ["project-2"], "deleted_session_ids": ["session-2"]},
     )
-    monkeypatch.setattr(aiida_router, "get_chat_snapshot", lambda _state: {"session_id": None, "messages": [], "snapshot": {}})
-    monkeypatch.setattr(aiida_router, "_chat_sessions_payload", lambda _state: {"version": 5, "active_session_id": None, "active_project_id": None, "projects": [], "items": []})
+    monkeypatch.setattr(frontend_router, "get_chat_snapshot", lambda _state: {"session_id": None, "messages": [], "snapshot": {}})
+    monkeypatch.setattr(frontend_router, "_chat_sessions_payload", lambda _state: {"version": 5, "active_session_id": None, "active_project_id": None, "projects": [], "items": []})
 
 
 
-    response = await aiida_router.frontend_delete_chat_items(
+    response = await frontend_router.frontend_delete_chat_items(
         request,
-        aiida_router.FrontendChatDeleteRequest(project_ids=["project-2"], session_ids=["session-2"]),
+        frontend_router.FrontendChatDeleteRequest(project_ids=["project-2"], session_ids=["session-2"]),
     )
 
     assert response["deleted_project_ids"] == ["project-2"]
@@ -673,12 +665,11 @@ async def test_submit_bridge_workchain_batch_collects_submitted_pks(monkeypatch:
 
     async def _fake_worker_call(
         method: str,
-        path: str,
-        json: dict[str, object],
-        context: dict[str, str] | None = None,
+        params: dict[str, object] = None,
+        **kwargs: object,
     ):  # noqa: ARG001
-        captured_request["payload"] = json
-        assert context == {"session_id": "chat-0307"}
+        captured_request["payload"] = params
+        assert kwargs.get("context") == {"session_id": "chat-0307"}
         return {
             "status": "SUBMITTED_BATCH",
             "total": 3,
@@ -693,13 +684,12 @@ async def test_submit_bridge_workchain_batch_collects_submitted_pks(monkeypatch:
             "failures": [],
         }
 
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(submission_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(submission_router,
         "_build_submission_worker_context",
         lambda _state: {"session_id": "chat-0307"},
     )
-    monkeypatch.setattr(aiida_router, "_auto_assign_submission_groups", _fake_auto_assign_submission_groups)
+    monkeypatch.setattr(submission_router, "_auto_assign_submission_groups", _fake_auto_assign_submission_groups)
 
     captured: dict[str, object] = {}
 
@@ -717,7 +707,7 @@ async def test_submit_bridge_workchain_batch_collects_submitted_pks(monkeypatch:
         ],
     )
 
-    response = await aiida_router.submit_bridge_workchain(request, payload)
+    response = await submission_router.submit_bridge_workchain(request, payload)
 
     captured_payload = captured_request["payload"]
     assert isinstance(captured_payload, dict)
@@ -732,7 +722,7 @@ async def test_submit_bridge_workchain_batch_collects_submitted_pks(monkeypatch:
     assert response["process_pks"] == submitted
     assert response["failures"] == []
     assert len(response["responses"]) == 3
-    assert captured[aiida_router.PENDING_SUBMISSION_KEY] is None
+    assert captured[submission_router.PENDING_SUBMISSION_KEY] is None
 
 
 @pytest.mark.anyio
@@ -740,17 +730,16 @@ async def test_submit_bridge_workchain_batch_alias_requires_list() -> None:
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     payload = _submission_request({"builder": {"structure_pk": 11}})
 
-    with pytest.raises(aiida_router.HTTPException) as exc_info:
-        await aiida_router.submit_bridge_workchain_batch(request, payload)
+    with pytest.raises(submission_router.HTTPException) as exc_info:
+        await submission_router.submit_bridge_workchain_batch(request, payload)
 
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail == "Batch submission draft list is required"
 
 
 def test_build_active_submission_group_labels_uses_session_detail(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(aiida_router, "get_active_chat_session_id", lambda _state: "chat-0307")
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router, "get_active_chat_session_id", lambda _state: "chat-0307")
+    monkeypatch.setattr(frontend_router,
         "get_chat_session_detail",
         lambda _state, _session_id: {
             "project_group_label": "Si_Research",
@@ -758,7 +747,7 @@ def test_build_active_submission_group_labels_uses_session_detail(monkeypatch: p
         },
     )
 
-    labels = aiida_router._build_active_submission_group_labels(SimpleNamespace())
+    labels = frontend_router._build_active_submission_group_labels(SimpleNamespace())
 
     assert labels == {
         "project": "Si_Research",
@@ -780,15 +769,14 @@ async def test_auto_assign_submission_groups_creates_missing_groups_and_adds_nod
         }
     ]
 
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(submission_router,
         "_build_active_submission_group_labels",
         lambda _state: {
             "project": "Si_Research",
             "session": "Si_Research/chat-0307",
         },
     )
-    monkeypatch.setattr(aiida_router, "list_groups", lambda: list(groups))
+    monkeypatch.setattr(submission_router, "list_groups", lambda: list(groups))
 
     def _fake_create_group(label: str) -> dict[str, object]:
         created_labels.append(label)
@@ -800,14 +788,13 @@ async def test_auto_assign_submission_groups_creates_missing_groups_and_adds_nod
         groups.append(item)
         return {"item": item}
 
-    monkeypatch.setattr(aiida_router, "create_group", _fake_create_group)
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(submission_router, "create_group", _fake_create_group)
+    monkeypatch.setattr(submission_router,
         "add_nodes_to_group",
         lambda pk, node_pks: assigned_calls.append((pk, node_pks)) or {"group": {"pk": pk}, "added": node_pks},
     )
 
-    labels = await aiida_router._auto_assign_submission_groups(SimpleNamespace(), [903, 901, 901])
+    labels = await submission_router._auto_assign_submission_groups(SimpleNamespace(), [903, 901, 901])
 
     assert labels == {
         "project": "Si_Research",
@@ -824,8 +811,7 @@ async def test_auto_assign_submission_groups_creates_missing_groups_and_adds_nod
 async def test_frontend_node_hover_metadata_resolves_formula_spacegroup_and_node_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "get_context_nodes",
         lambda _ids: [
             {
@@ -841,10 +827,10 @@ async def test_frontend_node_hover_metadata_resolves_formula_spacegroup_and_node
             }
         ],
     )
-    monkeypatch.setattr(aiida_router.hub, "start", lambda: None)
-    monkeypatch.setattr(aiida_router.hub, "_current_profile", "test-profile")
+    monkeypatch.setattr(frontend_router.hub, "start", lambda: None)
+    monkeypatch.setattr(frontend_router.hub, "_current_profile", "test-profile")
 
-    response = await aiida_router.frontend_node_hover_metadata(11)
+    response = await frontend_router.frontend_node_hover_metadata(11)
 
     assert response.pk == 11
     assert response.formula == "Si2"
@@ -856,11 +842,11 @@ async def test_frontend_node_hover_metadata_resolves_formula_spacegroup_and_node
 async def test_frontend_node_hover_metadata_returns_safe_fallback_when_node_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(aiida_router, "get_context_nodes", lambda _ids: [])
-    monkeypatch.setattr(aiida_router.hub, "start", lambda: None)
-    monkeypatch.setattr(aiida_router.hub, "_current_profile", "test-profile")
+    monkeypatch.setattr(frontend_router, "get_context_nodes", lambda _ids: [])
+    monkeypatch.setattr(frontend_router.hub, "start", lambda: None)
+    monkeypatch.setattr(frontend_router.hub, "_current_profile", "test-profile")
 
-    response = await aiida_router.frontend_node_hover_metadata(9999)
+    response = await frontend_router.frontend_node_hover_metadata(9999)
 
     assert response.pk == 9999
     assert response.formula is None
@@ -880,9 +866,9 @@ async def test_frontend_node_script_proxies_worker_payload(monkeypatch: pytest.M
     async def _fake_worker_call(method: str, params=None, **kwargs) -> dict[str, object]:
         return expected
 
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(frontend_router, "worker_call", _fake_worker_call)
 
-    response = await aiida_router.frontend_node_script(88)
+    response = await frontend_router.frontend_node_script(88)
 
     assert response.model_dump() == expected
 
@@ -893,9 +879,9 @@ async def test_worker_repository_files_proxies_worker_payload(monkeypatch: pytes
         assert params == {"pk": 314, "source": "folder"}
         return {"pk": 314, "files": ["aiida.out", "_scheduler-stderr.txt"], "source": "folder"}
 
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(data_router, "worker_call", _fake_worker_call)
 
-    response = await aiida_router.worker_repository_files(314, source="folder")
+    response = await data_router.worker_repository_files(314, source="folder")
 
     assert response["pk"] == 314
     assert response["files"] == ["aiida.out", "_scheduler-stderr.txt"]
@@ -906,9 +892,9 @@ async def test_worker_remote_files_proxies_worker_payload(monkeypatch: pytest.Mo
     async def _fake_worker_call(method: str, path: str, **_kwargs: object) -> dict[str, object]:
         return {"pk": 280, "files": ["aiida.out"]}
 
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(data_router, "worker_call", _fake_worker_call)
 
-    response = await aiida_router.worker_remote_files(280)
+    response = await data_router.worker_remote_files(280)
 
     assert response == {"pk": 280, "files": ["aiida.out"]}
 
@@ -927,9 +913,9 @@ async def test_worker_bands_data_proxies_worker_payload(monkeypatch: pytest.Monk
     async def _fake_worker_call(method: str, path: str, **_kwargs: object) -> dict[str, object]:
         return expected
 
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(data_router, "worker_call", _fake_worker_call)
 
-    response = await aiida_router.worker_bands_data(335)
+    response = await data_router.worker_bands_data(335)
 
     assert response == expected
 
@@ -947,9 +933,9 @@ async def test_export_management_computer_proxies_worker_payload(monkeypatch: py
     async def _fake_worker_call(method: str, params=None, **kwargs) -> dict[str, object]:
         return expected
 
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(management_router, "worker_call", _fake_worker_call)
 
-    response = await aiida_router.export_management_computer(7)
+    response = await management_router.export_management_computer(7)
 
     assert response.model_dump() == expected
 
@@ -991,9 +977,9 @@ async def test_get_management_infrastructure_capabilities_proxies_worker_payload
     async def _fake_capabilities() -> dict[str, object]:
         return expected
 
-    monkeypatch.setattr(aiida_router.aiida_worker_client, "get_infrastructure_capabilities", _fake_capabilities)
+    monkeypatch.setattr(management_router.aiida_worker_client, "get_infrastructure_capabilities", _fake_capabilities)
 
-    response = await aiida_router.get_management_infrastructure_capabilities()
+    response = await management_router.get_management_infrastructure_capabilities()
 
     assert response.model_dump() == expected
 
@@ -1012,9 +998,9 @@ async def test_test_management_infrastructure_connection_proxies_worker_payload(
         assert params == {"computer_label": "manneback_async"}
         return expected
 
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(management_router, "worker_call", _fake_worker_call)
 
-    response = await aiida_router.test_management_infrastructure_connection({"computer_label": "manneback_async"})
+    response = await management_router.test_management_infrastructure_connection({"computer_label": "manneback_async"})
 
     assert response == expected
 
@@ -1032,9 +1018,9 @@ async def test_export_management_code_proxies_worker_payload(monkeypatch: pytest
     async def _fake_worker_call(method: str, params=None, **kwargs) -> dict[str, object]:
         return expected
 
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(management_router, "worker_call", _fake_worker_call)
 
-    response = await aiida_router.export_management_code(42)
+    response = await management_router.export_management_code(42)
 
     assert response.model_dump() == expected
 
@@ -1061,10 +1047,10 @@ async def test_frontend_clone_process_draft_enriches_worker_payload(monkeypatch:
     async def _fake_worker_call(method: str, params=None, **kwargs) -> dict[str, object]:
         return worker_payload
 
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
-    monkeypatch.setattr(aiida_router, "enrich_submission_draft_payload", lambda payload: enriched_payload if payload == worker_payload else payload)
+    monkeypatch.setattr(frontend_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(frontend_router, "enrich_submission_draft_payload", lambda payload: enriched_payload if payload == worker_payload else payload)
 
-    response = await aiida_router.frontend_clone_process_draft("321")
+    response = await frontend_router.frontend_clone_process_draft("321")
 
     assert response["submission_draft"] == enriched_payload
     assert response["approval_request"]["action"] == "submission.execute"
@@ -1078,13 +1064,11 @@ async def test_frontend_clone_process_draft_enriches_worker_payload(monkeypatch:
 async def test_frontend_chat_session_batch_progress_returns_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "get_chat_session_detail",
         lambda _state, session_id: {"id": session_id, "title": "Si 批量能带"},
     )
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "get_chat_session_batch_progress",
         lambda _state, _session_id: {
             "label": "Si 批量能带",
@@ -1101,7 +1085,7 @@ async def test_frontend_chat_session_batch_progress_returns_summary(
 
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
 
-    response = await aiida_router.frontend_chat_session_batch_progress(request, "session-1")
+    response = await frontend_router.frontend_chat_session_batch_progress(request, "session-1")
 
     assert response["item"]["total"] == 7
     assert response["item"]["running"] == 1
@@ -1111,18 +1095,17 @@ async def test_frontend_chat_session_batch_progress_returns_summary(
 async def test_frontend_chat_session_batch_progress_returns_404_for_missing_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(aiida_router, "get_chat_session_detail", lambda _state, _session_id: None)
+    monkeypatch.setattr(frontend_router, "get_chat_session_detail", lambda _state, _session_id: None)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
 
-    with pytest.raises(aiida_router.HTTPException) as exc_info:
-        await aiida_router.frontend_chat_session_batch_progress(request, "missing-session")
+    with pytest.raises(frontend_router.HTTPException) as exc_info:
+        await frontend_router.frontend_chat_session_batch_progress(request, "missing-session")
 
     assert exc_info.value.status_code == 404
 
 
 def test_estimate_runtime_from_history_prefers_matching_scale(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router,
         "_get_frontend_nodes",
         lambda **_: [
             {
@@ -1164,7 +1147,7 @@ def test_estimate_runtime_from_history_prefers_matching_scale(monkeypatch: pytes
         ],
     )
 
-    estimate = aiida_router._estimate_runtime_from_history(
+    estimate = frontend_router._estimate_runtime_from_history(
         {
             "pk": 99,
             "process_label": "PwBandsWorkChain",
@@ -1184,7 +1167,7 @@ def test_estimate_runtime_from_history_prefers_matching_scale(monkeypatch: pytes
 
 
 def test_build_scheduler_probe_script_uses_configured_user_lookup() -> None:
-    script = aiida_router._build_scheduler_probe_script("aris")
+    script = frontend_router._build_scheduler_probe_script("aris")
 
     assert 'project=["label"]' in script
     assert 'project=["label", "is_enabled"]' not in script
@@ -1211,12 +1194,12 @@ async def test_run_worker_json_script_uses_default_environment_interpreter(
             "script_content": "print('hello')",
             "python_interpreter_path": "/tmp/worker-python",
         }
-        return {"output": f"noise\n{aiida_router.WORKER_JSON_MARKER}{{\"available\": true}}\n"}
+        return {"output": f"noise\n{frontend_router.WORKER_JSON_MARKER}{{\"available\": true}}\n"}
 
-    monkeypatch.setattr(aiida_router.aiida_worker_client, "inspect_default_environment", _fake_inspect_default_environment)
-    monkeypatch.setattr(aiida_router, "worker_call", _fake_worker_call)
+    monkeypatch.setattr(frontend_router.aiida_worker_client, "inspect_default_environment", _fake_inspect_default_environment)
+    monkeypatch.setattr(frontend_router, "worker_call", _fake_worker_call)
 
-    payload = await aiida_router._run_worker_json_script("print('hello')")
+    payload = await frontend_router._run_worker_json_script("print('hello')")
 
     assert payload == {"available": True}
 
@@ -1248,17 +1231,15 @@ async def test_frontend_compute_health_returns_queue_warning_and_estimate(
             "queue": {"running": 12, "pending": 45, "queued": 1204, "total": 1261},
         }
 
-    monkeypatch.setattr(aiida_router, "_fetch_process_detail_payload", _fake_fetch_process_detail_payload)
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router, "_fetch_process_detail_payload", _fake_fetch_process_detail_payload)
+    monkeypatch.setattr(frontend_router,
         "_resolve_compute_health_computer_label",
         _fake_resolve_compute_health_computer_label,
     )
-    monkeypatch.setattr(aiida_router, "_fetch_scheduler_snapshot", _fake_fetch_scheduler_snapshot)
-    monkeypatch.setattr(
-        aiida_router,
+    monkeypatch.setattr(frontend_router, "_fetch_scheduler_snapshot", _fake_fetch_scheduler_snapshot)
+    monkeypatch.setattr(frontend_router,
         "_estimate_runtime_from_history",
-        lambda *_args, **_kwargs: aiida_router.ComputeHealthEstimateResponse(
+        lambda *_args, **_kwargs: frontend_router.ComputeHealthEstimateResponse(
             available=True,
             duration_seconds=2700,
             display="~45 mins on 4 nodes",
@@ -1269,7 +1250,7 @@ async def test_frontend_compute_health_returns_queue_warning_and_estimate(
         ),
     )
 
-    response = await aiida_router.frontend_compute_health(reference_process_pk=321)
+    response = await frontend_router.frontend_compute_health(reference_process_pk=321)
 
     assert response.available is True
     assert response.computer_label == "aris"
@@ -1315,10 +1296,10 @@ async def test_build_process_diagnostics_prefers_repository_stdout(monkeypatch: 
             return {"content": "line 1\nline 2\nline 3"}
         raise AssertionError(f"Unexpected path: {path}")
 
-    monkeypatch.setattr(aiida_router, "_fetch_process_detail_payload", _fake_fetch_process_detail_payload)
-    monkeypatch.setattr(aiida_router, "_request_optional_json", _fake_request_optional_json)
+    monkeypatch.setattr(frontend_router, "_fetch_process_detail_payload", _fake_fetch_process_detail_payload)
+    monkeypatch.setattr(frontend_router, "_request_optional_json", _fake_request_optional_json)
 
-    response = await aiida_router._build_process_diagnostics(77)
+    response = await frontend_router._build_process_diagnostics(77)
 
     assert response.available is True
     assert response.process_pk == 77
