@@ -5,6 +5,7 @@ from .routers.submission import router as submission_router
 from .routers.process import router as process_router
 from .routers.data import router as data_router
 from .routers.management import router as management_router
+from src.aris_apps.projects.routes import router as projects_router
 
 router = APIRouter()
 router.include_router(frontend_router)
@@ -12,3 +13,4 @@ router.include_router(submission_router)
 router.include_router(process_router)
 router.include_router(data_router)
 router.include_router(management_router)
+router.include_router(projects_router)
