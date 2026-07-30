@@ -1991,7 +1991,7 @@ export default function App() {
                 onSessionParametersChange={setSessionParameters}
               />
             ) : (
-              <section className="flex flex-1 items-center justify-center rounded-2xl border border-white/40 bg-white/70 shadow-glass backdrop-blur dark:border-white/10 dark:bg-zinc-950/40">
+              <section className="flex flex-1 items-center justify-center bg-zinc-50/70 dark:bg-zinc-950">
                 <p className="text-sm text-zinc-600 dark:text-zinc-300">{loadingMessage}</p>
               </section>
             )

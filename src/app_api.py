@@ -269,6 +269,16 @@ async def spa_catch_all(full_path: str = ""):
     if full_path.startswith("api") or full_path.startswith("assets") or full_path.startswith("static"):
         return HTMLResponse("Not Found", status_code=404)
 
+    if full_path:
+        dist_root = os.path.realpath(FRONTEND_DIST_DIR)
+        frontend_file = os.path.realpath(os.path.join(dist_root, full_path))
+        try:
+            is_inside_dist = os.path.commonpath((dist_root, frontend_file)) == dist_root
+        except ValueError:
+            is_inside_dist = False
+        if is_inside_dist and os.path.isfile(frontend_file):
+            return FileResponse(frontend_file)
+
     if not os.path.isfile(FRONTEND_INDEX_FILE):
         logger.warning(
             log_event(

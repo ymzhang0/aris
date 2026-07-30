@@ -3,8 +3,6 @@ import { type DragEvent, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Code2, Cpu, Loader2, PlugZap, Plus } from "lucide-react";
 
-import {
-  } from "@/lib/api";
 import { CommandPaletteSelect } from "@/components/ui/command-palette-select";
 import { useEnvironmentActions, useEnvironmentStore } from "@/store/EnvironmentStore";
 import { cn } from "@/lib/utils";
@@ -83,7 +81,7 @@ function normalizeEnvironmentComputers(
   items: Array<{ label?: string | null; hostname?: string | null; description?: string | null }>,
 ): BridgeComputerResource[] {
   return items
-    .map((item: any) => ({
+    .map((item) => ({
       label: String(item.label || "").trim(),
       hostname: String(item.hostname || "").trim(),
       description: typeof item.description === "string" && item.description.trim() ? item.description.trim() : null,
@@ -95,7 +93,7 @@ function normalizeEnvironmentCodes(
   items: Array<{ label?: string | null; default_plugin?: string | null; computer_label?: string | null }>,
 ): BridgeCodeResource[] {
   return items
-    .map((item: any) => ({
+    .map((item) => ({
       label: String(item.label || "").trim(),
       default_plugin: typeof item.default_plugin === "string" && item.default_plugin.trim() ? item.default_plugin.trim() : null,
       computer_label: typeof item.computer_label === "string" && item.computer_label.trim() ? item.computer_label.trim() : null,

@@ -1,7 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
-@interface ARISAppDelegate : NSObject <NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler>
+@interface ARISAppDelegate : NSObject <NSApplicationDelegate, WKNavigationDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) NSTextField *statusLabel;
@@ -28,15 +28,6 @@
     return YES;
 }
 
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-    if ([message.name isEqualToString:@"dragWindow"]) {
-        NSEvent *event = [NSApp currentEvent];
-        if (event) {
-            [self.window performWindowDragWithEvent:event];
-        }
-    }
-}
-
 - (void)buildWindow {
     NSRect frame = NSMakeRect(0, 0, 1360, 880);
     self.window = [[NSWindow alloc]
@@ -46,15 +37,12 @@
                     backing:NSBackingStoreBuffered
                       defer:NO];
     self.window.title = self.developmentMode ? @"ARIS — Development" : @"ARIS";
-    self.window.titlebarAppearsTransparent = YES;
-    self.window.titleVisibility = NSWindowTitleHidden;
-    self.window.styleMask |= NSWindowStyleMaskFullSizeContentView;
+    self.window.titlebarAppearsTransparent = NO;
     [self.window center];
     [self.window setFrameAutosaveName:@"ARISMainWindow"];
 
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     configuration.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
-    [configuration.userContentController addScriptMessageHandler:self name:@"dragWindow"];
     self.webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
     self.webView.navigationDelegate = self;
     self.window.contentView = self.webView;

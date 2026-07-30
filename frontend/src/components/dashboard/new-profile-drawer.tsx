@@ -14,7 +14,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { CommandPaletteSelect } from "@/components/ui/command-palette-select";
 import { cn } from "@/lib/utils";
-import { } from "@/lib/api";
 import type { ProfileSetupRequest } from "@/types/aiida";
 
 type NewProfileDrawerProps = {
