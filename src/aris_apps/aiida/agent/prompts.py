@@ -20,7 +20,9 @@ TASK_MODE_RULE = (
 SUBMISSION_REQUEST_RULE = (
     "When task_mode is 'single' or 'batch' and you intend ARIS to prepare a preview automatically, "
     "also set the structured 'submission_request' field with tool-ready arguments. "
-    "For 'batch', use: {'mode':'batch','workchain':'...','structure_pks':[...],'code':'...','protocol':'...','overrides':{...},"
+    "For protocol-based builders, use builder_strategy='protocol'. For WorkChains without a protocol builder, use "
+    "builder_strategy='explicit_inputs' and supply spec-aligned 'inputs'. "
+    "For a protocol-based batch, use: {'mode':'batch','builder_strategy':'protocol','workchain':'...','structure_pks':[...],'code':'...','protocol':'...','overrides':{...},"
     "'protocol_kwargs':{...},'parameter_grid':{...},'matrix_mode':'product'}. "
     "For sweeps derived from one or more seed structures, still use mode='batch' with the relevant structure_pks list "
     "and an explicit parameter_grid. Let the model decide the parameter space; do not hardcode workflow categories in the protocol."
@@ -29,6 +31,13 @@ PREVIEW_NARRATIVE_RULE = (
     "When you present a submission preview to the user, explicitly say whether it is a 'Single job preview' or a "
     "'Batch job preview'. For batch previews, also summarize the shared inputs and the varying dimensions or matrix "
     "axes in plain language."
+)
+RESEARCH_PLAN_RULE = (
+    "For task_mode 'single' or 'batch', also set the structured 'research_plan' field when the scientific "
+    "goal is known. Use: {'title':'...','objective':'...','stages':[{'id':'...','label':'...',"
+    "'status':'planned|ready|running|completed|blocked'}],'assumptions':[{'label':'...',"
+    "'value':'...','source':'user|project|ai|derived'}],'outputs':['...']}. Keep it scientific and "
+    "user-facing; do not put raw AiiDA port paths in this plan. Update the plan when the research strategy changes."
 )
 STRUCTURE_RESOLUTION_RULE = (
     "When structure discovery is part of the turn, set the structured 'structure_resolution' field with status "
@@ -62,6 +71,7 @@ _BASE_OPERATIONAL_RULES: tuple[str, ...] = (
     "SUGGESTIONS: Always provide 2-3 'Smart Chips' (suggestions) under 5 words in your response.",
     TASK_MODE_RULE,
     SUBMISSION_REQUEST_RULE,
+    RESEARCH_PLAN_RULE,
     PREVIEW_NARRATIVE_RULE,
     SUBMISSION_PREVIEW_PROTOCOL_RULE,
     (
@@ -88,8 +98,9 @@ _BASE_TOOLBOX_RULES: tuple[str, ...] = (
         "or plugin was not found."
     ),
     (
-        "Available WorkChains: When asked about plugins/workchains, call 'list_remote_plugins' first; "
-        "this is the source of truth from the active worker bridge."
+        "Workflow selection: call 'inspect_workflow_catalog' before choosing a WorkChain. Compare its description, "
+        "builder strategy, protocols, and required inputs with the user's scientific intent; do not choose from "
+        "domain keyword rules or entry-point names alone."
     ),
     (
         "Profile switching is a last resort. Only call 'switch_aiida_profile' after inspecting "
@@ -100,6 +111,11 @@ _BASE_TOOLBOX_RULES: tuple[str, ...] = (
         "unless the user explicitly asks to switch again."
     ),
     "WorkChain Spec: Use 'get_remote_workchain_spec' (or 'check_workflow_spec') before drafting a builder.",
+    (
+        "Input resolution: for required AiiDA entity ports, call 'resolve_workchain_input_candidates'. Never invent "
+        "PKs, UUIDs, code labels, groups, structures, or other database entities. If a WorkChain has no protocol "
+        "builder, use 'prepare_workchain_from_inputs' with bindings matching the inspected spec."
+    ),
     "Submission readiness: call 'inspect_lab_infrastructure' before submission to confirm required computers/codes exist.",
     (
         "Pre-submission validation: call 'submit_new_workflow' first. If it returns status SUBMISSION_DRAFT, "
@@ -127,11 +143,6 @@ _BASE_TOOLBOX_RULES: tuple[str, ...] = (
         "The structured output is the canonical protocol. Do not rely on natural-language phrases such as "
         "'this is a batch task' as the only machine-readable signal; set task_mode correctly and keep the "
         "answer text focused on user-facing guidance."
-    ),
-    (
-        "Workflow selection rule: for equation-of-state, total-energy, magnetic comparison, and cutoff-convergence "
-        "requests, default to quantumespresso.pw.base unless the user explicitly asks for bands, DOS, or another "
-        "post-processing workflow. Reserve quantumespresso.pw.bands for explicit band-structure tasks."
     ),
     (
         "For quantumespresso.pw.bands, when the user specifies one kpoints distance, apply it to both "

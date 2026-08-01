@@ -31,8 +31,9 @@ class SubmissionPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["single", "batch"]
+    builder_strategy: Literal["protocol", "explicit_inputs"] = "protocol"
     workchain: str = Field(min_length=1)
-    code: str = Field(min_length=1)
+    code: str | None = Field(default=None, min_length=1)
     protocol: str = Field(default="moderate", min_length=1)
     structure_pk: int | None = Field(default=None, gt=0)
     structure_pks: list[int] = Field(default_factory=list)
@@ -40,9 +41,18 @@ class SubmissionPreviewRequest(BaseModel):
     protocol_kwargs: dict[str, Any] = Field(default_factory=dict)
     parameter_grid: dict[str, Any] = Field(default_factory=dict)
     matrix_mode: Literal["product", "zip"] = "product"
+    inputs: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_topology(self) -> "SubmissionPreviewRequest":
+        if self.builder_strategy == "explicit_inputs":
+            if not self.inputs:
+                raise ValueError("explicit_inputs strategy requires inputs")
+            if self.mode == "batch" and not self.parameter_grid:
+                raise ValueError("batch explicit_inputs strategy requires parameter_grid")
+            return self
+        if not self.code:
+            raise ValueError("protocol strategy requires code")
         if self.mode == "single":
             if self.structure_pk is None:
                 raise ValueError(
@@ -144,6 +154,22 @@ class AiiDAMCPFacade:
 
     async def submission_plugins(self) -> dict[str, Any]:
         return await self._capability.list_submission_plugins()
+
+    async def workflow_catalog(self) -> dict[str, Any]:
+        return await self._capability.get_workflow_catalog()
+
+    async def input_candidates(
+        self,
+        *,
+        workchain: str,
+        port_path: str,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        return await self._capability.resolve_input_candidates(
+            workchain,
+            port_path,
+            limit=limit,
+        )
 
     async def submission_spec(
         self,
@@ -250,6 +276,35 @@ def build_aiida_mcp_server(
     )
     async def aiida_submission_plugins() -> dict[str, Any]:
         return await facade.submission_plugins()
+
+    @server.tool(
+        name="aiida_workflow_catalog",
+        description=(
+            "List registered AiiDA WorkChains with package, description, protocols, "
+            "builder strategy, and required inputs for workflow selection."
+        ),
+        annotations=_READ_ONLY_ANNOTATIONS,
+    )
+    async def aiida_workflow_catalog() -> dict[str, Any]:
+        return await facade.workflow_catalog()
+
+    @server.tool(
+        name="aiida_input_candidates",
+        description=(
+            "Resolve stored AiiDA entities compatible with one WorkChain input port."
+        ),
+        annotations=_READ_ONLY_ANNOTATIONS,
+    )
+    async def aiida_input_candidates(
+        workchain: str,
+        port_path: str,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        return await facade.input_candidates(
+            workchain=workchain,
+            port_path=port_path,
+            limit=limit,
+        )
 
     @server.tool(
         name="aiida_submission_spec",

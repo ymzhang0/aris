@@ -16,6 +16,7 @@ from src.aris_apps.aiida.agent.prompts import (
     build_system_prompt,
 )
 from src.aris_apps.aiida.agent.tools import (
+    draft_workchain_from_inputs,
     draft_workchain_builder,
     fetch_recent_processes,
     get_bands_plot_data,
@@ -24,6 +25,7 @@ from src.aris_apps.aiida.agent.tools import (
     get_node_summary,
     get_remote_file_content,
     get_remote_workchain_spec as get_remote_workchain_spec_via_bridge,
+    get_workflow_catalog as get_workflow_catalog_via_capability,
     get_statistics,
     get_unified_source_map,
     inspect_group,
@@ -34,6 +36,7 @@ from src.aris_apps.aiida.agent.tools import (
     list_local_archives,
     list_remote_files,
     list_remote_plugins as list_remote_plugins_via_bridge,
+    resolve_workchain_input_candidates as resolve_workchain_input_candidates_via_capability,
     list_registered_skills_sync,
     list_system_profiles,
     register_specialized_skill,
@@ -1863,6 +1866,75 @@ async def list_remote_plugins(ctx: RunContext[AiiDADeps]):
     """Source of truth for available WorkChains from worker bridge."""
     ctx.deps.log_step("Fetching remote plugin list from worker bridge")
     return await list_remote_plugins_via_bridge()
+
+
+@aiida_researcher.tool
+async def inspect_workflow_catalog(ctx: RunContext[AiiDADeps]):
+    """Read structured metadata for all installed WorkChains before selecting one."""
+    ctx.deps.log_step("Inspecting registered WorkChain catalog")
+    return await get_workflow_catalog_via_capability()
+
+
+@aiida_researcher.tool
+async def resolve_workchain_input_candidates(
+    ctx: RunContext[AiiDADeps],
+    entry_point: str,
+    port_path: str,
+    limit: int = 50,
+):
+    """Find compatible stored entities for one concrete WorkChain input port."""
+    ctx.deps.log_step(f"Resolving input candidates: {entry_point}:{port_path}")
+    return await resolve_workchain_input_candidates_via_capability(
+        entry_point,
+        port_path,
+        limit,
+    )
+
+
+@aiida_researcher.tool
+async def prepare_workchain_from_inputs(
+    ctx: RunContext[AiiDADeps],
+    entry_point: str,
+    inputs: dict[str, Any],
+):
+    """Build and validate a WorkChain using explicit spec-aligned input bindings."""
+    ctx.deps.log_step(f"Preparing explicit-input WorkChain: {entry_point}")
+    draft = await draft_workchain_from_inputs(entry_point, inputs)
+    if not isinstance(draft, dict) or draft.get("status") != "DRAFT_READY":
+        return draft
+    validation = await validate_job(draft)
+    if not isinstance(validation, dict):
+        return {"status": "SUBMISSION_BLOCKED", "draft": draft, "validation": validation}
+    validation_summary = _build_validation_summary(validation)
+    if not validation_summary.get("is_valid", False):
+        return {
+            "status": "SUBMISSION_BLOCKED",
+            "draft": draft,
+            "validation": validation,
+            "validation_summary": validation_summary,
+        }
+    submission_draft = _build_submission_draft_payload(
+        draft,
+        fallback_process_label=entry_point,
+    )
+    meta = submission_draft.get("meta")
+    if isinstance(meta, dict):
+        meta.update({"validation": validation, "validation_summary": validation_summary, "draft": draft})
+    _cache_pending_submission(
+        ctx,
+        draft,
+        validation,
+        validation_summary,
+        submission_draft=submission_draft,
+    )
+    return {
+        "status": "SUBMISSION_DRAFT",
+        "workchain": entry_point,
+        "submission_draft": submission_draft,
+        "validation": validation,
+        "validation_summary": validation_summary,
+        "next_step": SUBMISSION_PREVIEW_NEXT_STEP_GUIDANCE,
+    }
 
 
 @aiida_researcher.tool

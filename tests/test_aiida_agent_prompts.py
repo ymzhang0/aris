@@ -1,4 +1,5 @@
 from src.aris_apps.aiida.agent.prompts import (
+    RESEARCH_PLAN_RULE,
     STRUCTURE_RESOLUTION_RULE,
     SUBMISSION_PREVIEW_PROTOCOL_RULE,
     build_system_prompt,
@@ -10,6 +11,7 @@ def test_build_system_prompt_requires_structured_submission_preview() -> None:
     assert SUBMISSION_PREVIEW_PROTOCOL_RULE in prompt
     assert "data_payload.submission_draft" in prompt
     assert "[SUBMISSION_DRAFT]" not in prompt
+    assert RESEARCH_PLAN_RULE in prompt
     assert STRUCTURE_RESOLUTION_RULE in prompt
     assert "search_remote_structures" in prompt
     assert "do not silently choose between materially different polymorphs" in prompt

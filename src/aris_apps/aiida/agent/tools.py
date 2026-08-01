@@ -1,7 +1,4 @@
-"""AiiDA worker proxy tools used by the ARIS AiiDA agent.
-
-Thin-client rule: all domain operations are delegated to aiida-worker HTTP APIs.
-"""
+"""AiiDA tools delegated to the managed worker over stdio JSON-RPC."""
 
 from __future__ import annotations
 
@@ -656,6 +653,34 @@ async def list_remote_plugins() -> list[str] | str:
         return format_bridge_error(exc)
 
 
+async def get_workflow_catalog() -> dict[str, Any] | str:
+    """Return structured metadata used to select an installed WorkChain."""
+    try:
+        return await aiida_capability.get_workflow_catalog()
+    except WorkerOfflineError:
+        return OFFLINE_WORKER_MESSAGE
+    except Exception as exc:  # noqa: BLE001
+        return format_bridge_error(exc)
+
+
+async def resolve_workchain_input_candidates(
+    entry_point: str,
+    port_path: str,
+    limit: int = 50,
+) -> dict[str, Any] | str:
+    """Resolve database entities compatible with a WorkChain input port."""
+    try:
+        return await aiida_capability.resolve_input_candidates(
+            entry_point,
+            port_path,
+            limit=limit,
+        )
+    except WorkerOfflineError:
+        return OFFLINE_WORKER_MESSAGE
+    except Exception as exc:  # noqa: BLE001
+        return format_bridge_error(exc)
+
+
 async def get_remote_workchain_spec(entry_point: str) -> dict[str, Any] | str:
     """Fetch WorkChain input spec (`GET /submission/spec/{entry_point}`)."""
     cleaned = (entry_point or "").strip()
@@ -710,6 +735,23 @@ async def draft_workchain_builder(
 
     try:
         payload = await worker_call("submission.builder_draft", body)
+        return payload if isinstance(payload, dict) else {"draft": payload}
+    except WorkerOfflineError:
+        return OFFLINE_WORKER_MESSAGE
+    except Exception as exc:  # noqa: BLE001
+        return format_bridge_error(exc)
+
+
+async def draft_workchain_from_inputs(
+    entry_point: str,
+    inputs: dict[str, Any],
+) -> dict[str, Any] | str:
+    """Build a generic WorkChain draft from spec-aligned input bindings."""
+    try:
+        payload = await worker_call(
+            "submission.builder_draft",
+            {"entry_point": entry_point, "inputs": dict(inputs)},
+        )
         return payload if isinstance(payload, dict) else {"draft": payload}
     except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
@@ -1003,9 +1045,12 @@ __all__ = [
     "fetch_recent_processes",
     "inspect_workchain_spec",
     "list_remote_plugins",
+    "get_workflow_catalog",
+    "resolve_workchain_input_candidates",
     "get_remote_workchain_spec",
     "inspect_lab_infrastructure",
     "draft_workchain_builder",
+    "draft_workchain_from_inputs",
     "validate_workchain_builder",
     "validate_job",
     "submit_workchain_builder",

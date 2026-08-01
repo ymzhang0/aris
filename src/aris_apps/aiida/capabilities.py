@@ -55,6 +55,16 @@ class AiiDACapability(Protocol):
         deduplicate: bool = True,
     ) -> dict[str, Any]: ...
 
+    async def get_workflow_catalog(self) -> dict[str, Any]: ...
+
+    async def resolve_input_candidates(
+        self,
+        workchain: str,
+        port_path: str,
+        *,
+        limit: int = 50,
+    ) -> dict[str, Any]: ...
+
     async def get_submission_spec(
         self,
         workchain: str,
@@ -146,10 +156,7 @@ class ManagedAiiDACapability:
         return payload if isinstance(payload, dict) else {"nodes": []}
 
     async def list_submission_plugins(self) -> dict[str, Any]:
-        payload = await self._client.worker_call(
-            "GET",
-            "/plugins",
-        )
+        payload = await self._client.call("resource.plugins")
         if isinstance(payload, dict):
             return payload
         if isinstance(payload, list):
@@ -176,6 +183,28 @@ class ManagedAiiDACapability:
         )
         return payload if isinstance(payload, dict) else {}
 
+    async def get_workflow_catalog(self) -> dict[str, Any]:
+        payload = await self._client.call("workflow.catalog", timeout=30.0)
+        return payload if isinstance(payload, dict) else {"workflows": [], "count": 0}
+
+    async def resolve_input_candidates(
+        self,
+        workchain: str,
+        port_path: str,
+        *,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        payload = await self._client.call(
+            "workflow.input_candidates",
+            {
+                "entry_point": str(workchain).strip(),
+                "port_path": str(port_path).strip(),
+                "limit": max(1, min(int(limit), 200)),
+            },
+            timeout=15.0,
+        )
+        return payload if isinstance(payload, dict) else {"candidates": []}
+
     async def get_submission_spec(
         self,
         workchain: str,
@@ -183,34 +212,32 @@ class ManagedAiiDACapability:
         cleaned = str(workchain or "").strip()
         if not cleaned:
             raise ValueError("WorkChain entry point is required")
-        payload = await self._client.worker_call(
-            "GET",
-            f"/submission/spec/{quote(cleaned, safe='')}",
-        )
+        payload = await self._client.call("submission.spec", {"entry_point": cleaned}, timeout=15.0)
         return payload if isinstance(payload, dict) else {}
 
     async def build_submission_draft(
         self,
         request: dict[str, Any],
     ) -> dict[str, Any]:
-        payload = await self._client.worker_call(
-            "POST",
-            "/submission/draft-builder",
-            json=dict(request),
-            retries=0,
-        )
+        normalized = dict(request)
+        normalized["entry_point"] = str(
+            normalized.pop("workchain", None) or normalized.get("entry_point") or ""
+        ).strip()
+        if normalized.get("builder_strategy") == "protocol":
+            intent_data = dict(normalized.get("protocol_kwargs") or {})
+            if normalized.get("code"):
+                intent_data["code"] = normalized["code"]
+            if normalized.get("structure_pk"):
+                intent_data["structure_pk"] = normalized["structure_pk"]
+            normalized["intent_data"] = intent_data
+        payload = await self._client.call("submission.builder_draft", normalized, timeout=30.0)
         return payload if isinstance(payload, dict) else {}
 
     async def validate_submission_draft(
         self,
         draft: dict[str, Any],
     ) -> dict[str, Any]:
-        payload = await self._client.worker_call(
-            "POST",
-            "/submission/validate",
-            json={"draft": dict(draft)},
-            retries=0,
-        )
+        payload = await self._client.call("submission.validate", dict(draft), timeout=30.0)
         return payload if isinstance(payload, dict) else {}
 
 

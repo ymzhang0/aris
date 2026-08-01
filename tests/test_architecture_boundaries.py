@@ -190,6 +190,10 @@ async def test_managed_aiida_capability_delegates_to_worker_client() -> None:
             self.requests.append((method, path, kwargs))
             return {"method": method, "path": path, **kwargs}
 
+        async def call(self, method, params=None, **kwargs):
+            self.requests.append((method, params, kwargs))
+            return {"method": method, "params": params, **kwargs}
+
     client = FakeClient()
     capability = ManagedAiiDACapability(client)  # type: ignore[arg-type]
 
@@ -205,14 +209,14 @@ async def test_managed_aiida_capability_delegates_to_worker_client() -> None:
         "path": "/process/12",
     }
     assert await capability.get_submission_spec("quantumespresso.pw.base") == {
-        "method": "GET",
-        "path": "/submission/spec/quantumespresso.pw.base",
+        "method": "submission.spec",
+        "params": {"entry_point": "quantumespresso.pw.base"},
+        "timeout": 15.0,
     }
     assert await capability.build_submission_draft({"workchain": "pw.base"}) == {
-        "method": "POST",
-        "path": "/submission/draft-builder",
-        "json": {"workchain": "pw.base"},
-        "retries": 0,
+        "method": "submission.builder_draft",
+        "params": {"entry_point": "pw.base"},
+        "timeout": 30.0,
     }
 
 

@@ -67,6 +67,12 @@ class _Capability:
     async def list_submission_plugins(self):
         return {"plugins": ["quantumespresso.pw.base"]}
 
+    async def get_workflow_catalog(self):
+        return {"workflows": [{"entry_point": "quantumespresso.pw.base"}], "count": 1}
+
+    async def resolve_input_candidates(self, workchain, port_path, *, limit=50):
+        return {"entry_point": workchain, "port_path": port_path, "candidates": [], "limit": limit}
+
     async def get_submission_spec(self, workchain):
         return {"workchain": workchain, "inputs": {}}
 
@@ -83,9 +89,8 @@ async def test_managed_capability_normalizes_canonical_plugin_list() -> None:
     class _Client:
         bridge_url = "http://worker.test"
 
-        async def worker_call(self, method, path):
-            assert method == "GET"
-            assert path == "/plugins"
+        async def call(self, method):
+            assert method == "resource.plugins"
             return ["quantumespresso.pw.base"]
 
     capability = ManagedAiiDACapability(_Client())
@@ -128,6 +133,8 @@ async def test_aiida_mcp_server_exposes_safe_tools_resources_and_prompt() -> Non
     }
 
     assert "aiida_inspect_process" in tools
+    assert "aiida_workflow_catalog" in tools
+    assert "aiida_input_candidates" in tools
     assert "aiida_build_submission_preview" in tools
     assert "aiida_submit" not in tools
     assert tools["aiida_inspect_process"].annotations.readOnlyHint is True
@@ -142,7 +149,8 @@ async def test_aiida_mcp_server_exposes_safe_tools_resources_and_prompt() -> Non
         "batch",
     ]
     assert "workchain" in preview_schema["required"]
-    assert "code" in preview_schema["required"]
+    assert "builder_strategy" in preview_schema["properties"]
+    assert "inputs" in preview_schema["properties"]
     assert resources == {
         "aiida://profiles",
         "aiida://resources",
@@ -167,6 +175,7 @@ async def test_aiida_mcp_submission_tool_builds_preview_without_submit() -> None
         {
             "request": {
                 "mode": "single",
+                "builder_strategy": "protocol",
                 "workchain": "quantumespresso.pw.base",
                 "structure_pk": 12,
                 "code": "pw@localhost",
@@ -178,9 +187,10 @@ async def test_aiida_mcp_submission_tool_builds_preview_without_submit() -> None
     assert capability.calls == [
         (
             "build_submission_draft",
-            {
-                "mode": "single",
-                "workchain": "quantumespresso.pw.base",
+                {
+                    "mode": "single",
+                    "builder_strategy": "protocol",
+                    "workchain": "quantumespresso.pw.base",
                 "structure_pk": 12,
                 "code": "pw@localhost",
                 "protocol": "moderate",
@@ -189,6 +199,27 @@ async def test_aiida_mcp_submission_tool_builds_preview_without_submit() -> None
                 "protocol_kwargs": {},
                 "parameter_grid": {},
                 "matrix_mode": "product",
+                "inputs": {},
             },
         )
     ]
+
+
+@pytest.mark.anyio
+async def test_aiida_mcp_accepts_explicit_spec_inputs_without_code_or_structure() -> None:
+    capability = _Capability()
+    server = build_aiida_mcp_server(capability)
+
+    result = await server.call_tool(
+        "aiida_build_submission_preview",
+        {
+            "request": {
+                "mode": "single",
+                "builder_strategy": "explicit_inputs",
+                "workchain": "custom.workflow",
+                "inputs": {"structure": {"pk": 12}, "settings": {"value": 1}},
+            }
+        },
+    )
+
+    assert result.structured_content["status"] == "SUBMISSION_DRAFT"
