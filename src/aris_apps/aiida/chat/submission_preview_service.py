@@ -154,6 +154,9 @@ class SubmissionPreviewService:
         combined: dict[str, Any] = {}
         forced_batch_block = False
         output_payload = getattr(output, "data_payload", None)
+        research_plan = getattr(output, "research_plan", None)
+        if isinstance(research_plan, dict) and research_plan:
+            combined["research_plan"] = research_plan
         structure_resolution = getattr(output, "structure_resolution", None)
         if structure_resolution is not None:
             model_dump = getattr(structure_resolution, "model_dump", None)

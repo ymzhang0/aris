@@ -301,6 +301,22 @@ def test_build_chat_message_payload_includes_structured_task_mode() -> None:
     assert payload["task_mode"] == "batch"
 
 
+def test_build_chat_message_payload_includes_structured_research_plan() -> None:
+    plan = {
+        "title": "Silicon EOS",
+        "objective": "Determine the equilibrium volume and bulk modulus.",
+        "stages": [{"id": "eos", "label": "Run volume sweep", "status": "ready"}],
+        "assumptions": [{"label": "Functional", "value": "PBE", "source": "ai"}],
+        "outputs": ["EOS fit"],
+    }
+    output = SimpleNamespace(task_mode="none", data_payload=None, research_plan=plan)
+
+    payload = chat_service._submission_preview_service.build_message_payload(output)
+
+    assert payload is not None
+    assert payload["research_plan"] == plan
+
+
 def test_build_chat_message_payload_includes_structure_resolution() -> None:
     output = SimpleNamespace(
         task_mode="none",

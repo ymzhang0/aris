@@ -118,6 +118,7 @@ from ..schemas import (
     FrontendChatSessionUpdateRequest,
     SubmissionApprovalCancelRequest,
     SubmissionDraftRequest,
+    SubmissionReviewRequest,
     SystemCountsResponse,
     WorkerStatusResponse,
     WorkerSystemInfoResponse,
@@ -1257,6 +1258,31 @@ async def submit_bridge_workchain(
     return await _submit_bridge_workchain_impl(request, payload)
 
 
+@router.post("/submission/review", tags=[WORKER_PROXY_TAG])
+async def review_bridge_workchain(
+    payload: SubmissionReviewRequest,
+    _authorization: AuthorizationDecision = Depends(
+        require_permission("/aris/submissions/current", "execute")
+    ),
+):
+    drafts = payload.draft if isinstance(payload.draft, list) else [payload.draft]
+    validation_items: list[dict[str, Any]] = []
+    for draft in drafts:
+        try:
+            result = await worker_call("submission.validate", {"draft": draft})
+        except Exception as exc:  # noqa: BLE001
+            _raise_worker_http_error(exc)
+        validation_items.append(result if isinstance(result, dict) else {"status": "validated"})
+    scope: Literal["single", "batch"] = "batch" if isinstance(payload.draft, list) else "single"
+    return {
+        "validation": validation_items if scope == "batch" else validation_items[0],
+        "approval_request": build_submission_approval_request(
+            payload.draft,
+            scope=scope,
+        ).model_dump(mode="json"),
+    }
+
+
 @router.post("/submission/submit_batch", tags=[WORKER_PROXY_TAG])
 async def submit_bridge_workchain_batch(
     request: Request,
@@ -2006,7 +2032,6 @@ async def frontend_chat_session_workspace(
     if payload is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
     return payload
-
 
 
 

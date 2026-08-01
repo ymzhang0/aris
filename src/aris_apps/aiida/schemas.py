@@ -104,6 +104,10 @@ class SubmissionDraftRequest(BaseModel):
     approval: ApprovalDecision
 
 
+class SubmissionReviewRequest(BaseModel):
+    draft: dict[str, Any] | list[dict[str, Any]]
+
+
 class SubmissionApprovalCancelRequest(BaseModel):
     approval: ApprovalDecision
 

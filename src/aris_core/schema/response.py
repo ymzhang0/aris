@@ -41,6 +41,14 @@ class ARISResponse(BaseModel):
         default=None,
         description="Optional machine-readable submission request for protocol-driven preview preparation.",
     )
+    research_plan: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Optional machine-readable scientific plan with title, objective, stages, "
+            "assumptions, and expected outputs. Required for new submission preparation "
+            "when enough information is available."
+        ),
+    )
     structure_resolution: Optional[StructureResolution] = Field(
         default=None,
         description=(

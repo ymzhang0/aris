@@ -68,6 +68,23 @@ def test_aris_response_allows_batch_mode_when_submission_request_present() -> No
     assert response.task_mode == "batch"
 
 
+def test_aris_response_accepts_structured_research_plan() -> None:
+    response = ARISResponse(
+        answer="Ready for review",
+        thought_process=[],
+        research_plan={
+            "title": "Silicon bands",
+            "objective": "Compare band structures across expanded cells.",
+            "stages": [],
+            "assumptions": [],
+            "outputs": ["Band-gap trend"],
+        },
+    )
+
+    assert response.research_plan is not None
+    assert response.research_plan["title"] == "Silicon bands"
+
+
 def test_aris_response_accepts_structure_resolution_protocol() -> None:
     response = ARISResponse(
         answer="Choose a silicon polymorph",

@@ -1,0 +1,135 @@
+%% ARIS task submission lifecycle
+%% Covers intent classification, preview construction, pinned/inline UI state,
+%% explicit approval, ARIS-to-worker stdio JSON-RPC, AiiDA execution, and recovery.
+%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 22, "rankSpacing": 34, "diagramPadding": 8}, "themeVariables": {"fontSize": "13px"}}}%%
+flowchart TB
+    START(["User sends a research request"])
+
+    subgraph FRONTEND_INTENT["1 · SHARED REACT CLIENT · Browser / ARIS.app"]
+        COMPOSER["Chat composer<br/>intent + selected resources + project context"]
+        STREAM["AG-UI chat stream<br/>thinking · tool calls · final message"]
+        EXTRACT["Extract structured assistant payload<br/>research_plan · task_mode · submission_draft<br/>approval_request · recovery_plan"]
+        PLAN["Pinned Scientific Plan<br/>objective · stages · assumptions · outputs"]
+        STABLE["Stabilize preview by turn<br/>preserve Draft during streaming/re-render"]
+        CARD["Compact Run Review<br/>scientific controls · variations<br/>validation · resources · task count"]
+        ADVANCED["Advanced Review modal<br/>grouped AiiDA ports · Draft editing"]
+        EDIT{"User changes a<br/>Draft field?"}
+        REVALIDATE["Rebuild + revalidate Draft<br/>invalidate previous approval digest"]
+        DECISION{"Explicit user decision"}
+        CANCEL["Cancel / archive Preview<br/>no AiiDA process is created"]
+    end
+
+    subgraph ARIS_CHAT["2 · ARIS CHAT APPLICATION · intent and preview orchestration"]
+        CHAT_API["Frontend chat API<br/>session + message state"]
+        AGENT["Provider-neutral agent runtime<br/>Pydantic AI"]
+        MODE{"Explicit task_mode"}
+        ANALYSIS["none<br/>analysis-only response"]
+        SINGLE_REQ["single request<br/>workchain · structure_pk · code<br/>protocol · overrides"]
+        BATCH_REQ["batch request<br/>workchain · structure_pks · code<br/>parameter_grid · matrix_mode"]
+        NORMALIZE["SubmissionPreviewService<br/>normalize structured request"]
+        PREPARE["Build preview request<br/>never submit here"]
+        BLOCKED{"Valid Draft produced<br/>for requested topology?"}
+        RECOVERY["SUBMISSION_BLOCKED<br/>recovery_plan · issues · next_step"]
+        NORMALIZE_DRAFT["Normalize Draft + preview overview<br/>primary/recommended/all inputs<br/>single/batch metadata"]
+        APPROVAL_REQ["Build approval_request<br/>scope = single | batch<br/>resource_digest binds exact Draft"]
+        MESSAGE["Emit assistant payload<br/>research_plan + type = SUBMISSION_DRAFT"]
+    end
+
+    subgraph PREVIEW_CAPABILITY["3 · AiiDA PREVIEW CAPABILITY · read/build/validate only"]
+        SPEC["Read WorkChain submission spec<br/>ports · required inputs · defaults"]
+        BUILD["Build structured submission Draft<br/>resolve structures · code · protocol"]
+        VALIDATE["Validate builder inputs<br/>errors · warnings · execution summary"]
+        MCP_NOTE["MCP facade exposes preview tools<br/>and intentionally exposes no submit tool"]
+    end
+
+    subgraph CONFIRMED_PATH["4 · ARIS CONFIRMED SUBMISSION PATH"]
+        SUBMIT_API{"Select endpoint from Draft shape"}
+        SINGLE_API["POST /submission/submit"]
+        BATCH_API["POST /submission/submit_batch"]
+        REVIEW_API["POST /submission/review<br/>validate exact current Draft"]
+        FRESH_APPROVAL["Issue fresh approval_request<br/>for exact reviewed Draft revision"]
+        DECISION_PAYLOAD["Typed ApprovalDecision<br/>decision = approved · actor = user<br/>matching scope + resource_digest"]
+        AUTH["Permission check<br/>submission.execute"]
+        VERIFY["Resolve approval against submitted Draft<br/>reject stale, modified, or wrong-scope approval"]
+        CONTEXT["Attach runtime context<br/>project · Python interpreter · environment metadata"]
+        MANAGER["WorkerProcessManager<br/>lifecycle · serialization · timeout · restart"]
+    end
+
+    subgraph WORKER["5 · MANAGED aiida-worker · no HTTP port"]
+        STDIO["stdin/stdout<br/>newline-delimited JSON-RPC 2.0"]
+        ROUTER["AiiDAWorkerService router<br/>validate method + params"]
+        WORKER_VALIDATE["Reconstruct and validate builder<br/>inside selected AiiDA environment"]
+        EXECUTE["Submit one WorkChain<br/>or submit selected batch jobs"]
+        RESULT{"Worker result"}
+        WORKER_ERROR["Structured execution error<br/>stage · port · resource · retryability"]
+    end
+
+    subgraph AIIDA["6 · AiiDA + COMPUTE"]
+        PROFILE["Selected AiiDA profile"]
+        STORE["ORM storage + provenance"]
+        ENGINE["AiiDA engine / daemon"]
+        COMPUTER["Local or remote computer<br/>scheduler / SSH"]
+        PROCESS["Process PK / UUID<br/>created and returned to ARIS"]
+    end
+
+    subgraph POST_SUBMIT["7 · UI STATE, MONITORING, AND RECOVERY"]
+        SUBMITTING["Preview state = submitting<br/>card locked"]
+        SUBMITTED["Preview state = submitted<br/>show process links"]
+        MONITOR["Process events + status refresh<br/>running · finished · failed"]
+        ERROR_CARD["Preview state = error / archived<br/>show actionable recovery summary"]
+        RETRY{"Retry requires changed<br/>parameters or runtime?"}
+        NEW_DRAFT["Create a new Draft revision<br/>new validation + new approval_request"]
+        SAFE_RETRY["Retry unchanged transient failure<br/>through ARIS retry policy"]
+    end
+
+    START --> COMPOSER --> CHAT_API --> AGENT --> MODE
+    MODE -->|"none"| ANALYSIS --> STREAM
+    MODE -->|"single"| SINGLE_REQ --> NORMALIZE
+    MODE -->|"batch"| BATCH_REQ --> NORMALIZE
+    NORMALIZE --> PREPARE --> SPEC --> BUILD --> VALIDATE --> BLOCKED
+    MCP_NOTE -.->|"architectural boundary"| BUILD
+
+    BLOCKED -->|"no"| RECOVERY --> MESSAGE
+    BLOCKED -->|"yes"| NORMALIZE_DRAFT --> APPROVAL_REQ --> MESSAGE
+    MESSAGE --> STREAM --> EXTRACT
+    EXTRACT -->|"research_plan"| PLAN
+    EXTRACT -->|"SUBMISSION_BLOCKED"| RECOVERY_VIEW["Render blocker and suggested next step"]
+    EXTRACT -->|"SUBMISSION_DRAFT"| STABLE --> CARD
+    CARD -->|"Review details"| ADVANCED --> EDIT
+    CARD -->|"Run unchanged Draft"| DECISION
+
+    EDIT -->|"yes"| REVALIDATE --> PREPARE
+    EDIT -->|"no"| DECISION
+    DECISION -->|"cancel"| CANCEL
+    DECISION -->|"approve"| REVIEW_API --> FRESH_APPROVAL --> DECISION_PAYLOAD --> SUBMIT_API
+
+    SUBMIT_API -->|"object Draft"| SINGLE_API --> AUTH
+    SUBMIT_API -->|"Draft array / batch"| BATCH_API --> AUTH
+    AUTH --> VERIFY
+    VERIFY -->|"invalid or stale"| REVALIDATE
+    VERIFY -->|"valid"| CONTEXT --> SUBMITTING --> MANAGER
+
+    MANAGER <-->|"managed stdio RPC"| STDIO
+    STDIO --> ROUTER --> WORKER_VALIDATE --> EXECUTE --> RESULT
+    EXECUTE --> PROFILE --> STORE --> ENGINE --> COMPUTER
+    ENGINE --> PROCESS --> RESULT
+
+    RESULT -->|"success"| SUBMITTED --> MONITOR
+    RESULT -->|"error"| WORKER_ERROR --> ERROR_CARD --> RETRY
+    RETRY -->|"yes"| NEW_DRAFT --> PREPARE
+    RETRY -->|"no, transient"| SAFE_RETRY --> MANAGER
+    MONITOR -->|"failed"| ERROR_CARD
+
+    classDef user fill:#EEF4FF,stroke:#7393C2,color:#172033;
+    classDef aris fill:#EAF8F2,stroke:#5B9B7E,color:#163128;
+    classDef preview fill:#FFF8E8,stroke:#C49A43,color:#3B2B0E;
+    classDef worker fill:#FFF0E8,stroke:#C47C50,color:#3C2415;
+    classDef aiida fill:#F3EFFF,stroke:#8872BD,color:#241D38;
+    classDef danger fill:#FFF0F1,stroke:#C75B68,color:#451B22;
+
+    class START,COMPOSER,STREAM,EXTRACT,PLAN,STABLE,CARD,ADVANCED,EDIT,DECISION,CANCEL,SUBMITTING,SUBMITTED,MONITOR user;
+    class CHAT_API,AGENT,MODE,ANALYSIS,SINGLE_REQ,BATCH_REQ,NORMALIZE,PREPARE,NORMALIZE_DRAFT,APPROVAL_REQ,MESSAGE,REVIEW_API,FRESH_APPROVAL,SUBMIT_API,SINGLE_API,BATCH_API,DECISION_PAYLOAD,AUTH,VERIFY,CONTEXT,MANAGER aris;
+    class SPEC,BUILD,VALIDATE,MCP_NOTE,BLOCKED,REVALIDATE preview;
+    class STDIO,ROUTER,WORKER_VALIDATE,EXECUTE,RESULT,SAFE_RETRY worker;
+    class PROFILE,STORE,ENGINE,COMPUTER,PROCESS aiida;
+    class RECOVERY,RECOVERY_VIEW,WORKER_ERROR,ERROR_CARD,RETRY,NEW_DRAFT danger;
