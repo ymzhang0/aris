@@ -33,11 +33,14 @@
     self.window = [[NSWindow alloc]
         initWithContentRect:frame
                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-                            NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
+                            NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable |
+                            NSWindowStyleMaskFullSizeContentView
                     backing:NSBackingStoreBuffered
                       defer:NO];
     self.window.title = self.developmentMode ? @"ARIS — Development" : @"ARIS";
-    self.window.titlebarAppearsTransparent = NO;
+    self.window.titleVisibility = NSWindowTitleHidden;
+    self.window.titlebarAppearsTransparent = YES;
+    self.window.movableByWindowBackground = NO;
     [self.window center];
     [self.window setFrameAutosaveName:@"ARISMainWindow"];
 

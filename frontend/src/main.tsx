@@ -15,6 +15,10 @@ const queryClient = new QueryClient({
   },
 });
 
+if (new URLSearchParams(window.location.search).get("desktop") === "1") {
+  document.documentElement.classList.add("aris-desktop");
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>

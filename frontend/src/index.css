@@ -2,6 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer utilities {
+  .app-drag-region {
+    -webkit-app-region: drag;
+  }
+
+  .app-no-drag,
+  .app-drag-region button,
+  .app-drag-region input,
+  .app-drag-region a {
+    -webkit-app-region: no-drag;
+  }
+
+  .window-toolbar-row {
+    height: 48px;
+  }
+
+  .aris-desktop .window-toolbar-row {
+    height: 68px;
+    padding-top: 20px;
+  }
+
+  .aris-desktop .window-left-controls {
+    padding-left: 174px;
+  }
+}
+
 :root {
   --surface: 0 0% 100%;
   --ring: 212 13% 50%;

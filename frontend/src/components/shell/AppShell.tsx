@@ -1,77 +1,62 @@
-import { type ReactNode, useEffect, useState } from "react";
-import { cn } from "@/lib/utils";
-import { PanelRightClose, PanelRightOpen } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import type { ReactNode } from "react";
+import { PanelBottom, PanelLeft, PanelRight } from "lucide-react";
 
-const RIG_STATE_STORAGE_KEY = "aris.shell.rig_expanded";
+import { cn } from "@/lib/utils";
 
 type AppShellProps = {
   leftSidebar: ReactNode;
   mainContent: ReactNode;
-  rightSidebar?: ReactNode;
+  rightSidebar: ReactNode;
+  bottomPanel: ReactNode;
+  bottomStatusBar: ReactNode;
+  leftExpanded: boolean;
+  rightExpanded: boolean;
+  bottomExpanded: boolean;
+  onToggleLeft: () => void;
+  onToggleRight: () => void;
+  onToggleBottom: () => void;
 };
 
-export function AppShell({
-  leftSidebar,
-  mainContent,
-  rightSidebar,
-}: AppShellProps) {
-  const [rigExpanded, setRigExpanded] = useState<boolean>(() => {
-    const saved = window.localStorage.getItem(RIG_STATE_STORAGE_KEY);
-    return saved !== "false";
-  });
+const toolbarButton =
+  "app-no-drag grid h-9 w-9 place-items-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-200/70 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100";
 
-  useEffect(() => {
-    window.localStorage.setItem(RIG_STATE_STORAGE_KEY, String(rigExpanded));
-  }, [rigExpanded]);
-
+export function AppShell(props: AppShellProps) {
   return (
-    <div className="grid h-screen w-full grid-cols-[auto_1fr_auto] overflow-hidden bg-white dark:bg-zinc-950">
-      <aside className="relative flex h-full w-[360px] flex-shrink-0 flex-col overflow-hidden border-r border-zinc-200/80 dark:border-zinc-800">
-        {leftSidebar}
-      </aside>
-
-      <main className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden">
-        {mainContent}
-      </main>
-
-      {rightSidebar && (
-        <aside
-          className={cn(
-            "relative flex h-full flex-shrink-0 flex-col overflow-hidden border-l border-zinc-200/80 transition-all duration-300 ease-in-out dark:border-zinc-800",
-            rigExpanded ? "w-[400px]" : "w-12",
-          )}
-        >
-          <div className="flex h-12 w-full items-center justify-start border-b border-zinc-200/80 px-2 dark:border-zinc-800">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-              onClick={() => setRigExpanded(!rigExpanded)}
-              aria-label={rigExpanded ? "Collapse Rig" : "Expand Rig"}
-            >
-              {rigExpanded ? (
-                <PanelRightClose className="h-4 w-4" />
-              ) : (
-                <PanelRightOpen className="h-4 w-4" />
-              )}
-            </Button>
-            {rigExpanded && (
-              <span className="ml-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                Rig
-              </span>
-            )}
-          </div>
-          <div
-            className={cn(
-              "flex flex-1 flex-col overflow-hidden",
-              !rigExpanded && "hidden",
-            )}
-          >
-            {rightSidebar}
-          </div>
-        </aside>
+    <div
+      className={cn(
+        "grid h-[100dvh] w-full overflow-hidden bg-white text-zinc-950 dark:bg-zinc-950 dark:text-zinc-100",
+        props.bottomExpanded
+          ? "grid-rows-[auto_minmax(0,1fr)_minmax(160px,28vh)_28px]"
+          : "grid-rows-[auto_minmax(0,1fr)_0_28px]",
       )}
+      style={{
+        gridTemplateColumns: `${props.leftExpanded ? "260px" : "48px"} minmax(0,1fr) ${props.rightExpanded ? "360px" : "0px"}`,
+      }}
+    >
+      <div className="app-drag-region window-toolbar-row col-span-3 grid border-b border-zinc-200/70 bg-white dark:border-zinc-800 dark:bg-zinc-950" style={{ gridTemplateColumns: "subgrid" }}>
+        <div className="window-left-controls flex items-center justify-start px-2">
+          <button className={toolbarButton} onClick={props.onToggleLeft} title={props.leftExpanded ? "Collapse sidebar" : "Expand sidebar"} aria-label={props.leftExpanded ? "Collapse sidebar" : "Expand sidebar"}>
+            <PanelLeft className="h-[18px] w-[18px]" />
+          </button>
+        </div>
+        <div className="min-w-0" />
+        <div className="flex items-center justify-end gap-1 px-2">
+          <button className={cn(toolbarButton, props.bottomExpanded && "bg-zinc-100 dark:bg-zinc-900")} onClick={props.onToggleBottom} title="Toggle bottom panel" aria-label="Toggle bottom panel">
+            <PanelBottom className="h-[18px] w-[18px]" />
+          </button>
+          <button className={cn(toolbarButton, props.rightExpanded && "bg-zinc-100 dark:bg-zinc-900")} onClick={props.onToggleRight} title={props.rightExpanded ? "Collapse tools" : "Expand tools"} aria-label={props.rightExpanded ? "Collapse tools" : "Expand tools"}>
+            <PanelRight className="h-[18px] w-[18px]" />
+          </button>
+        </div>
+      </div>
+
+      <div className="min-h-0 overflow-hidden">{props.leftSidebar}</div>
+      <div className="min-h-0 min-w-0 overflow-hidden">{props.mainContent}</div>
+      <div className="min-h-0 overflow-hidden">{props.rightSidebar}</div>
+      <div className="col-start-2 col-span-2 min-h-0 overflow-hidden border-t border-zinc-200 bg-zinc-950 dark:border-zinc-800">
+        {props.bottomExpanded ? props.bottomPanel : null}
+      </div>
+      <div className="col-span-3 min-w-0">{props.bottomStatusBar}</div>
     </div>
   );
 }

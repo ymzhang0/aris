@@ -12,6 +12,7 @@ import {
   activateChatSession,
   addNodesToGroup,
   createChatProject,
+  browseChatProjectDirectory,
   createChatSession,
   createGroup,
   deleteChatItems,
@@ -30,14 +31,11 @@ import {
   type SubmissionApprovalRequest,
 } from "@/api";
 import { ChatPanel } from "@/components/dashboard/chat-panel";
-import { HistorySidebar } from "@/components/dashboard/history-sidebar";
 import { MainWorkspace } from "@/components/dashboard/MainWorkspace";
 import { ProcessDetailDrawer } from "@/components/dashboard/process-detail-drawer";
 import { RuntimeTerminal } from "@/components/dashboard/runtime-terminal";
-import { Sidebar } from "@/components/dashboard/sidebar";
 import { WorkspaceExplorerSidebar, type WorkspaceExplorerFileSelection } from "@/components/dashboard/workspace-explorer-sidebar";
-import { Button } from "@/components/ui/button";
-import { cn, decodeEscapedUnicode, decodeEscapedUnicodeDeep } from "@/lib/utils";
+import { decodeEscapedUnicode, decodeEscapedUnicodeDeep } from "@/lib/utils";
 import { parseArisAgUiEvent } from "@/lib/ag-ui";
 import {
   SubmissionModal,
@@ -63,8 +61,11 @@ import type {
   SendChatRequest,
   SessionParameter,
 } from "@/types/aiida";
-import { Database, FolderOpen, History, Moon, Sun } from "lucide-react";
 import { AppShell } from "@/components/shell/AppShell";
+import { LeftChatSidebar } from "@/components/shell/LeftChatSidebar";
+import { RightToolSidebar, type RightTool } from "@/components/shell/RightToolSidebar";
+import { BottomStatusBar } from "@/components/shell/BottomStatusBar";
+import { ProjectDatabaseSidebar } from "@/components/shell/ProjectDatabaseSidebar";
 
 const THEME_STORAGE_KEY = "aris.dashboard.theme";
 const CURRENT_SESSION_STORAGE_KEY = "current_session_id";
@@ -627,7 +628,29 @@ function normalizeGroups(raw: unknown): GroupItem[] {
 export default function App() {
   const queryClient = useQueryClient();
   const [theme, setTheme] = useState<"light" | "dark">(initialTheme);
-  const [sidebarView, setSidebarView] = useState<"explorer" | "history" | "workspace">("explorer");
+  const [rightTool, setRightTool] = useState<RightTool | null>(null);
+  const [leftSidebarExpanded, setLeftSidebarExpanded] = useState(
+    () => window.localStorage.getItem("aris.sidebar.left") !== "collapsed",
+  );
+  const [rightSidebarExpanded, setRightSidebarExpanded] = useState(
+    () => window.localStorage.getItem("aris.sidebar.right") === "expanded",
+  );
+  const [bottomPanelExpanded, setBottomPanelExpanded] = useState(
+    () => window.localStorage.getItem("aris.panel.bottom") === "expanded",
+  );
+  useEffect(() => {
+    const handleToolShortcut = (event: KeyboardEvent) => {
+      if (!event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return;
+      const tool = event.key.toLowerCase() === "p" ? "files" : event.key.toLowerCase() === "d" ? "aiida" : null;
+      if (!tool) return;
+      event.preventDefault();
+      setRightTool(tool);
+      setRightSidebarExpanded(true);
+      window.localStorage.setItem("aris.sidebar.right", "expanded");
+    };
+    window.addEventListener("keydown", handleToolShortcut);
+    return () => window.removeEventListener("keydown", handleToolShortcut);
+  }, []);
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedGroup, setSelectedGroup] = useState("");
   const [nodeTypeFilter, setNodeTypeFilter] = useState<"all" | "structures" | "tasks" | "failed">("all");
@@ -696,6 +719,7 @@ export default function App() {
   const activeChatSession = chatSessions.find((session) => session.id === resolvedActiveChatSessionId) ?? null;
   const activeSessionProject =
     chatProjects.find((project) => project.id === (activeChatSession?.project_id ?? "")) ?? null;
+  const activeWorkspaceProject = activeSessionProject ?? selectedWorkspaceProject;
   const currentProjectPath = activeSessionProject?.root_path ?? selectedWorkspaceProject?.root_path ?? null;
   const currentContextGroupLabel = resolveCurrentContextGroupLabel(activeChatSession);
   const selectedGroupLabel = resolveSelectedGroupLabel(selectedGroup, currentContextGroupLabel);
@@ -721,6 +745,13 @@ export default function App() {
     queryKey: ["groups"],
     queryFn: aiidaClient.getGroups,
     enabled: bootstrapQuery.isSuccess,
+    refetchInterval: 60_000,
+  });
+
+  const projectDatabaseQuery = useQuery({
+    queryKey: ["project-database", activeWorkspaceProject?.id, activeWorkspaceProject?.group_label],
+    queryFn: () => aiidaClient.getProcesses(200, activeWorkspaceProject?.group_label ?? undefined),
+    enabled: Boolean(activeWorkspaceProject?.group_label && rightSidebarExpanded && rightTool === "aiida"),
     refetchInterval: 60_000,
   });
 
@@ -1311,7 +1342,7 @@ export default function App() {
     applyChatSnapshot(response.chat);
     setActiveWorkspaceProjectId(response.session?.project_id ?? response.active_project_id ?? null);
     setComposerResetVersion((current) => current + 1);
-    setSidebarView("explorer");
+    setRightSidebarExpanded(false);
     await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
   }, [activeChatSessionId, applyChatSnapshot, hasPendingAgentStep, isChatBusy, queryClient, stopActiveChatTurn]);
 
@@ -1345,7 +1376,6 @@ export default function App() {
     async ({ name, rootPath }: { name: string; rootPath: string }) => {
       const response = await createProjectMutation.mutateAsync({ name, rootPath });
       await handleCreateChatSession(response.project.id);
-      setSidebarView("history");
     },
     [createProjectMutation, handleCreateChatSession],
   );
@@ -1439,7 +1469,8 @@ export default function App() {
         return;
       }
       setActiveWorkspaceProjectId(projectId);
-      setSidebarView("workspace");
+      setRightTool("files");
+      setRightSidebarExpanded(true);
     },
     [],
   );
@@ -1808,146 +1839,54 @@ export default function App() {
   return (
     <main className="dashboard-shell h-screen overflow-hidden">
       <AppShell
+        leftExpanded={leftSidebarExpanded}
+        rightExpanded={rightSidebarExpanded}
+        bottomExpanded={bottomPanelExpanded}
+        onToggleLeft={() => {
+          setLeftSidebarExpanded((current) => {
+            window.localStorage.setItem("aris.sidebar.left", current ? "collapsed" : "expanded");
+            return !current;
+          });
+        }}
+        onToggleRight={() => {
+          setRightSidebarExpanded((current) => {
+            if (!current) setRightTool(null);
+            window.localStorage.setItem("aris.sidebar.right", current ? "collapsed" : "expanded");
+            return !current;
+          });
+        }}
+        onToggleBottom={() => {
+          setBottomPanelExpanded((current) => {
+            window.localStorage.setItem("aris.panel.bottom", current ? "collapsed" : "expanded");
+            return !current;
+          });
+        }}
         leftSidebar={
-          <div className="flex h-full min-h-0 w-full flex-row">
-            <div className="flex h-full w-12 shrink-0 flex-col items-center justify-between border-r border-zinc-200/70 bg-zinc-50/85 px-1.5 py-3 dark:border-zinc-800/70 dark:bg-zinc-900/60">
-            <div className="flex flex-col items-center gap-2">
-              <div
-                className="mb-1 flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-zinc-200/70 dark:bg-zinc-950 dark:ring-zinc-800"
-                title="ARIS"
-              >
-                <img src="/aris.svg" alt="ARIS" className="h-8 w-8 object-contain" />
-              </div>
-              <div className="mb-0.5 h-px w-6 bg-zinc-200 dark:bg-zinc-800" aria-hidden="true" />
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn(
-                  "h-9 w-9 rounded-xl text-zinc-500 hover:bg-white hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
-                  sidebarView === "explorer" &&
-                    "bg-white text-zinc-900 shadow-[0_10px_20px_-16px_rgba(15,23,42,0.45)] dark:bg-zinc-800 dark:text-zinc-100",
-                )}
-                onClick={() => setSidebarView("explorer")}
-                aria-label="AiiDA Explorer"
-              >
-                <Database className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn(
-                  "h-9 w-9 rounded-xl text-zinc-500 hover:bg-white hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
-                  sidebarView === "history" &&
-                    "bg-white text-zinc-900 shadow-[0_10px_20px_-16px_rgba(15,23,42,0.45)] dark:bg-zinc-800 dark:text-zinc-100",
-                )}
-                onClick={() => setSidebarView("history")}
-                aria-label="Chat History"
-              >
-                <History className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn(
-                  "h-9 w-9 rounded-xl text-zinc-500 hover:bg-white hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
-                  sidebarView === "workspace" &&
-                    "bg-white text-zinc-900 shadow-[0_10px_20px_-16px_rgba(15,23,42,0.45)] dark:bg-zinc-800 dark:text-zinc-100",
-                )}
-                onClick={() => {
-                  setActiveWorkspaceProjectId((current) => current ?? activeProjectId ?? null);
-                  setSidebarView("workspace");
-                }}
-                aria-label="Workspace Explorer"
-              >
-                <FolderOpen className="h-4 w-4" />
-              </Button>
-            </div>
-            <div className="flex flex-col items-center">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 rounded-xl text-zinc-500 hover:bg-white hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                onClick={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
-                aria-label="Toggle color mode"
-              >
-                {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-              </Button>
-            </div>
-          </div>
-
-          <div className="flex min-w-0 flex-1 flex-col bg-transparent px-2.5 py-0">
-            {sidebarView === "explorer" ? (
-              <Sidebar
-                activeProject={activeSessionProject ?? null}
-                processes={processes}
-                groups={groups}
-                selectedGroupLabel={selectedGroupLabel}
-                isAllGroupsSelected={selectedGroup === GROUP_SELECTION_ALL || (!selectedGroup && !currentContextGroupLabel)}
-                isCurrentContextSelected={selectedGroup === GROUP_SELECTION_CURRENT_CONTEXT}
-                currentContextGroupLabel={currentContextGroupLabel}
-                processLimit={processLimit}
-                contextNodeIds={contextNodeIds}
-                selectedProcess={activeProcess}
-                isUpdatingProcessLimit={pendingProcessLimit !== null}
-                canDeleteGroups={canDeleteGroups}
-                canDeleteNodes={canDeleteNodes}
-                onSelectAllGroups={handleSelectAllGroups}
-                onSelectCurrentContext={handleSelectCurrentContext}
-                onGroupChange={handleSelectArchiveGroup}
-                nodeTypeFilter={nodeTypeFilter}
-                onNodeTypeFilterChange={setNodeTypeFilter}
-                onProcessLimitChange={(nextLimit) => {
-                  if (nextLimit === processLimit) {
-                    return;
-                  }
-                  setProcessLimit(nextLimit);
-                  setPendingProcessLimit(nextLimit);
-                }}
-                onAddContextNode={handleAddContextNode}
-                onOpenProcessDetail={setActiveProcess}
-                onCreateGroup={handleCreateGroup}
-                onRenameGroup={handleRenameGroup}
-                onDeleteGroups={handleDeleteGroups}
-                onAssignNodesToGroup={handleAssignNodesToGroup}
-                onSoftDeleteNode={handleSoftDeleteNode}
-                onExportGroup={handleExportGroup}
-                onConsultFailedProcess={handleConsultFailedProcess}
-                onCloneProcess={handleCloneProcess}
-                onOpenProjectWorkspace={handleOpenProjectWorkspace}
-              />
-            ) : sidebarView === "history" ? (
-              <HistorySidebar
-                projects={chatProjects}
-                sessions={chatSessions}
-                activeProjectId={activeProjectId}
-                activeSessionId={activeChatSessionId}
-                isBusy={isChatBusy}
-                canDeleteItems={canDeleteChatItems}
-                onActivateSession={(sessionId) => {
-                  void handleActivateChatSession(sessionId);
-                }}
-                onRenameSession={(sessionId, title) => {
-                  void handleRenameChatSession(sessionId, title);
-                }}
-                onCreateProject={({ name, rootPath }) => {
-                  void handleCreateProject({ name, rootPath });
-                }}
-                onDeleteItems={({ projectIds, sessionIds }) => {
-                  void handleDeleteChatItems({ projectIds, sessionIds });
-                }}
-                onOpenProjectWorkspace={(projectId) => {
-                  handleOpenProjectWorkspace(projectId);
-                }}
-              />
-            ) : (
-              <WorkspaceExplorerSidebar
-                project={selectedWorkspaceProject}
-                onOpenFile={handleOpenWorkspaceFile}
-              />
-            )}
-          </div>
-        </div>
-      }
+          <>
+          <LeftChatSidebar
+            projects={chatProjects}
+            sessions={chatSessions}
+            activeProjectId={activeProjectId}
+            activeSessionId={resolvedActiveChatSessionId}
+            isBusy={isChatBusy}
+            theme={theme}
+            onToggleTheme={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
+            onActivateSession={(sessionId) => { void handleActivateChatSession(sessionId); }}
+            onCreateProject={(payload) => { void handleCreateProject(payload); }}
+            onBrowseProjectFolder={async () => {
+              const result = await browseChatProjectDirectory();
+              return result.success ? result.path : null;
+            }}
+            onOpenProjectWorkspace={handleOpenProjectWorkspace}
+            onNewConversation={() => { void handleCreateChatSession(); }}
+            expanded={leftSidebarExpanded}
+            onExpandedChange={(expanded) => {
+              setLeftSidebarExpanded(expanded);
+              window.localStorage.setItem("aris.sidebar.left", expanded ? "expanded" : "collapsed");
+            }}
+          />
+          </>
+        }
         mainContent={
           <MainWorkspace
             activeView={activeView}
@@ -1962,7 +1901,6 @@ export default function App() {
                   models={models}
                   selectedModel={selectedModel}
                   composerResetVersion={composerResetVersion}
-                  currentProjectName={activeChatSession?.project_label ?? null}
                   currentSessionName={activeChatSession?.title ?? null}
                   isLoading={isChatBusy}
                   activeTurnId={activeTurnId}
@@ -2003,7 +1941,39 @@ export default function App() {
           />
         }
         rightSidebar={
-          <RuntimeTerminal lines={logs} />
+          <RightToolSidebar
+            expanded={rightSidebarExpanded}
+            activeTool={rightTool}
+            onToolChange={setRightTool}
+            filesContent={<WorkspaceExplorerSidebar project={selectedWorkspaceProject} onOpenFile={handleOpenWorkspaceFile} />}
+            aiidaContent={
+              <ProjectDatabaseSidebar
+                project={activeWorkspaceProject}
+                processes={projectDatabaseQuery.data?.items ?? []}
+                loading={projectDatabaseQuery.isPending || projectDatabaseQuery.isFetching}
+                onOpenProcess={setActiveProcess}
+                onAddContext={handleAddContextNode}
+              />
+            }
+          />
+        }
+        bottomPanel={<RuntimeTerminal lines={logs} />}
+        bottomStatusBar={
+          <BottomStatusBar
+            project={activeWorkspaceProject}
+            onOpenTool={(tool) => {
+              setRightTool(tool);
+              setRightSidebarExpanded(true);
+              window.localStorage.setItem("aris.sidebar.right", "expanded");
+            }}
+            terminalOpen={bottomPanelExpanded}
+            onToggleTerminal={() => {
+              setBottomPanelExpanded((current) => {
+                window.localStorage.setItem("aris.panel.bottom", current ? "collapsed" : "expanded");
+                return !current;
+              });
+            }}
+          />
         }
       />
       <ProcessDetailDrawer

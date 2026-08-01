@@ -3,9 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { FileExplorer, type FileExplorerNode } from "@/components/dashboard/FileExplorer";
-import { SidebarPageHeader } from "@/components/dashboard/sidebar-page-header";
 import { Button } from "@/components/ui/button";
-import { Panel } from "@/components/ui/panel";
 import { getChatProjectWorkspace } from "@/api";
 import type { ChatProject, ChatProjectWorkspaceResponse, WorkspaceEntry } from "@/types/aiida";
 
@@ -159,17 +157,7 @@ export function WorkspaceExplorerSidebar({ project, onOpenFile }: WorkspaceExplo
 
   return (
     <aside className="flex h-full min-h-0 w-full flex-col">
-      <Panel className="flex min-h-0 flex-1 flex-col gap-3 border-zinc-100/90 p-3 dark:border-zinc-800/80">
-        <SidebarPageHeader
-          title="Workspace"
-          subtitle={project ? (
-            <span title={rootPathLabel || project.name}>
-              {project.name}
-              {rootPathLabel ? ` · ${rootPathLabel}` : ""}
-            </span>
-          ) : "Open a project to browse its files"}
-        />
-
+      <div className="flex min-h-0 flex-1 flex-col p-3">
         {!project ? (
           <div className="flex h-full min-h-0 items-center justify-center px-1 py-6 text-center text-sm text-zinc-500 dark:text-zinc-400">
             Open a project from the Projects view, then its workspace tree will stay here.
@@ -235,7 +223,7 @@ export function WorkspaceExplorerSidebar({ project, onOpenFile }: WorkspaceExplo
             ) : null}
           </>
         )}
-      </Panel>
+      </div>
     </aside>
   );
 }
