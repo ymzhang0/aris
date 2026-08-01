@@ -662,7 +662,8 @@ def _serialize_chat_project_summary(project: dict[str, Any], store: dict[str, An
     return {
         "id": project_id,
         "name": project_name,
-        "group_label": _build_project_group_label(project_name),
+        "group_uuid": str(project.get("group_uuid") or "") or None,
+        "group_label": str(project.get("group_label") or "") or _build_project_group_label(project_name),
         "root_path": str(project.get("root_path") or ""),
         "created_at": str(project.get("created_at") or _now_iso()),
         "updated_at": max(str(project.get("updated_at") or _now_iso()), latest_session_update),
@@ -1038,6 +1039,7 @@ def _write_project_config(project: dict[str, Any]) -> None:
             "project_name": project.get("name") or project.get("title") or project.get("group_label") or "",
             "python_env": project.get("python_env") or "",
             "group_label": project.get("group_label") or "",
+            "group_uuid": project.get("group_uuid") or "",
         }
         config_path.write_text(json.dumps(config_data, indent=2, ensure_ascii=False))
     except Exception as exc:
@@ -1071,11 +1073,13 @@ def create_chat_project(
     )
     
     python_env = config.get("python_env")
-    if python_env:
+    if python_env or config.get("group_uuid") or config.get("group_label"):
         project = _get_session_application_service().update_project(
             state,
             project_id=project["id"],
             python_env=python_env,
+            group_uuid=config.get("group_uuid"),
+            group_label=config.get("group_label"),
         )
     
     _write_project_config(project)
@@ -1087,11 +1091,15 @@ def update_chat_project(
     project_id: str,
     *,
     python_env: str | None = None,
+    group_uuid: str | None = None,
+    group_label: str | None = None,
 ) -> dict[str, Any]:
     project = _get_session_application_service().update_project(
         state,
         project_id=project_id,
         python_env=python_env,
+        group_uuid=group_uuid,
+        group_label=group_label,
     )
     _write_project_config(project)
     return project

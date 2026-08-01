@@ -70,6 +70,24 @@ class ProjectService:
         
         if not config:
             raise ProjectError(f"No .aris/project.json found in {path}")
+
+        if not config.aiida.enabled:
+            config.aiida.enabled = True
+        if not config.aiida.group_uuid:
+            try:
+                group_uuid, group_label = await ensure_project_group(
+                    config.project_id,
+                    config.name,
+                    profile=config.aiida.profile,
+                )
+                config.aiida.group_uuid = group_uuid
+                config.aiida.group_label = group_label
+                config.aiida.status = "synced"
+                self.config_store.write_project_config(path, config)
+            except Exception as e:
+                config.aiida.status = "needs_attention"
+                self.config_store.write_project_config(path, config)
+                raise ProjectError(f"Project loaded but AiiDA group failed: {e}") from e
             
         self.repository.upsert_index(config.project_id, str(path))
         

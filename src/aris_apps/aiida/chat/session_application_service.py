@@ -144,6 +144,8 @@ class ChatSessionApplicationService:
         project_id: str,
         *,
         python_env: str | None = None,
+        group_uuid: str | None = None,
+        group_label: str | None = None,
     ) -> dict[str, Any]:
         store = self._deps.get_store(state)
         project = next((p for p in store.get("projects", []) if p["id"] == project_id), None)
@@ -152,6 +154,10 @@ class ChatSessionApplicationService:
 
         if python_env is not None:
             project["python_env"] = python_env if python_env.strip() else None
+        if group_uuid is not None:
+            project["group_uuid"] = group_uuid.strip() or None
+        if group_label is not None:
+            project["group_label"] = group_label.strip() or None
 
         project["updated_at"] = self._deps.now_iso()
         self._deps.touch_sessions(state)

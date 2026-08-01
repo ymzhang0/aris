@@ -146,6 +146,7 @@ export type ChatDeleteResponse = {
 export type ChatProject = {
   id: string;
   name: string;
+  group_uuid?: string | null;
   group_label?: string | null;
   root_path: string;
   created_at: string;

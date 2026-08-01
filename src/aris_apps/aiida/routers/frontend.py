@@ -2066,9 +2066,42 @@ async def frontend_cancel_pending_submission(
     }
 
 
+async def _reconcile_chat_project_groups(state: Any) -> None:
+    """Backfill stable AiiDA Group identities for legacy chat projects."""
+    for project in list_chat_projects(state):
+        if project.get("group_uuid"):
+            continue
+        project_id = str(project.get("id") or "").strip()
+        project_name = str(project.get("name") or "").strip()
+        if not project_id or not project_name:
+            continue
+        try:
+            group = await aiida_worker_client.call(
+                "group.ensure_project",
+                {"project_id": project_id, "project_name": project_name},
+                timeout=15.0,
+            )
+            if isinstance(group, dict) and group.get("group_uuid") and group.get("group_label"):
+                update_chat_project(
+                    state,
+                    project_id,
+                    group_uuid=str(group["group_uuid"]),
+                    group_label=str(group["group_label"]),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                log_event(
+                    "aiida.frontend.project_group.reconcile_failed",
+                    error=str(exc),
+                    project_id=project_id,
+                )
+            )
+
+
 @router.get("/frontend/chat/sessions", tags=[FRONTEND_TAG])
 async def frontend_chat_sessions(request: Request, response: Response):
     state = request.app.state
+    await _reconcile_chat_project_groups(state)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return _chat_sessions_payload(state)
 
@@ -2121,12 +2154,26 @@ async def frontend_create_chat_project(request: Request, payload: FrontendChatPr
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
-    project_group_label = str(project.get("group_label") or "").strip()
-    if project_group_label:
-        try:
-            await _ensure_named_groups([project_group_label])
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(log_event("aiida.frontend.project_group.ensure_failed", error=str(exc), label=project_group_label))
+    try:
+        group = await aiida_worker_client.call(
+            "group.ensure_project",
+            {"project_id": project["id"], "project_name": str(project.get("name") or payload.name)},
+            timeout=15.0,
+        )
+        if not isinstance(group, dict) or not group.get("group_uuid") or not group.get("group_label"):
+            raise ValueError("Worker returned incomplete project group metadata")
+        project = update_chat_project(
+            state,
+            project["id"],
+            group_uuid=str(group["group_uuid"]),
+            group_label=str(group["group_label"]),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(log_event("aiida.frontend.project_group.ensure_failed", error=str(exc), project_id=project["id"]))
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "Project folder was initialized, but its AiiDA Group could not be created."},
+        ) from exc
     return {
         "project": project,
         "active_project_id": get_active_chat_project_id(state),

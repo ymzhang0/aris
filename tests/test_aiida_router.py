@@ -39,6 +39,34 @@ def _submission_request(
     )
 
 
+@pytest.mark.anyio
+async def test_review_submission_validates_exact_draft_and_issues_bound_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft = {
+        "entry_point": "quantumespresso.pw.base",
+        "inputs": {"structure": {"pk": 6}, "pw": {"code": "pw@localhost"}},
+    }
+    captured: dict[str, object] = {}
+
+    async def _worker_call(method: str, params: dict[str, object]):
+        captured["method"] = method
+        captured["params"] = params
+        return {"status": "VALIDATION_OK", "is_valid": True}
+
+    monkeypatch.setattr(submission_router, "worker_call", _worker_call)
+
+    response = await submission_router.review_bridge_workchain(
+        submission_router.SubmissionReviewRequest(draft=draft),
+        _authorization=SimpleNamespace(),
+    )
+
+    assert captured == {"method": "submission.validate", "params": {"draft": draft}}
+    assert response["validation"]["status"] == "VALIDATION_OK"
+    assert response["approval_request"]["scope"] == "single"
+    assert response["approval_request"]["resource_digest"] == submission_resource_digest(draft)
+
+
 def test_serialize_processes_ignores_noncanonical_preview_field() -> None:
     preview = {
         "formula": "Si2",
@@ -489,20 +517,25 @@ async def test_submit_bridge_workchain_unwraps_direct_entry_point_payload(monkey
 async def test_frontend_create_chat_project_ensures_project_group(monkeypatch: pytest.MonkeyPatch) -> None:
     state = SimpleNamespace()
     request = SimpleNamespace(app=SimpleNamespace(state=state))
-    ensured: list[str] = []
+    ensured: list[tuple[str, dict[str, str]]] = []
 
     monkeypatch.setattr(frontend_router,
         "create_chat_project",
-        lambda *_args, **_kwargs: {"id": "project-1", "group_label": "Test_multitask_Si_Thermal_Expansion"},
+        lambda *_args, **_kwargs: {"id": "project-1", "name": "Test_multitask_Si_Thermal_Expansion"},
+    )
+    monkeypatch.setattr(
+        frontend_router,
+        "update_chat_project",
+        lambda _state, project_id, **kwargs: {"id": project_id, "name": "Test_multitask_Si_Thermal_Expansion", **kwargs},
     )
     monkeypatch.setattr(frontend_router, "get_active_chat_project_id", lambda _state: "project-1")
     monkeypatch.setattr(frontend_router, "list_chat_projects", lambda _state: [{"id": "project-1"}])
 
-    async def _fake_ensure_named_groups(labels: list[str]) -> dict[str, str]:
-        ensured.extend(labels)
-        return {label: label for label in labels}
+    async def _fake_call(method: str, params: dict[str, str], **_kwargs) -> dict[str, str]:
+        ensured.append((method, params))
+        return {"group_uuid": "group-uuid-1", "group_label": "Test_multitask_Si_Thermal_Expansion"}
 
-    monkeypatch.setattr(frontend_router, "_ensure_named_groups", _fake_ensure_named_groups)
+    monkeypatch.setattr(frontend_router.aiida_worker_client, "call", _fake_call)
 
     response = await frontend_router.frontend_create_chat_project(
         request,
@@ -510,7 +543,13 @@ async def test_frontend_create_chat_project_ensures_project_group(monkeypatch: p
     )
 
     assert response["project"]["id"] == "project-1"
-    assert ensured == ["Test_multitask_Si_Thermal_Expansion"]
+    assert ensured == [
+        (
+            "group.ensure_project",
+            {"project_id": "project-1", "project_name": "Test_multitask_Si_Thermal_Expansion"},
+        )
+    ]
+    assert response["project"]["group_uuid"] == "group-uuid-1"
 
 
 @pytest.mark.anyio

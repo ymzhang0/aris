@@ -25,7 +25,7 @@ def get_project_service() -> ProjectService:
 class CreateProjectRequest(BaseModel):
     folder_path: str
     name: str
-    aiida_enabled: bool = False
+    aiida_enabled: bool = True
     aiida_profile: str = "default"
 
 

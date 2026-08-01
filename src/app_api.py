@@ -30,6 +30,7 @@ from src.aris_core.runtime import (
     WorkerProcessManager,
     configure_worker_process_manager,
 )
+from src.aris_apps.projects.routes import router as projects_router
 
 # Global state container for long-lived objects
 state = {}
@@ -257,6 +258,7 @@ def mount_enabled_apps(app: FastAPI) -> None:
 
 
 mount_enabled_apps(app)
+app.include_router(projects_router)
 
 
 @app.get("/api/health")
