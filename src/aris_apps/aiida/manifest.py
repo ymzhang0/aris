@@ -22,6 +22,10 @@ class AiiDAAppManifest:
         app.include_router(root_router)
         app.include_router(api_router, prefix=self.api_prefix)
 
+    def register_capabilities(self, registry) -> None:
+        capability_module = import_module("src.aris_apps.aiida.capabilities")
+        registry.register("aiida", capability_module.aiida_capability)
+
     def register_runtime(self, active_hubs: list[object]) -> None:
         hub_module = import_module("src.aris_apps.aiida.hub")
         hub = getattr(hub_module, "hub", None)

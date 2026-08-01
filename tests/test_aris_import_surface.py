@@ -68,6 +68,27 @@ def test_aris_response_allows_batch_mode_when_submission_request_present() -> No
     assert response.task_mode == "batch"
 
 
+def test_aris_response_accepts_structure_resolution_protocol() -> None:
+    response = ARISResponse(
+        answer="Choose a silicon polymorph",
+        thought_process=[],
+        structure_resolution={
+            "status": "selection_required",
+            "query": {"formula": "Si"},
+            "candidates": [
+                {
+                    "provider": "materials_project",
+                    "database": "mp",
+                    "entry_id": "mp-149",
+                }
+            ],
+        },
+    )
+
+    assert response.structure_resolution is not None
+    assert response.structure_resolution.status == "selection_required"
+
+
 def test_aris_aiida_surface_is_available() -> None:
     assert aiida_researcher is not None
     assert callable(get_aiida_worker_client)

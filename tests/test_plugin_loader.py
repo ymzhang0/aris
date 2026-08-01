@@ -1,10 +1,10 @@
 from src.aris_core.plugins.loader import _parse_enabled_app_names
 
 
-def test_aiida_is_enabled_by_default(monkeypatch) -> None:
+def test_aiida_and_materials_are_enabled_by_default(monkeypatch) -> None:
     monkeypatch.delenv("ARIS_ENABLED_APPS", raising=False)
 
-    assert _parse_enabled_app_names() == ("aiida",)
+    assert _parse_enabled_app_names() == ("aiida", "materials")
 
 
 def test_enabled_apps_can_be_overridden(monkeypatch) -> None:

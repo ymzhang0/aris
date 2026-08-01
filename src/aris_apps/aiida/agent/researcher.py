@@ -42,6 +42,15 @@ from src.aris_apps.aiida.agent.tools import (
     submit_job,
     switch_profile,
     validate_job,
+    list_materials_providers as list_materials_providers_via_capability,
+    search_material_structures as search_material_structures_via_capability,
+    prepare_material_structure as prepare_material_structure_via_capability,
+    import_material_structure as import_material_structure_via_capability,
+)
+from src.aris_apps.materials.schemas import (
+    StructureImportRequest,
+    StructureLookupRequest,
+    StructureSearchRequest,
 )
 from src.aris_apps.aiida.chat.service import get_chat_session_detail
 from src.aris_apps.aiida.frontend_bridge import (
@@ -1699,6 +1708,46 @@ async def list_profiles(ctx: RunContext[AiiDADeps]):
         )
 
     return payload
+
+
+@aiida_researcher.tool
+async def list_materials_providers(ctx: RunContext[AiiDADeps]):  # noqa: ARG001
+    """List configured remote structure providers and their databases."""
+    return await list_materials_providers_via_capability()
+
+
+@aiida_researcher.tool
+async def search_remote_structures(
+    ctx: RunContext[AiiDADeps],
+    request: StructureSearchRequest,
+):
+    """Search remote structure databases using explicit structured filters."""
+    ctx.deps.log_step("Searching remote materials databases")
+    return await search_material_structures_via_capability(request)
+
+
+@aiida_researcher.tool
+async def inspect_remote_structure(
+    ctx: RunContext[AiiDADeps],
+    request: StructureLookupRequest,
+):
+    """Fetch one selected remote structure without creating an AiiDA node."""
+    ctx.deps.log_step(
+        f"Inspecting remote structure: {request.provider}/{request.database}/{request.entry_id}"
+    )
+    return await prepare_material_structure_via_capability(request)
+
+
+@aiida_researcher.tool
+async def import_remote_structure(
+    ctx: RunContext[AiiDADeps],
+    request: StructureImportRequest,
+):
+    """Idempotently import one selected remote structure into the active AiiDA profile."""
+    ctx.deps.log_step(
+        f"Importing remote structure: {request.provider}/{request.database}/{request.entry_id}"
+    )
+    return await import_material_structure_via_capability(request)
 
 
 @aiida_researcher.tool

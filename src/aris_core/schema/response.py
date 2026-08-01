@@ -13,6 +13,23 @@ def _payload_contains_submission_preview(payload: Optional[Dict[str, Any]]) -> b
     return False
 
 
+class StructureResolution(BaseModel):
+    """Machine-readable state for resolving a calculation structure prerequisite."""
+
+    status: Literal[
+        "existing",
+        "search_required",
+        "selection_required",
+        "selected",
+        "imported",
+        "unavailable",
+    ]
+    query: Optional[Dict[str, Any]] = None
+    candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    selected: Optional[Dict[str, Any]] = None
+    import_receipt: Optional[Dict[str, Any]] = None
+
+
 class ARISResponse(BaseModel):
     answer: str = Field(description="Natural language summary of the result.")
     thought_process: List[str] = Field(description="Step-by-step logic summary.")
@@ -23,6 +40,13 @@ class ARISResponse(BaseModel):
     submission_request: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Optional machine-readable submission request for protocol-driven preview preparation.",
+    )
+    structure_resolution: Optional[StructureResolution] = Field(
+        default=None,
+        description=(
+            "Explicit state of structure discovery, selection, and import when a "
+            "calculation requires a structure prerequisite."
+        ),
     )
     data_payload: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -56,4 +80,4 @@ class ARISResponse(BaseModel):
                 )
         return self
 
-__all__ = ["ARISResponse"]
+__all__ = ["ARISResponse", "StructureResolution"]

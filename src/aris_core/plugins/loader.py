@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+    from src.aris_core.capabilities import CapabilityRegistry
+
 
 @dataclass(frozen=True)
 class StaticMount:
@@ -20,17 +22,17 @@ class StaticMount:
 class AppManifest(Protocol):
     name: str
     api_prefix: str
-    agent_module: str
-    deps_module: str
     static_mounts: tuple[StaticMount, ...]
 
     def include_routes(self, app: FastAPI) -> None: ...
+
+    def register_capabilities(self, registry: CapabilityRegistry) -> None: ...
 
     def register_runtime(self, active_hubs: list[object]) -> None: ...
 
 
 def _parse_enabled_app_names(raw_names: str | None = None) -> tuple[str, ...]:
-    raw = raw_names or os.getenv("ARIS_ENABLED_APPS") or "aiida"
+    raw = raw_names or os.getenv("ARIS_ENABLED_APPS") or "aiida,materials"
     names = tuple(dict.fromkeys(name.strip() for name in raw.split(",") if name.strip()))
     return names or ("aiida",)
 

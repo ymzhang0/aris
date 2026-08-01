@@ -19,6 +19,7 @@ setup_logging(default_level="INFO")
 logger.info(log_event("logging.ready"))
 
 from src.aris_core.config import settings
+from src.aris_core.capabilities import capability_registry
 from src.aris_core.config.runtime import (
     bootstrap_home_config,
     collect_reload_excludes,
@@ -246,10 +247,13 @@ def mount_enabled_apps(app: FastAPI) -> None:
     for manifest in APP_MANIFESTS:
         try:
             manifest.include_routes(app)
+            register_capabilities = getattr(manifest, "register_capabilities", None)
+            if callable(register_capabilities):
+                register_capabilities(capability_registry)
             manifest.register_runtime(ACTIVE_HUBS)
-            logger.info(log_event("engine.registry.registered", engine=manifest.name))
+            logger.info(log_event("app.registry.registered", app=manifest.name))
         except Exception as exc:  # noqa: BLE001
-            logger.exception(log_event("engine.registry.failed", engine=manifest.name, error=str(exc)))
+            logger.exception(log_event("app.registry.failed", app=manifest.name, error=str(exc)))
 
 
 mount_enabled_apps(app)

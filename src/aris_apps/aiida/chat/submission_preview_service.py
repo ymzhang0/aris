@@ -154,6 +154,13 @@ class SubmissionPreviewService:
         combined: dict[str, Any] = {}
         forced_batch_block = False
         output_payload = getattr(output, "data_payload", None)
+        structure_resolution = getattr(output, "structure_resolution", None)
+        if structure_resolution is not None:
+            model_dump = getattr(structure_resolution, "model_dump", None)
+            if callable(model_dump):
+                structure_resolution = model_dump(mode="json")
+            if isinstance(structure_resolution, dict) and structure_resolution:
+                combined["structure_resolution"] = structure_resolution
         if isinstance(output_payload, dict):
             combined["data_payload"] = output_payload
         if tool_calls:

@@ -214,3 +214,39 @@ async def test_managed_aiida_capability_delegates_to_worker_client() -> None:
         "json": {"workchain": "pw.base"},
         "retries": 0,
     }
+
+
+@pytest.mark.anyio
+async def test_managed_aiida_capability_imports_normalized_structure_over_stdio_rpc() -> None:
+    class FakeClient:
+        async def call(self, method, params=None, **kwargs):
+            return {"method": method, "params": params, **kwargs}
+
+    capability = ManagedAiiDACapability(FakeClient())  # type: ignore[arg-type]
+    artifact = {
+        "formula": "Si",
+        "lattice_vectors": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        "periodic_boundary_conditions": [True, True, True],
+        "sites": [
+            {
+                "position": [0, 0, 0],
+                "species": [{"symbol": "Si", "concentration": 1.0}],
+                "name": "Si",
+            }
+        ],
+        "source": {
+            "provider": "materials_project",
+            "database": "mp",
+            "entry_id": "mp-149",
+            "url": "https://example.test/mp-149",
+            "retrieved_at": "2026-08-01T00:00:00Z",
+        },
+    }
+
+    result = await capability.import_structure(artifact, label="Silicon")
+
+    assert result["method"] == "structure.import"
+    assert result["params"]["artifact"] == artifact
+    assert result["params"]["label"] == "Silicon"
+    assert result["params"]["deduplicate"] is True
+    assert result["timeout"] == 30.0

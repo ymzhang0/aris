@@ -301,6 +301,28 @@ def test_build_chat_message_payload_includes_structured_task_mode() -> None:
     assert payload["task_mode"] == "batch"
 
 
+def test_build_chat_message_payload_includes_structure_resolution() -> None:
+    output = SimpleNamespace(
+        task_mode="none",
+        data_payload=None,
+        research_plan=None,
+        structure_resolution=SimpleNamespace(
+            model_dump=lambda mode: {
+                "status": "selection_required",
+                "query": {"formula": "Si"},
+                "candidates": [],
+            }
+        ),
+    )
+
+    payload = chat_service._submission_preview_service.build_message_payload(
+        output,
+        task_mode="none",
+    )
+
+    assert payload["structure_resolution"]["status"] == "selection_required"
+
+
 def test_summarize_chat_session_batch_progress_counts_terminal_and_active_jobs() -> None:
     summary = chat_service._summarize_chat_session_batch_progress(
         session_id="session-1",

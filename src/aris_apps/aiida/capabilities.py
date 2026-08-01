@@ -46,6 +46,15 @@ class AiiDACapability(Protocol):
 
     async def list_submission_plugins(self) -> dict[str, Any]: ...
 
+    async def import_structure(
+        self,
+        artifact: dict[str, Any],
+        *,
+        label: str | None = None,
+        description: str | None = None,
+        deduplicate: bool = True,
+    ) -> dict[str, Any]: ...
+
     async def get_submission_spec(
         self,
         workchain: str,
@@ -146,6 +155,26 @@ class ManagedAiiDACapability:
         if isinstance(payload, list):
             return {"plugins": [str(item) for item in payload if str(item).strip()]}
         return {"plugins": []}
+
+    async def import_structure(
+        self,
+        artifact: dict[str, Any],
+        *,
+        label: str | None = None,
+        description: str | None = None,
+        deduplicate: bool = True,
+    ) -> dict[str, Any]:
+        payload = await self._client.call(
+            "structure.import",
+            {
+                "artifact": dict(artifact),
+                "label": str(label).strip() if label else None,
+                "description": str(description).strip() if description else None,
+                "deduplicate": bool(deduplicate),
+            },
+            timeout=30.0,
+        )
+        return payload if isinstance(payload, dict) else {}
 
     async def get_submission_spec(
         self,

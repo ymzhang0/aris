@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 aris-aiida-mcp = "src.aris_apps.aiida.mcp_server:main"
+aris-materials-mcp = "src.aris_apps.materials.mcp_server:main"
 
 [project.optional-dependencies]
 dev = [

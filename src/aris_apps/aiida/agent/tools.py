@@ -21,6 +21,13 @@ from src.aris_apps.aiida.client import (
     aiida_worker_client,
     format_bridge_error,
 )
+from src.aris_apps.aiida.capabilities import aiida_capability
+from src.aris_apps.materials.capability import materials_capability
+from src.aris_apps.materials.schemas import (
+    StructureImportRequest,
+    StructureLookupRequest,
+    StructureSearchRequest,
+)
 from src.aris_core.logging import log_event
 
 _SCRIPT_ARCHIVE_DIR = Path(__file__).resolve().parent.parent / "data" / "scripts"
@@ -36,6 +43,45 @@ _MODULE_NOT_FOUND_PATTERN = re.compile(
 
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def list_materials_providers() -> dict[str, Any]:
+    providers = await materials_capability.list_providers()
+    return {"providers": [item.model_dump(mode="json") for item in providers]}
+
+
+async def search_material_structures(
+    request: StructureSearchRequest,
+) -> dict[str, Any]:
+    result = await materials_capability.search(request)
+    return result.model_dump(mode="json")
+
+
+async def prepare_material_structure(
+    request: StructureLookupRequest,
+) -> dict[str, Any]:
+    artifact = await materials_capability.get_structure(
+        request.provider,
+        request.database,
+        request.entry_id,
+    )
+    return artifact.model_dump(mode="json")
+
+
+async def import_material_structure(
+    request: StructureImportRequest,
+) -> dict[str, Any]:
+    artifact = await materials_capability.get_structure(
+        request.provider,
+        request.database,
+        request.entry_id,
+    )
+    return await aiida_capability.import_structure(
+        artifact.model_dump(mode="json"),
+        label=request.label,
+        description=request.description,
+        deduplicate=request.deduplicate,
+    )
 
 
 def _coerce_positive_int(value: Any) -> int | None:
@@ -933,6 +979,10 @@ async def get_node_summary(node_pk: int) -> dict[str, Any] | str:
 
 
 __all__ = [
+    "list_materials_providers",
+    "search_material_structures",
+    "prepare_material_structure",
+    "import_material_structure",
     "list_system_profiles",
     "list_local_archives",
     "switch_profile",

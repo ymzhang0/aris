@@ -30,12 +30,33 @@ PREVIEW_NARRATIVE_RULE = (
     "'Batch job preview'. For batch previews, also summarize the shared inputs and the varying dimensions or matrix "
     "axes in plain language."
 )
+STRUCTURE_RESOLUTION_RULE = (
+    "When structure discovery is part of the turn, set the structured 'structure_resolution' field with status "
+    "existing|search_required|selection_required|selected|imported|unavailable, plus the explicit query, candidates, "
+    "selected source reference, and import receipt when available. Do not make the frontend infer this state from text."
+)
 
 REFERENCED_NODES_HEADER = "### REFERENCED AiiDA NODES"
 REFERENCED_NODES_INTRO = "Treat these user-selected nodes as first-class context for this turn:"
 REFERENCED_NODES_OMITTED_TEMPLATE = "- ... {omitted_count} more referenced nodes omitted."
 
 _BASE_OPERATIONAL_RULES: tuple[str, ...] = (
+    STRUCTURE_RESOLUTION_RULE,
+    (
+        "Structure acquisition protocol: when a calculation requires a structure, inspect compatible structures in "
+        "the active AiiDA profile first. If none is suitable, call search_remote_structures with explicit provider, "
+        "formula, element, stability, and database fields rather than inferring a source from scientific keywords."
+    ),
+    (
+        "Remote structure selection: do not silently choose between materially different polymorphs. If multiple "
+        "plausible candidates remain, present their provider, entry ID, formula, dimensionality, and stability and "
+        "wait for the user to select one. A uniquely matching candidate may be imported as a normal prerequisite."
+    ),
+    (
+        "Remote structure import creates only an AiiDA StructureData node. Preserve its provider provenance and use "
+        "the returned structure PK in the structured submission request; calculation execution still requires the "
+        "normal submission preview and explicit confirmation."
+    ),
     "ENVIRONMENT SYNC: The aiida-worker bridge is the source of truth for profile, resources, and workflow metadata.",
     "CYCLIC RETRY: If a calculation fails, use 'inspect_process' to read logs, diagnose, and retry with new parameters.",
     "SUGGESTIONS: Always provide 2-3 'Smart Chips' (suggestions) under 5 words in your response.",
@@ -246,6 +267,7 @@ __all__ = [
     "SUBMISSION_PREVIEW_NEXT_STEP_GUIDANCE",
     "TASK_MODE_RULE",
     "SUBMISSION_REQUEST_RULE",
+    "STRUCTURE_RESOLUTION_RULE",
     "REFERENCED_NODES_HEADER",
     "REFERENCED_NODES_INTRO",
     "REFERENCED_NODES_OMITTED_TEMPLATE",
