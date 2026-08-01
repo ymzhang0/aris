@@ -1,6 +1,6 @@
 import { aiidaClient } from "@/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, ChevronDown, Code2, Copy, Cpu, Paperclip, Pin, PlugZap, PlusSquare, RefreshCw, RotateCcw, SendHorizontal, Square, X } from "lucide-react";
+import { Bot, ChevronDown, Code2, Copy, Cpu, Paperclip, Pin, PlugZap, PlusSquare, RotateCcw, SendHorizontal, Square, X } from "lucide-react";
 import { type DragEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 
@@ -13,6 +13,8 @@ import {
   resolveSubmitDraftFromPreviewPayload,
 } from "@/components/dashboard/submission-modal";
 import { ThinkingIndicator, type ProcessLogEntry } from "@/components/dashboard/thinking-indicator";
+import { ScientificPlan } from "@/components/dashboard/scientific-plan";
+import { RunReview } from "@/components/dashboard/run-review";
 import { Button } from "@/components/ui/button";
 import { CommandPaletteSelect } from "@/components/ui/command-palette-select";
 import { Panel } from "@/components/ui/panel";
@@ -22,8 +24,9 @@ import {
   type SubmissionApprovalRequest,
 } from "@/api";
 import { extractAssistantScriptArtifact, normalizeAssistantScriptCodeFences } from "@/lib/FileManager";
-import { useEnvironmentActions, useEnvironmentStore } from "@/store/EnvironmentStore";
+import { useEnvironmentStore } from "@/store/EnvironmentStore";
 import { cn } from "@/lib/utils";
+import { deriveResearchPlanFromDraft, extractResearchPlan } from "@/lib/research-plan";
 import type {
   ActiveSpecializationsResponse,
   ChatProject,
@@ -1287,7 +1290,6 @@ type ChatPanelProps = {
   models: string[];
   selectedModel: string;
   composerResetVersion: number;
-  currentProjectName: string | null;
   currentSessionName: string | null;
   contextNodes: FocusNode[];
   pinnedNodes: FocusNode[];
@@ -1502,19 +1504,6 @@ function buildEnvironmentOptions(payload: ActiveSpecializationsResponse | undefi
   });
 }
 
-function formatEnvironmentModeLabel(useWorkerDefault: boolean): string {
-  return useWorkerDefault ? "Managed Compute Environment" : "Custom Project Runtime";
-}
-
-function basenamePath(value: string | null | undefined): string | null {
-  const cleaned = String(value || "").trim();
-  if (!cleaned) {
-    return null;
-  }
-  const segments = cleaned.split(/[\\/]+/).filter(Boolean);
-  return segments.length > 0 ? segments[segments.length - 1] : cleaned;
-}
-
 function normalizeOptionalText(value: string | null | undefined): string | null {
   const cleaned = String(value || "").trim();
   return cleaned || null;
@@ -1526,7 +1515,6 @@ export function ChatPanel({
   models,
   selectedModel,
   composerResetVersion,
-  currentProjectName,
   currentSessionName,
   contextNodes,
   pinnedNodes,
@@ -1558,16 +1546,9 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const queryClient = useQueryClient();
   const environmentState = useEnvironmentStore((state) => state);
-  const {
-    setUseWorkerDefault,
-    setPythonPath,
-    resetPythonPath,
-    refreshInspection,
-  } = useEnvironmentActions();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
-  const environmentMenuRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollRafRef = useRef<number | null>(null);
@@ -1580,7 +1561,6 @@ export function ChatPanel({
   const [slashSelectionIndex, setSlashSelectionIndex] = useState(0);
   const [previewStateByTurn, setPreviewStateByTurn] = useState<Record<number, SubmissionModalState>>({});
   const [submittedPreviewByTurn, setSubmittedPreviewByTurn] = useState<Record<number, SubmittedPreviewSummary>>({});
-  const [expandedSubmissionByTurn, setExpandedSubmissionByTurn] = useState<Record<number, boolean>>({});
   const [currentStep, setCurrentStep] = useState("");
   const [currentStepTurnId, setCurrentStepTurnId] = useState<number | null>(null);
   const [processLogByTurn, setProcessLogByTurn] = useState<Record<number, ProcessLogEntry[]>>({});
@@ -1590,10 +1570,8 @@ export function ChatPanel({
   const [stableSubmissionDraftByTurn, setStableSubmissionDraftByTurn] = useState<
     Record<number, SubmissionDraftPreview>
   >({});
+  const [activeReviewTurnId, setActiveReviewTurnId] = useState<number | null>(null);
   const [autoSavedScriptByTurn, setAutoSavedScriptByTurn] = useState<Record<number, AutoSavedScriptState>>({});
-  const [isEnvironmentMenuOpen, setIsEnvironmentMenuOpen] = useState(false);
-  const [isAdvancedEnvironmentOpen, setIsAdvancedEnvironmentOpen] = useState(false);
-  const [pythonPathDraft, setPythonPathDraft] = useState(environmentState.pythonPath ?? "");
   const [nodeHoverMetadataByPk, setNodeHoverMetadataByPk] = useState<Record<number, NodeHoverMetadataState>>({});
   const nodeHoverMetadataRef = useRef<Record<number, NodeHoverMetadataState>>({});
   const previewStateByTurnRef = useRef<Record<number, SubmissionModalState>>({});
@@ -1614,8 +1592,21 @@ export function ChatPanel({
       latestTurn.assistantStatus ?? "",
     ].join("|");
   }, [turns]);
-  const resolvedProjectName = currentProjectName?.trim() || "Unassigned Project";
   const resolvedSessionName = currentSessionName?.trim() || "New Conversation";
+  const pinnedResearchPlan = useMemo(() => {
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const explicitPlan = extractResearchPlan(turns[index].assistantPayload);
+      if (explicitPlan) return explicitPlan;
+      const preview = resolveTurnSubmissionDraft(turns[index]) ?? stableSubmissionDraftByTurn[turns[index].turnId];
+      if (preview) return deriveResearchPlanFromDraft(preview.submissionDraft);
+    }
+    return null;
+  }, [stableSubmissionDraftByTurn, turns]);
+  const activeReviewPreview = useMemo(() => {
+    if (activeReviewTurnId === null) return null;
+    const turn = turns.find((item) => item.turnId === activeReviewTurnId);
+    return turn ? resolveTurnSubmissionDraft(turn) ?? stableSubmissionDraftByTurn[activeReviewTurnId] ?? null : null;
+  }, [activeReviewTurnId, stableSubmissionDraftByTurn, turns]);
   const isNearBottom = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) {
@@ -1649,29 +1640,6 @@ export function ChatPanel({
     autoSavedScriptByTurnRef.current = autoSavedScriptByTurn;
   }, [autoSavedScriptByTurn]);
 
-  useEffect(() => {
-    setPythonPathDraft(environmentState.pythonPath ?? "");
-  }, [environmentState.pythonPath]);
-
-  useEffect(() => {
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!environmentMenuRef.current?.contains(event.target as Node)) {
-        setIsEnvironmentMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsEnvironmentMenuOpen(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, []);
 
   const activeResourcePlugins = useMemo(() => {
     const values = new Set<string>();
@@ -1731,34 +1699,6 @@ export function ChatPanel({
   const resolvedEnvironmentLabel =
     environmentOptions.find((item) => item.name === resolvedEnvironmentName)?.label ?? "Generic";
   const selectedEnvironmentName = sessionEnvironment ?? resolvedEnvironmentName;
-  const environmentModeLabel = formatEnvironmentModeLabel(environmentState.useWorkerDefault);
-  const environmentInspection = environmentState.inspection;
-  const environmentStatusTone = environmentState.inspectionStatus === "ready"
-    ? "border-emerald-200/80 bg-emerald-50/60 dark:border-emerald-900/60 dark:bg-emerald-950/20"
-    : environmentState.inspectionStatus === "error"
-      ? "border-rose-200/80 bg-rose-50/60 dark:border-rose-900/60 dark:bg-rose-950/20"
-      : "border-zinc-200/80 bg-zinc-50/70 dark:border-zinc-800 dark:bg-zinc-900/60";
-  const environmentStatusDotTone = environmentState.inspectionStatus === "ready"
-    ? "bg-emerald-500"
-    : environmentState.inspectionStatus === "error"
-      ? "bg-rose-500"
-      : "bg-amber-500";
-  const activeInterpreterPath = normalizeOptionalText(
-    environmentState.useWorkerDefault
-      ? (environmentInspection?.python_interpreter_path || environmentInspection?.python_path)
-      : (environmentInspection?.python_interpreter_path || environmentState.pythonPath),
-  );
-  const projectInterpreterPath = normalizeOptionalText(environmentState.pythonPath);
-  const inactiveProjectInterpreterPath = environmentState.useWorkerDefault
-    && projectInterpreterPath
-    && projectInterpreterPath !== activeInterpreterPath
-    ? projectInterpreterPath
-    : null;
-  const environmentInterpreterLabel = basenamePath(activeInterpreterPath) || "No interpreter";
-  const environmentHeaderCaption = environmentState.useWorkerDefault
-    ? "Managed by ARIS"
-    : "Custom runtime";
-  const environmentInventorySummary = `${environmentState.availablePlugins.length} plugins`;
   const slashQuery = useMemo(() => {
     const trimmed = draft.trimStart();
     if (!trimmed.startsWith("/")) {
@@ -1890,19 +1830,6 @@ export function ChatPanel({
       }
       return changed ? next : current;
     });
-    setExpandedSubmissionByTurn((current) => {
-      const next: Record<number, boolean> = {};
-      let changed = false;
-      Object.entries(current).forEach(([turnKey, expanded]) => {
-        const turnId = Number.parseInt(turnKey, 10);
-        if (turnIds.has(turnId)) {
-          next[turnId] = expanded;
-          return;
-        }
-        changed = true;
-      });
-      return changed ? next : current;
-    });
     setAutoSavedScriptByTurn((current) => {
       const next: Record<number, AutoSavedScriptState> = {};
       let changed = false;
@@ -1917,23 +1844,6 @@ export function ChatPanel({
       return changed ? next : current;
     });
   }, [turns]);
-
-  useEffect(() => {
-    setExpandedSubmissionByTurn((current) => {
-      const next = { ...current };
-      let changed = false;
-      turns.forEach((turn) => {
-        const hasSubmissionPayload = Boolean(extractSubmissionDraft(turn.assistantPayload));
-        const hasSubmissionSignal = hasSubmissionPayload || Boolean(stableSubmissionDraftByTurn[turn.turnId]);
-        if (!hasSubmissionSignal || Object.prototype.hasOwnProperty.call(next, turn.turnId)) {
-          return;
-        }
-        next[turn.turnId] = true;
-        changed = true;
-      });
-      return changed ? next : current;
-    });
-  }, [stableSubmissionDraftByTurn, turnTextBufferByTurn, turns]);
 
   useEffect(() => {
     const next: Record<number, ProcessLogEntry[]> = {};
@@ -2228,18 +2138,16 @@ export function ChatPanel({
         ...previewStateByTurnRef.current,
         [turnId]: submittingState,
       };
-      setExpandedSubmissionByTurn((current) => ({
-        ...current,
-        [turnId]: false,
-      }));
       setPreviewStateByTurn((current) => ({
         ...current,
         [turnId]: submittingState,
       }));
       try {
+        const resolvedDraft = draftPayload ?? preview.submitDraft;
+        const reviewed = await aiidaClient.reviewPreviewDraft(resolvedDraft);
         const response = await aiidaClient.submitPreviewDraft(
-          draftPayload ?? preview.submitDraft,
-          preview.approvalRequest,
+          resolvedDraft,
+          reviewed.approval_request,
         );
         const processPks = extractProcessPks(response);
         const processPk = processPks[0] ?? null;
@@ -2305,10 +2213,6 @@ export function ChatPanel({
       ...previewStateByTurnRef.current,
       [turnId]: cancelledState,
     };
-    setExpandedSubmissionByTurn((current) => ({
-      ...current,
-      [turnId]: false,
-    }));
     setPreviewStateByTurn((current) => ({
       ...current,
       [turnId]: cancelledState,
@@ -2423,10 +2327,6 @@ export function ChatPanel({
     },
     [onSessionEnvironmentAutoChange, onSessionEnvironmentChange],
   );
-  const handleApplyPythonPath = useCallback(() => {
-    setPythonPath(pythonPathDraft);
-  }, [pythonPathDraft, setPythonPath]);
-
   const handleSessionParameterChange = useCallback(
     (index: number, field: "key" | "value", value: string) => {
       const next = [...sessionParameters];
@@ -2463,169 +2363,12 @@ export function ChatPanel({
 
   return (
     <Panel className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-x-hidden p-0">
-      <div className="border-b border-zinc-200/80 bg-white/85 px-4 py-2 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/55 md:px-5">
-        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-700 dark:bg-sky-950/60 dark:text-sky-200">
-              Project
-            </span>
-            <span className="min-w-0 max-w-full truncate text-[13px] font-semibold text-zinc-900 dark:text-zinc-100">
-              {resolvedProjectName}
-            </span>
-            <span className="text-zinc-300 dark:text-zinc-700">/</span>
-            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
-              Session
-            </span>
-            <span className="min-w-0 max-w-full truncate text-[13px] font-semibold text-zinc-900 dark:text-zinc-100">
-              {resolvedSessionName}
-            </span>
-          </div>
-          <div ref={environmentMenuRef} className="relative shrink-0 self-start lg:self-auto">
-            <button
-              type="button"
-              className="inline-flex min-w-[220px] max-w-full items-center gap-2.5 rounded-full border border-zinc-200/80 bg-white px-3 py-1.5 text-left shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:bg-zinc-900"
-              onClick={() => setIsEnvironmentMenuOpen((current) => !current)}
-              aria-haspopup="dialog"
-              aria-expanded={isEnvironmentMenuOpen}
-              title={environmentModeLabel}
-            >
-              <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", environmentStatusDotTone)} />
-              <Cpu className="h-4 w-4 shrink-0 text-zinc-500 dark:text-zinc-400" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] font-semibold text-zinc-900 dark:text-zinc-100">
-                  {environmentInterpreterLabel}
-                </span>
-                <span className="block truncate text-[10px] text-zinc-500 dark:text-zinc-400">
-                  {environmentHeaderCaption}
-                </span>
-              </span>
-              <span className="hidden shrink-0 text-[10px] font-medium text-zinc-500 dark:text-zinc-400 md:inline">{environmentInventorySummary}</span>
-              <ChevronDown className={cn("h-4 w-4 shrink-0 text-zinc-500 transition-transform dark:text-zinc-400", isEnvironmentMenuOpen && "rotate-180")} />
-            </button>
-            {isEnvironmentMenuOpen ? (
-              <div className="absolute right-0 top-full z-30 mt-2 w-[340px] max-w-[calc(100vw-2.5rem)] rounded-2xl border border-zinc-200/85 bg-white p-3 shadow-2xl dark:border-zinc-800 dark:bg-zinc-950">
-                <div className={cn("rounded-xl border px-3 py-3", environmentStatusTone)}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">{environmentModeLabel}</p>
-                      <p className="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
-                        {environmentState.currentProjectPath || "No project path selected"}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200/80 bg-white text-zinc-600 transition-colors hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
-                      onClick={() => {
-                        void refreshInspection();
-                      }}
-                      disabled={environmentState.inspectionStatus === "loading"}
-                      aria-label="Refresh environment inspection"
-                      title="Refresh environment inspection"
-                    >
-                      <RefreshCw className={cn("h-3.5 w-3.5", environmentState.inspectionStatus === "loading" && "animate-spin")} />
-                    </button>
-                  </div>
-                  <div className="mt-3 rounded-lg border border-zinc-200/80 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-950">
-                    <p className="text-[11px] text-zinc-600 dark:text-zinc-300">
-                      {environmentState.useWorkerDefault
-                        ? "ARIS manages Python and AiiDA dependencies for this project."
-                        : "This project is using a custom Python runtime."}
-                    </p>
-                  </div>
-                  <div className="mt-3 space-y-2">
-                    <button
-                      type="button"
-                      className="text-[11px] font-semibold text-zinc-500 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-                      onClick={() => setIsAdvancedEnvironmentOpen((current) => !current)}
-                    >
-                      {isAdvancedEnvironmentOpen ? "Hide advanced runtime settings" : "Advanced runtime settings"}
-                    </button>
-                    {isAdvancedEnvironmentOpen ? (
-                      <div className="space-y-3 border-t border-zinc-200/80 pt-3 dark:border-zinc-800">
-                        <div className="rounded-lg border border-zinc-200/80 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-950">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
-                            Active Python Runtime
-                          </p>
-                          <p className="mt-1 break-all font-mono text-[11px] text-zinc-700 dark:text-zinc-200">
-                            {activeInterpreterPath || "Runtime not resolved yet"}
-                          </p>
-                        </div>
-                        {inactiveProjectInterpreterPath ? (
-                          <div className="rounded-lg border border-zinc-200/80 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-950">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
-                              Project Runtime (Inactive)
-                            </p>
-                            <p className="mt-1 break-all font-mono text-[11px] text-zinc-700 dark:text-zinc-200">
-                              {inactiveProjectInterpreterPath}
-                            </p>
-                          </div>
-                        ) : null}
-                        <label className="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-900"
-                            checked={!environmentState.useWorkerDefault}
-                            onChange={(event) => setUseWorkerDefault(!event.target.checked)}
-                          />
-                          Use a custom Python runtime for this project
-                        </label>
-                    <div className="space-y-2">
-                      <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
-                        Custom Python Path
-                      </label>
-                      <input
-                        value={pythonPathDraft}
-                        onChange={(event) => setPythonPathDraft(event.target.value)}
-                        disabled={environmentState.useWorkerDefault}
-                        placeholder="Auto-detected from .venv"
-                        className="w-full rounded-lg border border-zinc-200/80 bg-white px-3 py-2 text-xs text-zinc-800 outline-none focus:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
-                      />
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={handleApplyPythonPath}
-                          disabled={environmentState.useWorkerDefault}
-                        >
-                          Apply
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={resetPythonPath}
-                          disabled={environmentState.useWorkerDefault}
-                        >
-                          Reset Auto
-                        </Button>
-                      </div>
-                      {environmentState.useWorkerDefault ? (
-                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                          The managed compute environment is active. Enable the custom runtime option to use this path.
-                        </p>
-                      ) : null}
-                    </div>
-                    {environmentInspection?.aiida_core_version ? (
-                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                        aiida-core {environmentInspection.aiida_core_version}
-                        {environmentInspection.profile ? ` · profile ${environmentInspection.profile}` : ""}
-                      </p>
-                    ) : null}
-                    {environmentState.lastError ? (
-                      <p className="text-[11px] text-rose-600 dark:text-rose-300">{environmentState.lastError}</p>
-                    ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </div>
+      <div className="app-drag-region window-toolbar-row flex shrink-0 items-center border-b border-zinc-200/80 bg-white/85 px-5 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/55">
+        <span className="mx-auto min-w-0 truncate px-12 text-[13px] font-semibold text-zinc-900 dark:text-zinc-100">{resolvedSessionName}</span>
       </div>
       <div className="min-h-0 flex flex-1 flex-col xl:flex-row">
         <div className="min-h-0 flex flex-1 flex-col">
+          {pinnedResearchPlan ? <ScientificPlan plan={pinnedResearchPlan} /> : null}
           <div
             ref={messagesContainerRef}
             className="minimal-scrollbar min-h-0 flex-1 space-y-5 overflow-x-hidden overflow-y-auto px-5 pb-6 pt-5 md:px-8"
@@ -2706,7 +2449,6 @@ export function ChatPanel({
                 }));
             const previewState = previewStateByTurn[turn.turnId] ?? { status: "idle" as const };
             const submittedPreview = submittedPreviewByTurn[turn.turnId];
-            const isSubmissionExpanded = expandedSubmissionByTurn[turn.turnId] ?? true;
             const autoSavedScript = autoSavedScriptByTurn[turn.turnId] ?? null;
 
             return (
@@ -2823,28 +2565,15 @@ export function ChatPanel({
                             <p className="mt-2 text-xs text-rose-500">Response ended with error.</p>
                           ) : null}
                           {submissionDraft ? (
-                            <SubmissionModal
-                              open
-                              mode="inline"
-                              expanded={isSubmissionExpanded}
-                              onToggleExpanded={() =>
-                                setExpandedSubmissionByTurn((current) => ({
-                                  ...current,
-                                  [turn.turnId]: !isSubmissionExpanded,
-                                }))
-                              }
-                              turnId={turn.turnId}
-                              submissionDraft={submissionDraft.submissionDraft}
+                            <RunReview
+                              draft={submissionDraft.submissionDraft}
                               state={previewState}
-                              isBusy={isLoading || !canExecuteSubmissions}
-                              onClose={() => { }}
-                              onConfirm={(draftPayload) => {
-                                void handleConfirmPreview(turn.turnId, submissionDraft, draftPayload);
-                              }}
+                              disabled={isLoading || !canExecuteSubmissions}
+                              onReview={() => setActiveReviewTurnId(turn.turnId)}
+                              onRun={() => void handleConfirmPreview(turn.turnId, submissionDraft, submissionDraft.submitDraft)}
                               onCancel={() => {
                                 void handleCancelPreview(turn.turnId);
                               }}
-                              onOpenDetail={onOpenDetail}
                             />
                           ) : null}
                           <div className="pointer-events-none absolute -top-2 right-2 flex items-center gap-1 bg-white/95 px-1.5 py-1 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 dark:bg-zinc-950/95">
@@ -3260,7 +2989,7 @@ export function ChatPanel({
             </div>
           </div>
         </div>
-        <aside className="minimal-scrollbar border-t border-zinc-200/80 bg-zinc-50/55 p-4 xl:w-[320px] xl:overflow-y-auto xl:border-l xl:border-t-0 dark:border-zinc-800 dark:bg-zinc-950/45">
+        <aside className="hidden" aria-hidden="true">
           <div className="space-y-4">
             <div className="rounded-2xl border border-zinc-200/80 bg-white/90 p-3 dark:border-zinc-800 dark:bg-zinc-950/70">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
@@ -3414,6 +3143,21 @@ export function ChatPanel({
           </div>
         </aside>
       </div>
+      <SubmissionModal
+        open={Boolean(activeReviewPreview) && activeReviewTurnId !== null}
+        turnId={activeReviewTurnId}
+        submissionDraft={activeReviewPreview?.submissionDraft ?? null}
+        state={activeReviewTurnId === null ? { status: "idle" } : previewStateByTurn[activeReviewTurnId] ?? { status: "idle" }}
+        isBusy={isLoading || !canExecuteSubmissions}
+        onClose={() => setActiveReviewTurnId(null)}
+        onConfirm={(draftPayload) => {
+          if (activeReviewTurnId !== null && activeReviewPreview) void handleConfirmPreview(activeReviewTurnId, activeReviewPreview, draftPayload);
+        }}
+        onCancel={() => {
+          if (activeReviewTurnId !== null) void handleCancelPreview(activeReviewTurnId);
+        }}
+        onOpenDetail={onOpenDetail}
+      />
     </Panel>
   );
 }

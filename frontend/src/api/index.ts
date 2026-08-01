@@ -154,6 +154,11 @@ export type SubmissionApprovalRequest = {
   summary?: string | null;
 };
 
+export type SubmissionReviewResponse = {
+  validation: Record<string, unknown> | Array<Record<string, unknown>>;
+  approval_request: SubmissionApprovalRequest;
+};
+
 function createApprovalId(): string {
   const localId = `approval-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -451,6 +456,13 @@ export async function createChatProject(payload: {
   root_path?: string;
 }): Promise<ChatProjectMutationResponse> {
   const { data } = await frontendApi.post<ChatProjectMutationResponse>("/chat/projects", payload);
+  return data;
+}
+
+export async function browseChatProjectDirectory(): Promise<{ path: string | null; success: boolean; error?: string }> {
+  const { data } = await frontendApi.post<{ path: string | null; success: boolean; error?: string }>(
+    "/chat/projects/browse-directory",
+  );
   return data;
 }
 
@@ -791,6 +803,12 @@ export const aiidaClient = {
     });
     return data;
   }
+  ,
+
+    async reviewPreviewDraft(draft: SubmissionSubmitDraftPayload): Promise<SubmissionReviewResponse> {
+      const { data } = await aiidaApi.post<SubmissionReviewResponse>("/submission/review", { draft });
+      return data;
+    }
   ,
   
     async importData(
