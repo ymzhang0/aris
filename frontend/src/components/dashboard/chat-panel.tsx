@@ -1,6 +1,6 @@
 import { aiidaClient } from "@/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, ChevronDown, Code2, Copy, Cpu, Paperclip, Pin, PlugZap, PlusSquare, RotateCcw, SendHorizontal, Square, X } from "lucide-react";
+import { ArrowUp, Bot, ChevronDown, Code2, Copy, Cpu, Paperclip, Pin, PlugZap, RotateCcw, SlidersHorizontal, Square, X } from "lucide-react";
 import { type DragEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 
@@ -1549,12 +1549,14 @@ export function ChatPanel({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
+  const capabilityMenuRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollRafRef = useRef<number | null>(null);
   const [draft, setDraft] = useState("");
   const [resourceAttachments, setResourceAttachments] = useState<ResourceAttachment[]>([]);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
+  const [isCapabilityMenuOpen, setIsCapabilityMenuOpen] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(true);
   const [dragOverZone, setDragOverZone] = useState<"textarea" | "attachment" | null>(null);
@@ -1592,7 +1594,6 @@ export function ChatPanel({
       latestTurn.assistantStatus ?? "",
     ].join("|");
   }, [turns]);
-  const resolvedSessionName = currentSessionName?.trim() || "New Conversation";
   const pinnedResearchPlan = useMemo(() => {
     for (let index = turns.length - 1; index >= 0; index -= 1) {
       const explicitPlan = extractResearchPlan(turns[index].assistantPayload);
@@ -1747,11 +1748,11 @@ export function ChatPanel({
 
   useEffect(() => {
     const handleOutside = (event: MouseEvent) => {
-      if (!modelMenuRef.current) {
-        return;
-      }
-      if (!modelMenuRef.current.contains(event.target as Node)) {
+      if (modelMenuRef.current && !modelMenuRef.current.contains(event.target as Node)) {
         setIsModelMenuOpen(false);
+      }
+      if (capabilityMenuRef.current && !capabilityMenuRef.current.contains(event.target as Node)) {
+        setIsCapabilityMenuOpen(false);
       }
     };
 
@@ -2356,6 +2357,8 @@ export function ChatPanel({
     setResourceAttachments([]);
     setDragOverZone(null);
     setSlashSelectionIndex(0);
+    setIsCapabilityMenuOpen(false);
+    setIsModelMenuOpen(false);
     if (textareaRef.current) {
       textareaRef.current.style.height = "56px";
     }
@@ -2363,9 +2366,6 @@ export function ChatPanel({
 
   return (
     <Panel className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-x-hidden p-0">
-      <div className="app-drag-region window-toolbar-row flex shrink-0 items-center border-b border-zinc-200/80 bg-white/85 px-5 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/55">
-        <span className="mx-auto min-w-0 truncate px-12 text-[13px] font-semibold text-zinc-900 dark:text-zinc-100">{resolvedSessionName}</span>
-      </div>
       <div className="min-h-0 flex flex-1 flex-col xl:flex-row">
         <div className="min-h-0 flex flex-1 flex-col">
           {pinnedResearchPlan ? <ScientificPlan plan={pinnedResearchPlan} /> : null}
@@ -2631,15 +2631,9 @@ export function ChatPanel({
             <div ref={messagesEndRef} className="h-2" aria-hidden />
           </div>
 
-          <div className="bg-white/75 px-4 pb-4 pt-3 backdrop-blur dark:bg-zinc-950/35 md:px-6">
-            <div className="pt-2">
-              <div className="rounded-2xl border border-zinc-200/80 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950/70">
-                <ActionToolbar
-                  actions={toolbarActions}
-                  activeSpecializations={activeSpecializations}
-                  isBusy={isLoading}
-                  onTriggerAction={handleToolbarAction}
-                />
+          <div className="bg-gradient-to-t from-white via-white/95 to-transparent px-4 pb-5 pt-5 dark:from-zinc-950 dark:via-zinc-950/95 md:px-6">
+            <div className="mx-auto max-w-4xl">
+              <div className="rounded-[26px] border border-zinc-200/90 bg-white px-3 pb-2.5 pt-3 shadow-[0_8px_30px_rgba(0,0,0,0.08)] dark:border-zinc-700/80 dark:bg-zinc-900 dark:shadow-[0_10px_35px_rgba(0,0,0,0.35)]">
                 <div className="relative">
                   {showSlashMenu ? (
                     <div className="absolute inset-x-0 bottom-full z-20 mb-2 overflow-hidden rounded-2xl border border-zinc-200/85 bg-white/96 shadow-xl backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/96">
@@ -2797,9 +2791,9 @@ export function ChatPanel({
                 <div className="mt-3 flex flex-row items-center justify-between gap-2">
                   <div className="flex flex-row items-center gap-2">
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       size="icon"
-                      className="border-zinc-200/80 bg-transparent transition-colors duration-200 hover:bg-zinc-100/70 dark:border-zinc-800 dark:hover:bg-zinc-900/70"
+                      className="h-9 w-9 rounded-full border-0 bg-transparent text-zinc-600 shadow-none hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
                       onClick={() => fileInputRef.current?.click()}
                       aria-label="Attach file"
                     >
@@ -2818,55 +2812,42 @@ export function ChatPanel({
                         event.target.value = "";
                       }}
                     />
-
-                <div ref={modelMenuRef} className="relative">
-                  <button
-                    type="button"
-                    className="inline-flex h-9 max-w-[220px] items-center gap-2 rounded-lg border border-zinc-200/70 bg-zinc-50/80 px-3 text-sm text-zinc-700 transition-all duration-200 hover:border-zinc-300 hover:bg-zinc-50 focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-200 dark:hover:border-zinc-700 dark:hover:bg-zinc-900/65 dark:focus:border-zinc-600"
-                    onClick={() => setIsModelMenuOpen((open) => !open)}
-                  >
-                    <span className="truncate">{selectedModel || "Select model"}</span>
-                    <ChevronDown
-                      className={cn(
-                        "h-4 w-4 shrink-0 transition-transform duration-200",
-                        isModelMenuOpen && "rotate-180",
-                      )}
-                    />
-                  </button>
-
-                  {isModelMenuOpen ? (
-                    <div className="absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-lg border border-zinc-200/80 bg-zinc-50/95 shadow-lg backdrop-blur dark:border-zinc-800 dark:bg-zinc-900/95">
-                      <div className="minimal-scrollbar max-h-60 overflow-y-auto p-1">
-                        {models.map((model) => (
-                          <button
-                            key={model}
-                            type="button"
-                            className={cn(
-                              "flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm transition-colors duration-200",
-                              model === selectedModel
-                                ? "bg-zinc-200/70 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
-                                : "text-zinc-700 hover:bg-zinc-200/50 dark:text-zinc-300 dark:hover:bg-zinc-800/80",
-                            )}
-                            onClick={() => {
-                              onModelChange(model);
-                              setIsModelMenuOpen(false);
+                    <div ref={capabilityMenuRef} className="relative">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          "h-9 w-9 rounded-full border-0 bg-transparent text-zinc-600 shadow-none hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800",
+                          isCapabilityMenuOpen && "bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-white",
+                        )}
+                        onClick={() => setIsCapabilityMenuOpen((open) => !open)}
+                        aria-label="Open capabilities"
+                        title="Capabilities"
+                      >
+                        <SlidersHorizontal className="h-4 w-4" />
+                      </Button>
+                      {isCapabilityMenuOpen ? (
+                        <div className="absolute bottom-full left-0 z-30 mb-3 w-[min(430px,calc(100vw-3rem))] rounded-2xl border border-zinc-200/90 bg-white p-4 shadow-[0_18px_50px_rgba(0,0,0,0.16)] dark:border-zinc-700 dark:bg-zinc-900 dark:shadow-[0_20px_55px_rgba(0,0,0,0.5)]">
+                          <ActionToolbar
+                            actions={toolbarActions}
+                            activeSpecializations={activeSpecializations}
+                            isBusy={isLoading}
+                            onTriggerAction={(action) => {
+                              handleToolbarAction(action);
+                              setIsCapabilityMenuOpen(false);
                             }}
-                          >
-                            <span className="truncate">{model}</span>
-                          </button>
-                        ))}
-                      </div>
+                          />
+                        </div>
+                      ) : null}
                     </div>
-                  ) : null}
-                </div>
               </div>
 
               <div
                 className={cn(
-                  "minimal-scrollbar flex h-9 flex-1 items-center gap-1 overflow-x-auto rounded-lg border px-2.5 mx-2 transition-colors duration-200",
+                  "minimal-scrollbar mx-1 flex h-9 flex-1 items-center gap-1 overflow-x-auto rounded-xl border border-transparent px-2 transition-colors duration-200",
                   dragOverZone === "attachment"
-                    ? "border-sky-400/80 bg-sky-50/70 border-dashed dark:border-sky-700/80 dark:bg-sky-950/35"
-                    : "border-transparent bg-zinc-50/50 hover:bg-zinc-100/50 dark:border-transparent dark:bg-zinc-900/30 dark:hover:bg-zinc-900/50 border-dashed hover:border-zinc-300/60 dark:hover:border-zinc-700/60",
+                    ? "border-dashed border-sky-400/80 bg-sky-50/70 dark:border-sky-700/80 dark:bg-sky-950/35"
+                    : "bg-transparent",
                 )}
                 onDragOver={(event) => {
                   event.preventDefault();
@@ -2948,13 +2929,56 @@ export function ChatPanel({
                     ))}
                   </>
                 ) : (
-                  <p className="truncate text-[11px] font-medium text-zinc-400/80 dark:text-zinc-500/80 mx-1">
-                    Drop node/resource here to attach context
-                  </p>
+                  dragOverZone === "attachment" ? (
+                    <p className="mx-1 truncate text-[11px] font-medium text-sky-600 dark:text-sky-300">
+                      Drop to attach context
+                    </p>
+                  ) : null
                 )}
               </div>
 
                   <div className="flex items-center gap-2">
+                    <div ref={modelMenuRef} className="relative">
+                      <button
+                        type="button"
+                        className="inline-flex h-9 max-w-[220px] items-center gap-1.5 rounded-full border-0 bg-transparent px-2.5 text-sm text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-950 focus:outline-none dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white"
+                        onClick={() => setIsModelMenuOpen((open) => !open)}
+                        aria-label="Select model"
+                      >
+                        <span className="truncate">{selectedModel || "Select model"}</span>
+                        <ChevronDown
+                          className={cn(
+                            "h-3.5 w-3.5 shrink-0 transition-transform duration-200",
+                            isModelMenuOpen && "rotate-180",
+                          )}
+                        />
+                      </button>
+
+                      {isModelMenuOpen ? (
+                        <div className="absolute bottom-full right-0 z-30 mb-3 w-64 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.16)] dark:border-zinc-700 dark:bg-zinc-900 dark:shadow-[0_20px_55px_rgba(0,0,0,0.5)]">
+                          <div className="minimal-scrollbar max-h-60 overflow-y-auto">
+                            {models.map((model) => (
+                              <button
+                                key={model}
+                                type="button"
+                                className={cn(
+                                  "flex w-full items-center rounded-xl px-3 py-2 text-left text-sm transition-colors duration-150",
+                                  model === selectedModel
+                                    ? "bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-white"
+                                    : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800/80",
+                                )}
+                                onClick={() => {
+                                  onModelChange(model);
+                                  setIsModelMenuOpen(false);
+                                }}
+                              >
+                                <span className="truncate">{model}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                     <Button
                       size="icon"
                       onClick={() => {
@@ -2966,22 +2990,13 @@ export function ChatPanel({
                       }}
                       disabled={!isLoading && isDraftEmpty}
                       className={cn(
-                        "transition-all duration-200",
+                        "h-9 w-9 rounded-full bg-zinc-900 text-white shadow-none transition-colors hover:bg-zinc-700 disabled:bg-zinc-200 disabled:text-zinc-400 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-500",
                         isLoading &&
                         "bg-rose-600 text-white hover:bg-rose-500 dark:bg-rose-500 dark:text-white dark:hover:bg-rose-400",
                       )}
                       aria-label={isLoading ? "Stop response" : "Send message"}
                     >
-                      {isLoading ? <Square className="h-4 w-4" /> : <SendHorizontal className="h-4 w-4" />}
-                    </Button>
-                    <Button
-                      size="icon"
-                      onClick={onNewConversation}
-                      className="transition-all duration-200"
-                      aria-label="New Conversation"
-                      title="New Conversation"
-                    >
-                      <PlusSquare className="h-4 w-4" />
+                      {isLoading ? <Square className="h-3.5 w-3.5 fill-current" /> : <ArrowUp className="h-5 w-5" />}
                     </Button>
                   </div>
                 </div>

@@ -35,17 +35,17 @@ export function ActionToolbar({
     .map((item) => item.label);
 
   return (
-    <div className="mb-2 border-b border-zinc-200/70 pb-2 dark:border-zinc-800/80">
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
-          Capability Chips
+    <div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-sm font-medium text-zinc-800 dark:text-zinc-100">
+          Capabilities
         </p>
         <p className="text-[10px] text-zinc-400 dark:text-zinc-500">
           {activePluginLabels.length > 0 ? `Active: ${activePluginLabels.join(", ")}` : "General actions"}
         </p>
       </div>
-      <div className="minimal-scrollbar -mx-1 overflow-x-auto px-1">
-        <div className="flex w-max min-w-full gap-2 pb-0.5">
+      <div className="minimal-scrollbar max-h-64 overflow-y-auto">
+        <div className="flex flex-wrap gap-2">
           {actions.map((action) => {
             const disabled = isBusy || !action.enabled;
             return (
