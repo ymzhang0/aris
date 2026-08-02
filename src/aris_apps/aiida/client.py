@@ -45,6 +45,10 @@ class WorkerRPCError(Exception):
     payload: Any
 
     def __str__(self) -> str:
+        reason = self.payload.get("reason") if isinstance(self.payload, Mapping) else None
+        detail = str(reason or "").strip()
+        if detail and detail != self.message:
+            return f"RPC Error {self.status_code}: {self.message} ({detail})"
         return f"RPC Error {self.status_code}: {self.message}"
 
 class WorkerProtocolError(Exception):
@@ -225,15 +229,17 @@ class AiiDAWorkerClient:
         if manager is None:
             raise WorkerOfflineError()
             
-        req_params: dict[str, Any] = {}
-        if params:
-            req_params.update(dict(params))
-        for field_name, value in (_merge_worker_context(context) or {}).items():
-            req_params.setdefault(field_name, value)
+        req_params = dict(params or {})
+        request_context = _merge_worker_context(context)
             
         _emit_worker_call_event(method, "")
         try:
-            result = await manager.request(method, req_params, timeout=timeout or self._request_timeout_seconds)
+            result = await manager.request(
+                method,
+                req_params,
+                context=request_context,
+                timeout=timeout or self._request_timeout_seconds,
+            )
         except WorkerProcessError as exc:
             raise self._worker_error_from_worker(exc) from exc
             

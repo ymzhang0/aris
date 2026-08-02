@@ -21,6 +21,14 @@ for line in sys.stdin:
         result = {"status": "online", "pid": os.getpid(), "transport": "stdio-jsonrpc"}
     elif method == "echo":
         result = request.get("params", {})
+    elif method == "invalid":
+        response = {
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "error": {"code": -32602, "message": "Invalid params", "data": {"reason": "bad input"}},
+        }
+        print(json.dumps(response), flush=True)
+        continue
     elif method == "exit":
         raise SystemExit(7)
     else:
@@ -92,5 +100,22 @@ def test_worker_process_manager_restarts_after_worker_crash() -> None:
         assert first["pid"] != second["pid"]
         assert manager.snapshot().restart_count == 1
         await manager.stop()
+
+    asyncio.run(run())
+
+
+def test_worker_process_manager_maps_json_rpc_invalid_params_to_422() -> None:
+    async def run() -> None:
+        manager = WorkerProcessManager([sys.executable, "-u", "-c", FAKE_WORKER])
+
+        try:
+            await manager.request("invalid")
+        except WorkerProcessError as exc:
+            assert exc.status_code == 422
+            assert exc.payload["reason"] == "bad input"
+        else:
+            raise AssertionError("Expected invalid params to fail")
+        finally:
+            await manager.stop()
 
     asyncio.run(run())

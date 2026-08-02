@@ -93,6 +93,7 @@ class WorkerProcessManager:
         method: str,
         params: Mapping[str, Any] | None = None,
         *,
+        context: Mapping[str, Any] | None = None,
         timeout: float | None = None,
     ) -> dict[str, Any]:
         cleaned_method = str(method or "").strip()
@@ -103,6 +104,7 @@ class WorkerProcessManager:
             return await self._exchange_locked(
                 cleaned_method,
                 dict(params or {}),
+                context=dict(context or {}),
                 timeout=timeout,
             )
 
@@ -159,6 +161,7 @@ class WorkerProcessManager:
         method: str,
         params: dict[str, Any],
         *,
+        context: dict[str, Any] | None = None,
         timeout: float | None = None,
     ) -> dict[str, Any]:
         process = self._process
@@ -172,6 +175,8 @@ class WorkerProcessManager:
             "method": method,
             "params": params,
         }
+        if context:
+            request["context"] = context
         try:
             process.stdin.write((json.dumps(request, ensure_ascii=True) + "\n").encode("utf-8"))
             await process.stdin.drain()
@@ -205,9 +210,11 @@ class WorkerProcessManager:
         error = response.get("error")
         if isinstance(error, dict):
             message = str(error.get("message") or "Worker request failed")
+            error_code = error.get("code")
             data = error.get("data")
             payload = dict(data) if isinstance(data, dict) else {"reason": data}
-            status_code = payload.get("status_code", 500)
+            default_status = 422 if error_code == -32602 else 500
+            status_code = payload.get("status_code", default_status)
             try:
                 normalized_status = int(status_code)
             except (TypeError, ValueError):

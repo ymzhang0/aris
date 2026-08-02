@@ -19,10 +19,10 @@ from src.aris_core.runtime import WorkerProcessError
 class _ManagedWorker:
     def __init__(self, result: dict[str, object] | None = None) -> None:
         self.result = result or {"status": "ok"}
-        self.calls: list[tuple[str, dict[str, object], float | None]] = []
+        self.calls: list[tuple[str, dict[str, object], dict[str, object], float | None]] = []
 
-    async def request(self, method: str, params=None, *, timeout=None):
-        self.calls.append((method, dict(params or {}), timeout))
+    async def request(self, method: str, params=None, *, context=None, timeout=None):
+        self.calls.append((method, dict(params or {}), dict(context or {}), timeout))
         return dict(self.result)
 
 
@@ -68,6 +68,8 @@ async def test_worker_call_uses_only_managed_worker(monkeypatch: pytest.MonkeyPa
             "node.recent",
             {
                 "limit": 8,
+            },
+            {
                 "session_id": "session-1",
                 "project_id": "project-1",
                 "workspace_path": "/tmp/project",
@@ -96,6 +98,19 @@ async def test_worker_domain_error_preserves_status_and_payload(monkeypatch: pyt
 
     assert error.value.status_code == 404
     assert error.value.payload["kind"] == "not_found"
+
+
+def test_worker_rpc_error_surfaces_invalid_parameter_reason() -> None:
+    error = WorkerRPCError(
+        422,
+        "Invalid params",
+        {"reason": "session_id: extra inputs are not permitted"},
+    )
+
+    assert str(error) == (
+        "RPC Error 422: Invalid params "
+        "(session_id: extra inputs are not permitted)"
+    )
 
 
 @pytest.mark.anyio
