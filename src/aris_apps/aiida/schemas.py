@@ -39,10 +39,13 @@ class FrontendChatSessionTitleUpdateRequest(BaseModel):
 class FrontendChatProjectCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
     root_path: str | None = None
+    python_interpreter_path: str | None = None
+    aiida_profile: str | None = None
 
 
 class FrontendChatProjectUpdateRequest(BaseModel):
-    python_env: str | None = None
+    python_interpreter_path: str | None = None
+    aiida_profile: str | None = None
 
 
 class FrontendChatProjectFileWriteRequest(BaseModel):

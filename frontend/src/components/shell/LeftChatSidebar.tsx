@@ -17,7 +17,12 @@ import {
 import { cn } from "@/lib/utils";
 import type { ChatProject, ChatSessionSummary } from "@/types/aiida";
 
-type ProjectDraft = { name: string; rootPath: string };
+type ProjectDraft = {
+  name: string;
+  rootPath: string;
+  pythonInterpreterPath?: string;
+  aiidaProfile?: string;
+};
 
 export type LeftChatSidebarProps = {
   projects: ChatProject[];
@@ -40,6 +45,8 @@ export function LeftChatSidebar(props: LeftChatSidebarProps) {
   const [dialogMode, setDialogMode] = useState<"create" | "load" | null>(null);
   const [name, setName] = useState("");
   const [rootPath, setRootPath] = useState("");
+  const [pythonInterpreterPath, setPythonInterpreterPath] = useState("");
+  const [aiidaProfile, setAiidaProfile] = useState("");
   const [query, setQuery] = useState("");
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [isBrowsing, setIsBrowsing] = useState(false);
@@ -64,6 +71,8 @@ export function LeftChatSidebar(props: LeftChatSidebarProps) {
     setDialogMode(mode);
     setName("");
     setRootPath("");
+    setPythonInterpreterPath("");
+    setAiidaProfile("");
   };
 
   const browseForFolder = async (mode: "create" | "load") => {
@@ -90,7 +99,12 @@ export function LeftChatSidebar(props: LeftChatSidebarProps) {
     const cleanPath = rootPath.trim();
     if (!cleanPath) return;
     const fallbackName = cleanPath.split(/[\\/]/).filter(Boolean).at(-1) || "Project";
-    props.onCreateProject({ name: name.trim() || fallbackName, rootPath: cleanPath });
+    props.onCreateProject({
+      name: name.trim() || fallbackName,
+      rootPath: cleanPath,
+      pythonInterpreterPath: pythonInterpreterPath.trim() || undefined,
+      aiidaProfile: aiidaProfile.trim() || undefined,
+    });
     setDialogMode(null);
   };
 
@@ -172,7 +186,12 @@ export function LeftChatSidebar(props: LeftChatSidebarProps) {
             <p className="mt-1 text-sm text-zinc-500">The project stays linked to this local folder.</p>
             {dialogMode === "create" && <label className="mt-5 block text-xs font-medium text-zinc-600 dark:text-zinc-300">Project name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-zinc-300 bg-transparent px-3 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700" placeholder="Silicon EOS" /></label>}
             <label className="mt-4 block text-xs font-medium text-zinc-600 dark:text-zinc-300">Local folder<div className="mt-1.5 flex gap-2"><input autoFocus={dialogMode === "load"} value={rootPath} onChange={(event) => setRootPath(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitProject()} className="h-10 min-w-0 flex-1 rounded-lg border border-zinc-300 bg-transparent px-3 font-mono text-xs outline-none focus:border-zinc-500 dark:border-zinc-700" placeholder="/Users/me/Projects/my-project" /><button type="button" className="rounded-lg border border-zinc-300 px-3 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" disabled={isBrowsing} onClick={() => void browseForFolder(dialogMode)}>Browse</button></div></label>
-            <div className="mt-5 flex justify-end gap-2"><button className="rounded-lg px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800" onClick={() => setDialogMode(null)}>Cancel</button><button className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-white dark:text-zinc-900" disabled={!rootPath.trim()} onClick={submitProject}>{dialogMode === "create" ? "Create" : "Load"}</button></div>
+            {dialogMode === "create" && <>
+              <label className="mt-4 block text-xs font-medium text-zinc-600 dark:text-zinc-300">Project Python<input value={pythonInterpreterPath} onChange={(event) => setPythonInterpreterPath(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-zinc-300 bg-transparent px-3 font-mono text-xs outline-none focus:border-zinc-500 dark:border-zinc-700" placeholder="/path/to/project/.venv/bin/python" /></label>
+              <label className="mt-4 block text-xs font-medium text-zinc-600 dark:text-zinc-300">AiiDA profile <span className="font-normal text-zinc-400">(optional)</span><input value={aiidaProfile} onChange={(event) => setAiidaProfile(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-zinc-300 bg-transparent px-3 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700" placeholder="dev" /></label>
+              <p className="mt-2 text-xs text-zinc-500">ARIS will run this project's worker with exactly this Python and profile.</p>
+            </>}
+            <div className="mt-5 flex justify-end gap-2"><button className="rounded-lg px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800" onClick={() => setDialogMode(null)}>Cancel</button><button className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-white dark:text-zinc-900" disabled={!rootPath.trim() || (dialogMode === "create" && !pythonInterpreterPath.trim())} onClick={submitProject}>{dialogMode === "create" ? "Create" : "Load"}</button></div>
           </div>
         </div>
       )}

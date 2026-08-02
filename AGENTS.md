@@ -27,6 +27,9 @@
 - ARIS must start, monitor, stop, and recover the managed aiida-worker subprocess.
 - All ARIS-to-worker calls must go through the canonical stdio JSON-RPC client. Do not introduce worker HTTP URLs, fake HTTP endpoint paths, or a second worker client.
 - ARIS owns sessions, projects, permissions, submission previews and confirmation, UI state, retry/error recovery, and runtime selection.
+- Select a worker runtime from explicit project metadata: `project_id`, `python_interpreter_path`, and `aiida_profile`. Do not infer a Python environment from a workspace path, virtual-environment directory name, session prose, or tool parameters.
+- Run aiida-worker with the selected project Python. ARIS must not import project packages into its own process, and the worker must not switch to a second Python environment for submission.
+- Treat `(project_id, python_interpreter_path, aiida_profile)` as the worker lifecycle identity. Verify the worker-reported interpreter and profile before serving project requests.
 - Desktop App and browser modes must share the same frontend source and backend API. Do not maintain separate layouts or duplicated feature implementations.
 
 ## Projects and Chat Ownership

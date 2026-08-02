@@ -103,6 +103,8 @@ class ChatSessionApplicationService:
         *,
         name: str,
         root_path: str | None = None,
+        python_interpreter_path: str | None = None,
+        aiida_profile: str | None = None,
         activate: bool = True,
     ) -> dict[str, Any]:
         cleaned_name = self._deps.trim_text(name or "", limit=80)
@@ -126,6 +128,8 @@ class ChatSessionApplicationService:
             "id": project_id,
             "name": cleaned_name,
             "root_path": normalized_root_path,
+            "python_interpreter_path": str(python_interpreter_path or "").strip() or None,
+            "aiida_profile": str(aiida_profile or "").strip() or None,
             "created_at": now,
             "updated_at": now,
         }
@@ -143,7 +147,8 @@ class ChatSessionApplicationService:
         state: Any,
         project_id: str,
         *,
-        python_env: str | None = None,
+        python_interpreter_path: str | None = None,
+        aiida_profile: str | None = None,
         group_uuid: str | None = None,
         group_label: str | None = None,
     ) -> dict[str, Any]:
@@ -152,8 +157,10 @@ class ChatSessionApplicationService:
         if not project:
             raise ValueError("Project not found")
 
-        if python_env is not None:
-            project["python_env"] = python_env if python_env.strip() else None
+        if python_interpreter_path is not None:
+            project["python_interpreter_path"] = python_interpreter_path.strip() or None
+        if aiida_profile is not None:
+            project["aiida_profile"] = aiida_profile.strip() or None
         if group_uuid is not None:
             project["group_uuid"] = group_uuid.strip() or None
         if group_label is not None:

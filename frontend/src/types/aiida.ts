@@ -154,7 +154,8 @@ export type ChatProject = {
   session_count: number;
   active: boolean;
   environment_mode_default?: "worker-default" | "project-auto" | string;
-  python_env?: string | null;
+  python_interpreter_path?: string | null;
+  aiida_profile?: string | null;
 };
 
 export type ChatProjectMutationResponse = {

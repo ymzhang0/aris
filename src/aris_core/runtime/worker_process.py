@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import count
 from pathlib import Path
@@ -35,6 +36,32 @@ class WorkerProcessSnapshot:
     cwd: str | None
     restart_count: int
     last_error: str | None
+
+
+@dataclass(frozen=True)
+class WorkerRuntimeKey:
+    """Identity of one isolated project AiiDA runtime."""
+
+    project_id: str
+    python_interpreter_path: str
+    profile_name: str | None = None
+
+    @classmethod
+    def from_context(cls, context: Mapping[str, Any]) -> "WorkerRuntimeKey":
+        project_id = str(context.get("project_id") or "").strip()
+        python_path = str(context.get("python_interpreter_path") or "").strip()
+        if not project_id:
+            raise WorkerProcessError("Worker project_id is required", status_code=422)
+        if not python_path:
+            raise WorkerProcessError("Project python_interpreter_path is required", status_code=422)
+        interpreter = Path(python_path).expanduser()
+        if not interpreter.is_absolute():
+            interpreter = Path.cwd() / interpreter
+        return cls(
+            project_id=project_id,
+            python_interpreter_path=str(interpreter),
+            profile_name=str(context.get("profile_name") or "").strip() or None,
+        )
 
 
 class WorkerProcessManager:
@@ -268,13 +295,207 @@ class WorkerProcessManager:
         self._stderr_task = None
 
 
-_worker_process_manager: WorkerProcessManager | None = None
+class ProjectWorkerProcessManager:
+    """Own one worker subprocess per explicit project interpreter/profile key."""
+
+    def __init__(
+        self,
+        *,
+        runtime_context_provider: Callable[[], Mapping[str, Any] | None],
+        worker_package_source: str | Path | None = None,
+        request_timeout: float = 60.0,
+        auto_install_worker: bool = True,
+    ) -> None:
+        self._runtime_context_provider = runtime_context_provider
+        self._worker_package_source = (
+            Path(worker_package_source).expanduser().resolve()
+            if worker_package_source is not None
+            else None
+        )
+        self._request_timeout = max(0.2, float(request_timeout))
+        self._auto_install_worker = bool(auto_install_worker)
+        self._managers: dict[WorkerRuntimeKey, WorkerProcessManager] = {}
+        self._manager_lock = asyncio.Lock()
+        self._active_key: WorkerRuntimeKey | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    @property
+    def loop(self) -> asyncio.AbstractEventLoop | None:
+        return self._loop
+
+    def _resolve_context(self, context: Mapping[str, Any] | None) -> dict[str, Any]:
+        resolved = dict(context or {})
+        if not resolved.get("project_id") or not resolved.get("python_interpreter_path"):
+            fallback = self._runtime_context_provider()
+            if fallback:
+                for field_name, value in fallback.items():
+                    resolved.setdefault(field_name, value)
+        return resolved
+
+    async def _worker_module_is_available(self, key: WorkerRuntimeKey) -> bool:
+        process = await asyncio.create_subprocess_exec(
+            key.python_interpreter_path,
+            "-c",
+            "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('aris_aiida_worker') else 1)",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return await process.wait() == 0
+
+    async def _install_worker(self, key: WorkerRuntimeKey) -> None:
+        source = self._worker_package_source
+        if source is None or not source.is_dir():
+            raise WorkerProcessError(
+                "aris-aiida-worker is not installed in the project environment",
+                status_code=503,
+                payload={"python_interpreter_path": key.python_interpreter_path},
+            )
+        uv_executable = shutil.which("uv")
+        if not uv_executable:
+            raise WorkerProcessError(
+                "Cannot install aris-aiida-worker because uv is unavailable",
+                status_code=503,
+            )
+        process = await asyncio.create_subprocess_exec(
+            uv_executable,
+            "pip",
+            "install",
+            "--python",
+            key.python_interpreter_path,
+            "--editable",
+            str(source),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            reason = stderr.decode("utf-8", errors="replace").strip() or stdout.decode(
+                "utf-8", errors="replace"
+            ).strip()
+            raise WorkerProcessError(
+                "Failed to install aris-aiida-worker in the project environment",
+                status_code=503,
+                payload={
+                    "python_interpreter_path": key.python_interpreter_path,
+                    "reason": reason,
+                },
+            )
+
+    async def _get_manager(self, context: Mapping[str, Any]) -> tuple[WorkerRuntimeKey, WorkerProcessManager]:
+        key = WorkerRuntimeKey.from_context(context)
+        async with self._manager_lock:
+            manager = self._managers.get(key)
+            if manager is not None:
+                self._active_key = key
+                return key, manager
+
+            interpreter = Path(key.python_interpreter_path)
+            if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
+                raise WorkerProcessError(
+                    "Project Python interpreter is unavailable",
+                    status_code=404,
+                    payload={"python_interpreter_path": key.python_interpreter_path},
+                )
+            if not await self._worker_module_is_available(key):
+                if not self._auto_install_worker:
+                    raise WorkerProcessError(
+                        "aris-aiida-worker is not installed in the project environment",
+                        status_code=503,
+                    )
+                await self._install_worker(key)
+
+            workspace_path = str(context.get("workspace_path") or "").strip() or None
+            environment = {"AIIDA_PROFILE": key.profile_name} if key.profile_name else None
+            manager = WorkerProcessManager(
+                [key.python_interpreter_path, "-u", "-m", "aris_aiida_worker"],
+                cwd=workspace_path,
+                env=environment,
+                request_timeout=self._request_timeout,
+            )
+            status = await manager.start()
+            actual_python = str(status.get("python_interpreter_path") or "").strip()
+            try:
+                same_interpreter = bool(actual_python) and os.path.samefile(
+                    key.python_interpreter_path,
+                    actual_python,
+                )
+            except (FileNotFoundError, OSError):
+                same_interpreter = False
+            actual_profile = str(status.get("profile") or "").strip() or None
+            if not same_interpreter or (
+                key.profile_name is not None and actual_profile != key.profile_name
+            ):
+                await manager.stop()
+                raise WorkerProcessError(
+                    "Project worker started with the wrong runtime identity",
+                    status_code=503,
+                    payload={
+                        "expected_python_interpreter_path": key.python_interpreter_path,
+                        "actual_python_interpreter_path": actual_python,
+                        "expected_profile_name": key.profile_name,
+                        "actual_profile_name": actual_profile,
+                    },
+                )
+            self._managers[key] = manager
+            self._active_key = key
+            return key, manager
+
+    async def start(self, *, context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        self._loop = asyncio.get_running_loop()
+        resolved_context = self._resolve_context(context)
+        key, manager = await self._get_manager(resolved_context)
+        status = await manager.start()
+        return {**status, "project_id": key.project_id}
+
+    async def request(
+        self,
+        method: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        context: Mapping[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        self._loop = asyncio.get_running_loop()
+        resolved_context = self._resolve_context(context)
+        key, manager = await self._get_manager(resolved_context)
+        result = await manager.request(
+            method,
+            params,
+            context=resolved_context,
+            timeout=timeout,
+        )
+        return result
+
+    def snapshot(self) -> WorkerProcessSnapshot:
+        if self._active_key is not None:
+            manager = self._managers.get(self._active_key)
+            if manager is not None:
+                return manager.snapshot()
+        return WorkerProcessSnapshot(
+            status="offline",
+            pid=None,
+            command=(),
+            cwd=None,
+            restart_count=0,
+            last_error=None,
+        )
+
+    async def stop(self) -> None:
+        managers = list(self._managers.values())
+        self._managers.clear()
+        self._active_key = None
+        for manager in managers:
+            await manager.stop()
 
 
-def configure_worker_process_manager(manager: WorkerProcessManager | None) -> None:
+WorkerManager = WorkerProcessManager | ProjectWorkerProcessManager
+_worker_process_manager: WorkerManager | None = None
+
+
+def configure_worker_process_manager(manager: WorkerManager | None) -> None:
     global _worker_process_manager
     _worker_process_manager = manager
 
 
-def get_worker_process_manager() -> WorkerProcessManager | None:
+def get_worker_process_manager() -> WorkerManager | None:
     return _worker_process_manager

@@ -47,7 +47,6 @@ from ..chat import (
     get_chat_history,
     get_chat_session_detail,
     get_chat_session_batch_progress,
-    get_chat_session_project_root_path,
     get_chat_session_workspace_path,
     get_chat_snapshot,
     list_chat_projects,
@@ -66,7 +65,6 @@ from ..client import (
     WorkerRPCError,
     WorkerOfflineError,
     aiida_worker_client,
-    build_worker_context,
     import_worker_data,
     reset_worker_request_context,
     optional_worker_call,
@@ -908,12 +906,10 @@ def _build_submission_worker_context(state: Any) -> dict[str, str] | None:
         return None
 
     active_project_id = get_active_chat_project_id(state)
-    workspace_path = get_chat_session_project_root_path(state, session_id)
-    return build_worker_context(
-        session_id=session_id,
-        project_id=active_project_id,
-        workspace_path=workspace_path,
-    )
+    project_context = build_chat_project_worker_context(state, active_project_id or "")
+    if project_context is None:
+        return None
+    return {**project_context, "session_id": session_id}
 
 
 async def _ensure_submission_group(label: str) -> dict[str, Any] | None:
@@ -1899,7 +1895,8 @@ async def frontend_update_chat_project(
         project = update_chat_project(
             state,
             project_id=project_id,
-            python_env=payload.python_env,
+            python_interpreter_path=payload.python_interpreter_path,
+            aiida_profile=payload.aiida_profile,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
@@ -2026,9 +2023,6 @@ async def frontend_chat_session_workspace(
     if payload is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
     return payload
-
-
-
 
 
 

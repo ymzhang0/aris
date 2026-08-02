@@ -289,6 +289,8 @@ def _build_default_chat_project(project_id: str | None = None) -> dict[str, Any]
         "id": resolved_project_id,
         "name": _DEFAULT_PROJECT_NAME,
         "root_path": str(_managed_project_root(resolved_project_id)),
+        "python_interpreter_path": None,
+        "aiida_profile": str(settings.ARIS_WORKER_DEFAULT_PROFILE or "").strip() or None,
         "created_at": now,
         "updated_at": now,
     }
@@ -309,6 +311,13 @@ def _normalize_chat_project_record(raw_project: Any) -> dict[str, Any] | None:
         "id": project_id,
         "name": name,
         "root_path": _normalize_project_root_path(raw_project.get("root_path"), project_id=project_id),
+        "python_interpreter_path": (
+            str(raw_project.get("python_interpreter_path") or raw_project.get("python_env") or "").strip()
+            or None
+        ),
+        "aiida_profile": str(raw_project.get("aiida_profile") or "").strip() or None,
+        "group_uuid": str(raw_project.get("group_uuid") or "").strip() or None,
+        "group_label": str(raw_project.get("group_label") or "").strip() or None,
         "created_at": created_at,
         "updated_at": updated_at,
     }
@@ -670,7 +679,8 @@ def _serialize_chat_project_summary(project: dict[str, Any], store: dict[str, An
         "session_count": len(project_sessions),
         "active": str(store.get("active_project_id") or "") == project_id,
         "environment_mode_default": _project_default_environment_mode(project),
-        "python_env": str(project.get("python_env") or "") or None,
+        "python_interpreter_path": str(project.get("python_interpreter_path") or "") or None,
+        "aiida_profile": str(project.get("aiida_profile") or "") or None,
     }
 
 
@@ -865,6 +875,8 @@ def build_chat_project_worker_context(state: Any, project_id: str) -> dict[str, 
     return build_worker_context(
         workspace_path=workspace_path,
         project_id=project.get("id"),
+        python_path=project.get("python_interpreter_path"),
+        profile_name=project.get("aiida_profile"),
     )
 
 
@@ -875,12 +887,12 @@ def _build_worker_context(state: Any, session_id: str | None = None) -> dict[str
     project = _get_store_project(store, str(session.get("project_id") or ""))
     _ensure_session_workspace_dir(store, session)
     workspace_path = str(_ensure_project_workspace_dir(project))
-    snapshot = _normalize_chat_session_snapshot(session.get("snapshot"))
     return build_worker_context(
         workspace_path=workspace_path,
         session_id=session.get("id"),
         project_id=project.get("id"),
-        python_path=snapshot.get("environment_python_path") or snapshot.get("environment_active_python_path"),
+        python_path=project.get("python_interpreter_path"),
+        profile_name=project.get("aiida_profile"),
     )
 
 
@@ -1035,9 +1047,10 @@ def _write_project_config(project: dict[str, Any]) -> None:
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_data = {
-            "version": "1.0",
+            "version": "2.0",
             "project_name": project.get("name") or project.get("title") or project.get("group_label") or "",
-            "python_env": project.get("python_env") or "",
+            "python_interpreter_path": project.get("python_interpreter_path") or "",
+            "aiida_profile": project.get("aiida_profile") or "",
             "group_label": project.get("group_label") or "",
             "group_uuid": project.get("group_uuid") or "",
         }
@@ -1060,24 +1073,39 @@ def create_chat_project(
     *,
     name: str,
     root_path: str | None = None,
+    python_interpreter_path: str | None = None,
+    aiida_profile: str | None = None,
     activate: bool = True,
 ) -> dict[str, Any]:
     config = _read_project_config(root_path)
     project_name = name or config.get("project_name") or "New Project"
-    
+    configured_python = str(
+        python_interpreter_path
+        or config.get("python_interpreter_path")
+        or config.get("python_env")
+        or ""
+    ).strip()
+    if not configured_python:
+        raise ValueError(
+            "Project python_interpreter_path is required; select the Python environment that owns AiiDA and this project's plugins"
+        )
+
     project = _get_session_application_service().create_project(
         state,
         name=project_name,
         root_path=root_path,
+        python_interpreter_path=configured_python,
+        aiida_profile=aiida_profile or config.get("aiida_profile") or settings.ARIS_WORKER_DEFAULT_PROFILE,
         activate=activate,
     )
     
-    python_env = config.get("python_env")
-    if python_env or config.get("group_uuid") or config.get("group_label"):
+    migrated_python = config.get("python_interpreter_path") or config.get("python_env")
+    if migrated_python or config.get("aiida_profile") or config.get("group_uuid") or config.get("group_label"):
         project = _get_session_application_service().update_project(
             state,
             project_id=project["id"],
-            python_env=python_env,
+            python_interpreter_path=migrated_python,
+            aiida_profile=config.get("aiida_profile"),
             group_uuid=config.get("group_uuid"),
             group_label=config.get("group_label"),
         )
@@ -1090,14 +1118,16 @@ def update_chat_project(
     state: Any,
     project_id: str,
     *,
-    python_env: str | None = None,
+    python_interpreter_path: str | None = None,
+    aiida_profile: str | None = None,
     group_uuid: str | None = None,
     group_label: str | None = None,
 ) -> dict[str, Any]:
     project = _get_session_application_service().update_project(
         state,
         project_id=project_id,
-        python_env=python_env,
+        python_interpreter_path=python_interpreter_path,
+        aiida_profile=aiida_profile,
         group_uuid=group_uuid,
         group_label=group_label,
     )

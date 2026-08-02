@@ -326,8 +326,8 @@ function createEnvironmentStore(): EnvironmentStoreApi {
     const normalizedProjectPath = normalizePath(project?.root_path ?? null);
     const nextDefaultMode: ProjectEnvironmentDefaultMode =
       project?.environment_mode_default === "project-auto" ? "project-auto" : "worker-default";
-    const shouldUseWorkerDefault = nextDefaultMode === "worker-default" && !project?.python_env;
-    const autoPythonPath = project?.python_env ? normalizePath(project.python_env) : buildAutoPythonPath(normalizedProjectPath);
+    const shouldUseWorkerDefault = nextDefaultMode === "worker-default" && !project?.python_interpreter_path;
+    const autoPythonPath = project?.python_interpreter_path ? normalizePath(project.python_interpreter_path) : buildAutoPythonPath(normalizedProjectPath);
     const projectChanged = normalizedProjectPath !== state.currentProjectPath;
     const shouldResetToAuto = projectChanged || state.pythonPathSource === "auto";
 
@@ -354,8 +354,8 @@ function createEnvironmentStore(): EnvironmentStoreApi {
       const incomingProjectPath = normalizePath(project?.root_path ?? null);
       const nextDefaultMode: ProjectEnvironmentDefaultMode =
         project?.environment_mode_default === "project-auto" ? "project-auto" : "worker-default";
-      const shouldUseWorkerDefault = nextDefaultMode === "worker-default" && !project?.python_env;
-      const autoPythonPath = project?.python_env ? normalizePath(project.python_env) : buildAutoPythonPath(incomingProjectPath);
+      const shouldUseWorkerDefault = nextDefaultMode === "worker-default" && !project?.python_interpreter_path;
+      const autoPythonPath = project?.python_interpreter_path ? normalizePath(project.python_interpreter_path) : buildAutoPythonPath(incomingProjectPath);
       const nextPythonPath = state.pythonPathSource === "manual" && incomingProjectPath === state.currentProjectPath
         ? state.pythonPath
         : autoPythonPath;

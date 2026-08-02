@@ -119,7 +119,7 @@ def _normalize_context_entries(context: Mapping[str, Any] | None = None) -> dict
     normalized: dict[str, str] = {}
     if not context:
         return normalized
-    allowed = {"session_id", "project_id", "workspace_path", "python_interpreter_path"}
+    allowed = {"session_id", "project_id", "workspace_path", "python_interpreter_path", "profile_name"}
     for key, value in context.items():
         cleaned_key = str(key or "").strip()
         cleaned_value = str(value or "").strip()
@@ -133,6 +133,7 @@ def build_worker_context(
     project_id: Any = None,
     workspace_path: Any = None,
     python_path: Any = None,
+    profile_name: Any = None,
 ) -> dict[str, str] | None:
     context: dict[str, Any] = {}
     if session_id is not None:
@@ -143,6 +144,8 @@ def build_worker_context(
         context["workspace_path"] = workspace_path
     if python_path is not None:
         context["python_interpreter_path"] = python_path
+    if profile_name is not None:
+        context["profile_name"] = profile_name
     return _normalize_context_entries(context) or None
 
 

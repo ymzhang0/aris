@@ -99,13 +99,13 @@ class Settings(BaseSettings):
         "ARIS_WORKER_RUNTIME_ENABLED",
         default="true",
     )
-    ARIS_WORKER_RUNTIME_PYTHON: str = _resolve_path(
-        "ARIS_WORKER_RUNTIME_PYTHON",
-        default_path=_DEFAULT_WORKER_ROOT / ".venv" / "bin" / "python3",
+    ARIS_WORKER_DEFAULT_PROFILE: str = _env_value(
+        "ARIS_WORKER_DEFAULT_PROFILE",
+        "AIIDA_PROFILE",
+        default="",
     )
-    ARIS_WORKER_RUNTIME_CWD: str = _resolve_path(
-        "ARIS_WORKER_RUNTIME_CWD",
-        "ARIS_WORKER_DIR",
+    ARIS_WORKER_PACKAGE_SOURCE: str = _resolve_path(
+        "ARIS_WORKER_PACKAGE_SOURCE",
         default_path=_DEFAULT_WORKER_ROOT,
     )
     ARIS_LOCAL_ACTOR_ID: str = _env_value(

@@ -11,15 +11,15 @@ flowchart LR
         CHAT["Chat application<br/>session · state machine · approval"]
         AGENT["Agent runtime<br/>Pydantic AI"]
         CAP["AiiDA capability adapter<br/>protocol-first request mapping"]
-        OWNER["WorkerProcessManager<br/>start · serialize requests<br/>timeout · restart · stop"]
+        OWNER["ProjectWorkerProcessManager<br/>project + Python + profile key<br/>verify · restart · stop"]
         API --> CHAT --> AGENT --> CAP --> OWNER
     end
 
-    subgraph WORKER["MANAGED AIIDA WORKER · no port"]
+    subgraph WORKER["PROJECT PYTHON WORKER · no port"]
         STDIO["stdio loop<br/>newline-delimited JSON-RPC 2.0"]
         DISPATCH["AiiDAWorkerService<br/>validated method + params<br/>structured domain errors"]
-        SERVICES["Pure Python capabilities<br/>profile · infrastructure · submission<br/>process · group · node · data<br/>execution · registry"]
-        EXEC["DynamicExecutionRuntime<br/>selected Python + workspace<br/>managed computation subprocess"]
+        SERVICES["Project-local capabilities<br/>plugins · WorkChains · submission<br/>process · group · node · data<br/>execution · registry"]
+        EXEC["DynamicExecutionRuntime<br/>same worker Python + workspace<br/>isolated script subprocess"]
         STDIO --> DISPATCH --> SERVICES --> EXEC
     end
 

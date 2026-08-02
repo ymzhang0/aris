@@ -1144,10 +1144,12 @@ export default function App() {
   });
 
   const createProjectMutation = useMutation({
-    mutationFn: ({ name, rootPath }: { name: string; rootPath: string }) =>
+    mutationFn: ({ name, rootPath, pythonInterpreterPath, aiidaProfile }: { name: string; rootPath: string; pythonInterpreterPath?: string; aiidaProfile?: string }) =>
       createChatProject({
         name,
         root_path: rootPath.trim() || undefined,
+        python_interpreter_path: pythonInterpreterPath?.trim() || undefined,
+        aiida_profile: aiidaProfile?.trim() || undefined,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
@@ -1394,8 +1396,8 @@ export default function App() {
   );
 
   const handleCreateProject = useCallback(
-    async ({ name, rootPath }: { name: string; rootPath: string }) => {
-      const response = await createProjectMutation.mutateAsync({ name, rootPath });
+    async ({ name, rootPath, pythonInterpreterPath, aiidaProfile }: { name: string; rootPath: string; pythonInterpreterPath?: string; aiidaProfile?: string }) => {
+      const response = await createProjectMutation.mutateAsync({ name, rootPath, pythonInterpreterPath, aiidaProfile });
       await handleCreateChatSession(response.project.id);
     },
     [createProjectMutation, handleCreateChatSession],

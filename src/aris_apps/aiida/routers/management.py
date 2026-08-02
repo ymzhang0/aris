@@ -1817,7 +1817,8 @@ async def frontend_update_chat_project(
         project = update_chat_project(
             state,
             project_id=project_id,
-            python_env=payload.python_env,
+            python_interpreter_path=payload.python_interpreter_path,
+            aiida_profile=payload.aiida_profile,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
@@ -1944,7 +1945,6 @@ async def frontend_chat_session_workspace(
     if payload is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
     return payload
-
 
 
 

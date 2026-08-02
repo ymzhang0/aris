@@ -2,7 +2,10 @@
 
 ARIS is an agentic scientific research framework built around a strict Brain/Body split and optimized for the AiiDA ecosystem. Platform code lives in `aris_core`, while application behavior lives in `aris_apps`.
 
-The Brain-side repo lives in `aris/`. The worker remains a separate repo in `../aiida-worker`, with a separate Python environment and no direct code import dependency from ARIS into worker internals.
+The Brain-side repo lives in `aris/`. The worker remains a separate package in
+`../aiida-worker`, but each worker process runs inside its owning project's
+Python environment. ARIS has no direct import dependency on worker or project
+internals.
 
 ## Key Features
 
@@ -12,14 +15,14 @@ The Brain-side repo lives in `aris/`. The worker remains a separate repo in `../
 - Runtime isolation: mutable memories, uploads, caches, and script archives live under `~/.aris/`, while managed chat projects default to `~/.aris/projects`.
 ## ARIS <-> AiiDA-Worker Protocol
 
-ARIS owns one isolated AiiDA worker child process. The process has its own
-Python/AiiDA environment but no web server and no listening port. Requests are
-newline-delimited JSON-RPC 2.0 over stdin/stdout.
+ARIS owns isolated AiiDA worker child processes keyed by project, Python
+interpreter, and AiiDA profile. They have no web server or listening port.
+Requests are newline-delimited JSON-RPC 2.0 over stdin/stdout.
 
 Capabilities use explicit names such as `runtime.status`, `profile.list`,
 `infrastructure.setup`, `submission.validate`, `process.detail`,
 `group.export_archive`, `data.import`, and `execution.run_python`. Project,
-session, workspace, and interpreter context travel as typed JSON-RPC params.
+Session and project runtime context travel in the typed JSON-RPC envelope.
 Binary imports and exports use base64 inside the protocol.
 
 ## Local Layout

@@ -27,7 +27,7 @@ from src.aris_core.config.runtime import (
 from src.aris_core.memory import JSONMemory
 from src.aris_core.plugins import iter_enabled_app_manifests
 from src.aris_core.runtime import (
-    WorkerProcessManager,
+    ProjectWorkerProcessManager,
     configure_worker_process_manager,
 )
 from src.aris_apps.projects.routes import router as projects_router
@@ -109,43 +109,64 @@ async def lifespan(app: FastAPI):
             )
         )
 
-    worker_process_manager: WorkerProcessManager | None = None
-    if settings.ARIS_WORKER_RUNTIME_ENABLED:
-        worker_process_manager = WorkerProcessManager(
-            [
-                settings.ARIS_WORKER_RUNTIME_PYTHON,
-                "-u",
-                "-m",
-                "aris_aiida_worker",
-            ],
-            cwd=settings.ARIS_WORKER_RUNTIME_CWD,
-            request_timeout=60.0,
-        )
-        configure_worker_process_manager(worker_process_manager)
-        app.state.worker_process_manager = worker_process_manager
-        try:
-            worker_status = await worker_process_manager.start()
-            logger.info(
-                log_event(
-                    "worker.runtime.online",
-                    pid=worker_process_manager.snapshot().pid,
-                    transport=worker_status.get("transport"),
-                    python=worker_status.get("python_interpreter_path"),
-                )
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(log_event("worker.runtime.start.failed", error=str(exc)))
-    else:
-        configure_worker_process_manager(None)
-
-    # Initialize Global Memory
+    # Initialize memory before resolving the active project's worker runtime.
     memory = JSONMemory(
         namespace="aris_v2_global",
         storage_path=settings.ARIS_MEMORY_DIR,
     )
     state["memory"] = memory
     app.state.memory = memory
-    
+
+    worker_process_manager: ProjectWorkerProcessManager | None = None
+    if settings.ARIS_WORKER_RUNTIME_ENABLED:
+        def _active_project_worker_context() -> dict[str, str] | None:
+            from src.aris_apps.aiida.chat import (
+                get_active_chat_project_id,
+                list_chat_projects,
+            )
+
+            projects = list_chat_projects(app.state)
+            active_project_id = get_active_chat_project_id(app.state)
+            project = next(
+                (item for item in projects if item.get("id") == active_project_id),
+                projects[0] if projects else None,
+            )
+            if not isinstance(project, dict):
+                return None
+            return {
+                "project_id": str(project.get("id") or ""),
+                "workspace_path": str(project.get("root_path") or ""),
+                "python_interpreter_path": str(project.get("python_interpreter_path") or ""),
+                "profile_name": str(project.get("aiida_profile") or ""),
+            }
+
+        worker_process_manager = ProjectWorkerProcessManager(
+            runtime_context_provider=_active_project_worker_context,
+            worker_package_source=settings.ARIS_WORKER_PACKAGE_SOURCE,
+            request_timeout=60.0,
+        )
+        configure_worker_process_manager(worker_process_manager)
+        app.state.worker_process_manager = worker_process_manager
+        try:
+            initial_context = _active_project_worker_context()
+            if initial_context and initial_context.get("python_interpreter_path"):
+                worker_status = await worker_process_manager.start(context=initial_context)
+                logger.info(
+                    log_event(
+                        "worker.runtime.online",
+                        pid=worker_process_manager.snapshot().pid,
+                        transport=worker_status.get("transport"),
+                        python=worker_status.get("python_interpreter_path"),
+                        project_id=worker_status.get("project_id"),
+                    )
+                )
+            else:
+                logger.info(log_event("worker.runtime.awaiting_project"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(log_event("worker.runtime.start.failed", error=str(exc)))
+    else:
+        configure_worker_process_manager(None)
+
     # Dynamically load the engine-specific agent and deps
     engine_name = (settings.ENGINE_TYPE or "").strip() or DEFAULT_ENGINE
     try:

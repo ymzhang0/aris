@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -169,26 +170,31 @@ def test_chat_session_snapshot_preserves_active_environment_python_path() -> Non
     assert snapshot["environment_active_python_path"] == "/tmp/worker-default/.venv/bin/python"
 
 
-def test_build_worker_context_includes_environment_python_path() -> None:
+def test_build_worker_context_uses_authoritative_project_runtime() -> None:
     state = _make_chat_state()
     session = chat_service.create_chat_session(state, title="Injected preview", activate=True)
-    stored_session, _store = chat_service._find_chat_session(state, session["id"])
+    stored_session, store = chat_service._find_chat_session(state, session["id"])
     assert stored_session is not None
+    project = next(item for item in store["projects"] if item["id"] == stored_session["project_id"])
+    project["python_interpreter_path"] = "/tmp/project/.venv/bin/python"
+    project["aiida_profile"] = "dev"
     stored_session["snapshot"] = chat_service._build_chat_session_snapshot(
-        {"environment_python_path": "/tmp/project/.venv/bin/python"}
+        {"environment_python_path": "/tmp/untrusted/.venv/bin/python"}
     )
 
     context = chat_service._build_worker_context(state, session["id"])
 
     assert context is not None
     assert context["python_interpreter_path"] == "/tmp/project/.venv/bin/python"
+    assert context["profile_name"] == "dev"
 
 
-def test_build_worker_context_falls_back_to_active_environment_python_path() -> None:
+def test_build_worker_context_does_not_fall_back_to_session_environment() -> None:
     state = _make_chat_state()
     session = chat_service.create_chat_session(state, title="Worker default", activate=True)
-    stored_session, _store = chat_service._find_chat_session(state, session["id"])
+    stored_session, store = chat_service._find_chat_session(state, session["id"])
     assert stored_session is not None
+    project = next(item for item in store["projects"] if item["id"] == stored_session["project_id"])
     stored_session["snapshot"] = chat_service._build_chat_session_snapshot(
         {"environment_active_python_path": "/tmp/worker-default/.venv/bin/python"}
     )
@@ -196,7 +202,8 @@ def test_build_worker_context_falls_back_to_active_environment_python_path() -> 
     context = chat_service._build_worker_context(state, session["id"])
 
     assert context is not None
-    assert context["python_interpreter_path"] == "/tmp/worker-default/.venv/bin/python"
+    assert project["python_interpreter_path"] is None
+    assert "python_interpreter_path" not in context
 
 
 def test_title_prompt_prefers_pinned_node_context() -> None:
@@ -1060,6 +1067,7 @@ def test_create_chat_project_assigns_new_sessions_to_requested_project(tmp_path)
             state,
             name="Born Charge Study",
             root_path=str(tmp_path / "born-study"),
+            python_interpreter_path=sys.executable,
             activate=True,
         )
         session = chat_service.create_chat_session(
@@ -1078,12 +1086,39 @@ def test_create_chat_project_assigns_new_sessions_to_requested_project(tmp_path)
     assert (Path(project["root_path"]) / "data").is_dir()
 
 
+def test_create_chat_project_requires_and_persists_explicit_runtime(tmp_path) -> None:
+    state = _make_chat_state()
+    root = tmp_path / "explicit-runtime"
+
+    with pytest.raises(ValueError, match="python_interpreter_path is required"):
+        chat_service.create_chat_project(state, name="Explicit", root_path=str(root))
+
+    project = chat_service.create_chat_project(
+        state,
+        name="Explicit",
+        root_path=str(root),
+        python_interpreter_path=sys.executable,
+        aiida_profile="dev",
+    )
+    config = json.loads((root / ".aris" / "config.json").read_text(encoding="utf-8"))
+
+    assert project["python_interpreter_path"] == sys.executable
+    assert project["aiida_profile"] == "dev"
+    assert config["python_interpreter_path"] == sys.executable
+    assert config["aiida_profile"] == "dev"
+
+
 def test_write_chat_project_file_persists_content_under_project_root(tmp_path) -> None:
     state = _make_chat_state()
     original_root = chat_service.settings.ARIS_PROJECTS_ROOT
     chat_service.settings.ARIS_PROJECTS_ROOT = str(tmp_path)
     try:
-        project = chat_service.create_chat_project(state, name="EOS", activate=True)
+        project = chat_service.create_chat_project(
+            state,
+            name="EOS",
+            python_interpreter_path=sys.executable,
+            activate=True,
+        )
         payload = chat_service.write_chat_project_file(
             state,
             project["id"],
@@ -1107,7 +1142,12 @@ def test_get_chat_session_project_root_path_returns_project_root(tmp_path) -> No
     original_root = chat_service.settings.ARIS_PROJECTS_ROOT
     chat_service.settings.ARIS_PROJECTS_ROOT = str(tmp_path)
     try:
-        project = chat_service.create_chat_project(state, name="Bands", activate=True)
+        project = chat_service.create_chat_project(
+            state,
+            name="Bands",
+            python_interpreter_path=sys.executable,
+            activate=True,
+        )
         session = chat_service.create_chat_session(state, title="Bands", activate=True, project_id=project["id"])
         project_root = chat_service.get_chat_session_project_root_path(state, session["id"])
     finally:
@@ -1147,9 +1187,19 @@ def test_delete_chat_items_removes_project_and_child_sessions(tmp_path) -> None:
     original_root = chat_service.settings.ARIS_PROJECTS_ROOT
     chat_service.settings.ARIS_PROJECTS_ROOT = str(tmp_path)
     try:
-        doomed_project = chat_service.create_chat_project(state, name="To Delete", activate=True)
+        doomed_project = chat_service.create_chat_project(
+            state,
+            name="To Delete",
+            python_interpreter_path=sys.executable,
+            activate=True,
+        )
         doomed_session = chat_service.create_chat_session(state, title="Delete me", activate=True, project_id=doomed_project["id"])
-        survivor_project = chat_service.create_chat_project(state, name="Keep", activate=True)
+        survivor_project = chat_service.create_chat_project(
+            state,
+            name="Keep",
+            python_interpreter_path=sys.executable,
+            activate=True,
+        )
         survivor_session = chat_service.create_chat_session(state, title="Keep me", activate=True, project_id=survivor_project["id"])
         doomed_root = Path(doomed_project["root_path"])
 

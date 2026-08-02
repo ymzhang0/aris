@@ -454,6 +454,8 @@ export async function getChatSessionBatchProgress(sessionId: string): Promise<Ch
 export async function createChatProject(payload: {
   name: string;
   root_path?: string;
+  python_interpreter_path?: string;
+  aiida_profile?: string;
 }): Promise<ChatProjectMutationResponse> {
   const { data } = await frontendApi.post<ChatProjectMutationResponse>("/chat/projects", payload);
   return data;

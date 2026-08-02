@@ -1636,7 +1636,7 @@ def add_referenced_nodes_prompt(ctx: RunContext[AiiDADeps]) -> str:
 
 
 @aiida_researcher.system_prompt(dynamic=True)
-def add_project_python_env_prompt(ctx: RunContext[AiiDADeps]) -> str:
+def add_project_runtime_prompt(ctx: RunContext[AiiDADeps]) -> str:
     app_state = ctx.deps.app_state
     if app_state is None:
         return ""
@@ -1650,13 +1650,14 @@ def add_project_python_env_prompt(ctx: RunContext[AiiDADeps]) -> str:
     if not project:
         return ""
 
-    python_env = str(project.get("python_env") or "").strip()
-    if python_env:
+    python_interpreter_path = str(project.get("python_interpreter_path") or "").strip()
+    profile_name = str(project.get("aiida_profile") or "").strip()
+    if python_interpreter_path:
         return (
-            f"\n### PYTHON ENVIRONMENT\n"
-            f"The user has configured a specific Python environment for this project at: {python_env}\n"
-            f"If you need to run python scripts, check packages via pip, or perform any python-related tasks for this project, "
-            f"you MUST use this environment (e.g., by executing its bin/python directly or activating it).\n"
+            f"\n### PROJECT RUNTIME\n"
+            f"All AiiDA capabilities for this project run inside worker Python: {python_interpreter_path}\n"
+            f"The configured AiiDA profile is: {profile_name or 'the environment default'}.\n"
+            "Do not request another Python interpreter or profile in tool parameters; ARIS selects this runtime from the project protocol context.\n"
         )
     return ""
 

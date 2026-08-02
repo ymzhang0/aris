@@ -5,18 +5,20 @@ The source diagram is
 
 ## Runtime ownership
 
-ARIS is the only long-lived application process that owns AiiDA integration.
-During FastAPI lifespan startup, `src/app_api.py` creates one
-`WorkerProcessManager`. It launches:
+ARIS owns AiiDA orchestration without importing project AiiDA packages into the
+ARIS process. During FastAPI lifespan startup, `src/app_api.py` creates one
+`ProjectWorkerProcessManager`. For each explicit project runtime key it launches:
 
 ```text
-<aiida-worker>/.venv/bin/python3 -u -m aris_aiida_worker
+<project-python> -u -m aris_aiida_worker
 ```
 
-The child process uses the worker repository as its working directory. ARIS
-keeps stdin, stdout, and stderr pipes; no socket is opened. Shutdown sends
-`runtime.shutdown`, waits for a clean exit, and terminates the child only if it
-does not exit in time. A crashed process is recreated on the next request.
+The runtime key is `(project_id, python_interpreter_path, aiida_profile)`, and
+the child uses the project workspace as its working directory. ARIS installs
+the lightweight worker package into the project environment when necessary,
+then verifies the interpreter and profile reported by `runtime.status`. ARIS
+keeps stdin, stdout, and stderr pipes; no socket is opened. Shutdown stops every
+project worker. A crashed process is recreated on the next request.
 
 PM2 is optional tooling for the ARIS API and Vite development server. It does
 not own aiida-worker.
@@ -28,7 +30,7 @@ sequenceDiagram
     participant UI as Browser / ARIS.app
     participant API as ARIS API
     participant Client as AiiDA capability client
-    participant Owner as WorkerProcessManager
+    participant Owner as ProjectWorkerProcessManager
     participant Worker as aiida-worker stdio loop
     participant Service as AiiDAWorkerService
     participant AiiDA
@@ -36,7 +38,8 @@ sequenceDiagram
     UI->>API: REST or AG-UI action
     API->>Client: deterministic capability request
     Client->>Client: map to method + typed params
-    Client->>Owner: request(method, params)
+    Client->>Owner: request(method, params, project context)
+    Owner->>Owner: select and verify project runtime
     Owner->>Worker: one JSON-RPC line on stdin
     Worker->>Service: validate and dispatch
     Service->>AiiDA: direct Python API
@@ -48,9 +51,11 @@ sequenceDiagram
     API-->>UI: frontend response/state update
 ```
 
-`WorkerProcessManager` serializes requests with one async lock. This deliberately
-keeps AiiDA profile/session access deterministic. stderr is captured separately
-and never contaminates the JSON-RPC stream.
+Each scoped `WorkerProcessManager` serializes requests with one async lock. This
+keeps AiiDA profile/session access deterministic inside one project runtime,
+while separate projects cannot pollute each other's imported modules or global
+AiiDA state. stderr is captured separately and never contaminates the JSON-RPC
+stream.
 
 ## Protocol
 
@@ -85,6 +90,7 @@ Context formerly encoded as headers is converted into explicit params:
 - `project_id`
 - `workspace_path`
 - `python_interpreter_path`
+- `profile_name`
 
 Files are base64-encoded for `data.import` and `group.export_archive`.
 
@@ -108,16 +114,17 @@ protocol regression test. Semantic keyword inference is not used.
 
 ## Python environments
 
-There remain two intentional environments:
+There are two intentional process environments:
 
 1. ARIS environment: UI API, chat orchestration, policies, and session state.
-2. aiida-worker environment: `aiida-core`, plugins, profiles, ORM, and worker
-   capability code.
+2. Each project environment: `aiida-core`, that project's plugins, custom
+   WorkChains, profiles, ORM, and the lightweight worker capability package.
 
-For project-specific computation, ARIS passes an explicit
-`python_interpreter_path` and `workspace_path`. `DynamicExecutionRuntime`
-validates that interpreter and launches a short-lived computation subprocess.
-This is different from starting another worker server.
+ARIS selects this environment before sending the request. Submission code calls
+`WorkflowFactory`, builds the builder, validates it, and submits directly in the
+project worker. It does not inject Python source into a second interpreter.
+`DynamicExecutionRuntime` may still use a short-lived subprocess to isolate user
+scripts, but that subprocess uses the worker's own `sys.executable`.
 
 ## Health semantics
 
@@ -131,7 +138,8 @@ second PM2 process can drift out of sync.
 ARIS:
 
 - `src/app_api.py` — lifecycle owner
-- `src/aris_core/runtime/worker_process.py` — subprocess and JSON-RPC transport
+- `src/aris_core/runtime/worker_process.py` — project runtime pool, subprocess,
+  and JSON-RPC transport
 - `src/aris_apps/aiida/client.py` — application adapter and result normalization
 - `src/aris_apps/aiida/capabilities.py` — capability boundary
 
