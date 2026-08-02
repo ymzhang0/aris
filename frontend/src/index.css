@@ -15,16 +15,44 @@
   }
 
   .window-toolbar-row {
+    position: relative;
     height: 48px;
+    -webkit-app-region: no-drag;
+  }
+
+  .window-drag-surface {
+    top: 6px;
+    z-index: 0;
+    -webkit-app-region: drag;
+  }
+
+  .window-left-controls,
+  .window-right-controls {
+    top: 0;
+    z-index: 10;
+    height: 48px;
+    -webkit-app-region: no-drag;
+  }
+
+  .window-left-controls {
+    left: 8px;
+  }
+
+  .window-right-controls {
+    right: 8px;
   }
 
   .aris-desktop .window-toolbar-row {
-    height: 68px;
-    padding-top: 20px;
+    height: 48px;
   }
 
   .aris-desktop .window-left-controls {
-    padding-left: 174px;
+    top: 0;
+    left: 84px;
+  }
+
+  .aris-desktop .window-right-controls {
+    top: 0;
   }
 }
 

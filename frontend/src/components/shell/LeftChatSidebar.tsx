@@ -31,7 +31,7 @@ export type LeftChatSidebarProps = {
   onCreateProject: (payload: ProjectDraft) => void;
   onBrowseProjectFolder: () => Promise<string | null>;
   onOpenProjectWorkspace: (projectId: string) => void;
-  onNewConversation: () => void;
+  onNewConversation: (projectId?: string) => void;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
 };
@@ -45,11 +45,18 @@ export function LeftChatSidebar(props: LeftChatSidebarProps) {
   const [isBrowsing, setIsBrowsing] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
-  const recentSessions = useMemo(() => {
+  const sessionsByProject = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return props.sessions
+    const grouped = new Map<string, ChatSessionSummary[]>();
+    props.sessions
       .filter((session) => !needle || session.title.toLowerCase().includes(needle))
-      .slice(0, 30);
+      .forEach((session) => {
+        const projectSessions = grouped.get(session.project_id) ?? [];
+        projectSessions.push(session);
+        grouped.set(session.project_id, projectSessions);
+      });
+    grouped.forEach((sessions) => sessions.sort((left, right) => right.updated_at.localeCompare(left.updated_at)));
+    return grouped;
   }, [props.sessions, query]);
 
   const openDialog = (mode: "create" | "load") => {
@@ -90,7 +97,7 @@ export function LeftChatSidebar(props: LeftChatSidebarProps) {
   if (!props.expanded) {
     return (
       <aside className="flex h-full w-12 flex-col items-center bg-[#f7f7f7] dark:bg-zinc-900">
-        <RailButton label="New chat" onClick={props.onNewConversation}><SquarePen /></RailButton>
+        <RailButton label="New chat" onClick={() => props.onNewConversation()}><SquarePen /></RailButton>
         <RailButton label="Projects" onClick={() => props.onExpandedChange(true)}><Folder /></RailButton>
         <RailButton label="Recent chats" onClick={() => props.onExpandedChange(true)}><MessageSquare /></RailButton>
         <div className="mt-auto">
@@ -109,7 +116,7 @@ export function LeftChatSidebar(props: LeftChatSidebarProps) {
       </div>
 
       <div className="px-3">
-        <button className="flex h-12 w-full items-center gap-3 rounded-lg px-2 text-[15px] font-medium hover:bg-zinc-200/70 dark:hover:bg-zinc-800" onClick={props.onNewConversation} disabled={props.isBusy}>
+        <button className="flex h-12 w-full items-center gap-3 rounded-lg px-2 text-[15px] font-medium hover:bg-zinc-200/70 dark:hover:bg-zinc-800" onClick={() => props.onNewConversation()} disabled={props.isBusy}>
           <SquarePen className="h-5 w-5" /> New chat
         </button>
         <label className="mt-1 flex h-9 items-center gap-2 rounded-lg px-2 text-zinc-500 focus-within:bg-white dark:focus-within:bg-zinc-950">
@@ -126,26 +133,31 @@ export function LeftChatSidebar(props: LeftChatSidebarProps) {
           <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800" disabled={isBrowsing} onClick={() => void browseForFolder("load")}><FolderInput className="h-4 w-4" />Import from folder</button>
         </div>}
       </div>
-      <div className="mt-1 max-h-[34%] overflow-y-auto px-2">
-        {props.projects.map((project) => (
-          <button key={project.id} className={cn("group flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-sm hover:bg-zinc-200/70 dark:hover:bg-zinc-800", project.id === props.activeProjectId && "bg-zinc-200/70 font-medium dark:bg-zinc-800")} onClick={() => props.onOpenProjectWorkspace(project.id)}>
-            <Folder className="h-4 w-4 shrink-0 text-zinc-500" />
-            <span className="min-w-0 flex-1 truncate">{project.name}</span>
-            <MoreHorizontal className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100" />
-          </button>
-        ))}
-        {!props.projects.length && <p className="px-2 py-3 text-xs text-zinc-500">No projects yet</p>}
-      </div>
-
-      <div className="mt-5 px-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Recents</div>
       <div className="mt-1 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {recentSessions.map((session) => (
-          <button key={session.id} className={cn("group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-zinc-200/70 dark:hover:bg-zinc-800", session.id === props.activeSessionId && "bg-zinc-200/70 font-medium dark:bg-zinc-800")} onClick={() => props.onActivateSession(session.id)}>
-            <MessageSquare className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
-            <span className="min-w-0 flex-1 truncate">{session.title}</span>
-            <MoreHorizontal className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100" />
-          </button>
-        ))}
+        {props.projects.map((project) => {
+          const projectSessions = sessionsByProject.get(project.id) ?? [];
+          return (
+            <div key={project.id} className="mb-1">
+              <div className={cn("group flex h-9 items-center rounded-lg hover:bg-zinc-200/70 dark:hover:bg-zinc-800", project.id === props.activeProjectId && "bg-zinc-200/70 font-medium dark:bg-zinc-800")}>
+                <button className="flex h-full min-w-0 flex-1 items-center gap-2 px-2 text-left text-sm" onClick={() => props.onOpenProjectWorkspace(project.id)}>
+                  <Folder className="h-4 w-4 shrink-0 text-zinc-500" />
+                  <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                </button>
+                <button className="mr-1 grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-400 opacity-0 hover:bg-zinc-300/70 hover:text-zinc-800 group-hover:opacity-100 dark:hover:bg-zinc-700 dark:hover:text-zinc-100" onClick={() => props.onNewConversation(project.id)} title={`New chat in ${project.name}`} aria-label={`New chat in ${project.name}`}>
+                  <SquarePen className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {projectSessions.map((session) => (
+                <button key={session.id} className={cn("group ml-5 flex w-[calc(100%-1.25rem)] items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] text-zinc-600 hover:bg-zinc-200/70 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100", session.id === props.activeSessionId && "bg-zinc-200/70 font-medium text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100")} onClick={() => props.onActivateSession(session.id)}>
+                  <MessageSquare className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                  <span className="min-w-0 flex-1 truncate">{session.title}</span>
+                  <MoreHorizontal className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100" />
+                </button>
+              ))}
+            </div>
+          );
+        })}
+        {!props.projects.length && <p className="px-2 py-3 text-xs text-zinc-500">No projects yet</p>}
       </div>
 
       <button className="flex h-11 items-center gap-3 border-t border-zinc-200 px-4 text-xs text-zinc-500 hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-800" onClick={props.onToggleTheme}>

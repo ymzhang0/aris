@@ -33,14 +33,14 @@ export function AppShell(props: AppShellProps) {
         gridTemplateColumns: `${props.leftExpanded ? "260px" : "48px"} minmax(0,1fr) ${props.rightExpanded ? "360px" : "0px"}`,
       }}
     >
-      <div className="app-drag-region window-toolbar-row col-span-3 grid border-b border-zinc-200/70 bg-white dark:border-zinc-800 dark:bg-zinc-950" style={{ gridTemplateColumns: "subgrid" }}>
-        <div className="window-left-controls flex items-center justify-start px-2">
+      <div className="window-toolbar-row app-no-drag relative col-span-3 border-b border-zinc-200/70 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="window-drag-surface absolute inset-x-0 bottom-0" aria-hidden="true" />
+        <div className="window-left-controls absolute flex items-center">
           <button className={toolbarButton} onClick={props.onToggleLeft} title={props.leftExpanded ? "Collapse sidebar" : "Expand sidebar"} aria-label={props.leftExpanded ? "Collapse sidebar" : "Expand sidebar"}>
             <PanelLeft className="h-[18px] w-[18px]" />
           </button>
         </div>
-        <div className="min-w-0" />
-        <div className="flex items-center justify-end gap-1 px-2">
+        <div className="window-right-controls absolute flex items-center justify-end gap-1">
           <button className={cn(toolbarButton, props.bottomExpanded && "bg-zinc-100 dark:bg-zinc-900")} onClick={props.onToggleBottom} title="Toggle bottom panel" aria-label="Toggle bottom panel">
             <PanelBottom className="h-[18px] w-[18px]" />
           </button>
@@ -53,7 +53,7 @@ export function AppShell(props: AppShellProps) {
       <div className="min-h-0 overflow-hidden">{props.leftSidebar}</div>
       <div className="min-h-0 min-w-0 overflow-hidden">{props.mainContent}</div>
       <div className="min-h-0 overflow-hidden">{props.rightSidebar}</div>
-      <div className="col-start-2 col-span-2 min-h-0 overflow-hidden border-t border-zinc-200 bg-zinc-950 dark:border-zinc-800">
+      <div className="col-start-2 col-span-2 min-h-0 overflow-hidden border-t border-zinc-800 bg-zinc-950">
         {props.bottomExpanded ? props.bottomPanel : null}
       </div>
       <div className="col-span-3 min-w-0">{props.bottomStatusBar}</div>

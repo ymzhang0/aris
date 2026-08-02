@@ -629,6 +629,7 @@ export default function App() {
   const queryClient = useQueryClient();
   const [theme, setTheme] = useState<"light" | "dark">(initialTheme);
   const [rightTool, setRightTool] = useState<RightTool | null>(null);
+  const [rightToolTabs, setRightToolTabs] = useState<RightTool[]>([]);
   const [leftSidebarExpanded, setLeftSidebarExpanded] = useState(
     () => window.localStorage.getItem("aris.sidebar.left") !== "collapsed",
   );
@@ -638,19 +639,35 @@ export default function App() {
   const [bottomPanelExpanded, setBottomPanelExpanded] = useState(
     () => window.localStorage.getItem("aris.panel.bottom") === "expanded",
   );
+  const openRightTool = useCallback((tool: RightTool) => {
+    setRightToolTabs((current) => current.includes(tool) ? current : [...current, tool]);
+    setRightTool(tool);
+    setRightSidebarExpanded(true);
+    window.localStorage.setItem("aris.sidebar.right", "expanded");
+  }, []);
+  const closeRightTool = useCallback((tool: RightTool) => {
+    setRightToolTabs((current) => {
+      const closingIndex = current.indexOf(tool);
+      const next = current.filter((item) => item !== tool);
+      setRightTool((active) => {
+        if (active !== tool) return active;
+        if (!next.length) return null;
+        return next[Math.min(Math.max(closingIndex, 0), next.length - 1)] ?? null;
+      });
+      return next;
+    });
+  }, []);
   useEffect(() => {
     const handleToolShortcut = (event: KeyboardEvent) => {
       if (!event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return;
       const tool = event.key.toLowerCase() === "p" ? "files" : event.key.toLowerCase() === "d" ? "aiida" : null;
       if (!tool) return;
       event.preventDefault();
-      setRightTool(tool);
-      setRightSidebarExpanded(true);
-      window.localStorage.setItem("aris.sidebar.right", "expanded");
+      openRightTool(tool);
     };
     window.addEventListener("keydown", handleToolShortcut);
     return () => window.removeEventListener("keydown", handleToolShortcut);
-  }, []);
+  }, [openRightTool]);
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedGroup, setSelectedGroup] = useState("");
   const [nodeTypeFilter, setNodeTypeFilter] = useState<"all" | "structures" | "tasks" | "failed">("all");
@@ -1335,16 +1352,17 @@ export default function App() {
     }
 
     window.localStorage.removeItem(CURRENT_SESSION_STORAGE_KEY);
+    const targetProjectId = projectId ?? activeWorkspaceProjectId ?? activeProjectId ?? undefined;
     const response = await createChatSession({
       archive_session_id: activeChatSessionId ?? undefined,
-      project_id: projectId,
+      project_id: targetProjectId,
     });
     applyChatSnapshot(response.chat);
     setActiveWorkspaceProjectId(response.session?.project_id ?? response.active_project_id ?? null);
     setComposerResetVersion((current) => current + 1);
     setRightSidebarExpanded(false);
     await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-  }, [activeChatSessionId, applyChatSnapshot, hasPendingAgentStep, isChatBusy, queryClient, stopActiveChatTurn]);
+  }, [activeChatSessionId, activeProjectId, activeWorkspaceProjectId, applyChatSnapshot, hasPendingAgentStep, isChatBusy, queryClient, stopActiveChatTurn]);
 
   const handleActivateChatSession = useCallback(
     async (sessionId: string) => {
@@ -1469,8 +1487,6 @@ export default function App() {
         return;
       }
       setActiveWorkspaceProjectId(projectId);
-      setRightTool("files");
-      setRightSidebarExpanded(true);
     },
     [],
   );
@@ -1850,7 +1866,6 @@ export default function App() {
         }}
         onToggleRight={() => {
           setRightSidebarExpanded((current) => {
-            if (!current) setRightTool(null);
             window.localStorage.setItem("aris.sidebar.right", current ? "collapsed" : "expanded");
             return !current;
           });
@@ -1866,7 +1881,7 @@ export default function App() {
           <LeftChatSidebar
             projects={chatProjects}
             sessions={chatSessions}
-            activeProjectId={activeProjectId}
+            activeProjectId={selectedWorkspaceProject?.id ?? activeProjectId}
             activeSessionId={resolvedActiveChatSessionId}
             isBusy={isChatBusy}
             theme={theme}
@@ -1878,7 +1893,7 @@ export default function App() {
               return result.success ? result.path : null;
             }}
             onOpenProjectWorkspace={handleOpenProjectWorkspace}
-            onNewConversation={() => { void handleCreateChatSession(); }}
+            onNewConversation={(projectId) => { void handleCreateChatSession(projectId); }}
             expanded={leftSidebarExpanded}
             onExpandedChange={(expanded) => {
               setLeftSidebarExpanded(expanded);
@@ -1943,8 +1958,10 @@ export default function App() {
         rightSidebar={
           <RightToolSidebar
             expanded={rightSidebarExpanded}
+            openTools={rightToolTabs}
             activeTool={rightTool}
-            onToolChange={setRightTool}
+            onToolOpen={openRightTool}
+            onToolClose={closeRightTool}
             filesContent={<WorkspaceExplorerSidebar project={selectedWorkspaceProject} onOpenFile={handleOpenWorkspaceFile} />}
             aiidaContent={
               <ProjectDatabaseSidebar
@@ -1962,9 +1979,7 @@ export default function App() {
           <BottomStatusBar
             project={activeWorkspaceProject}
             onOpenTool={(tool) => {
-              setRightTool(tool);
-              setRightSidebarExpanded(true);
-              window.localStorage.setItem("aris.sidebar.right", "expanded");
+              openRightTool(tool);
             }}
             terminalOpen={bottomPanelExpanded}
             onToggleTerminal={() => {
