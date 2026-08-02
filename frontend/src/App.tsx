@@ -639,6 +639,9 @@ export default function App() {
   const [bottomPanelExpanded, setBottomPanelExpanded] = useState(
     () => window.localStorage.getItem("aris.panel.bottom") === "expanded",
   );
+  const [pinnedSummaryExpanded, setPinnedSummaryExpanded] = useState(
+    () => window.localStorage.getItem("aris.chat.pinned-summary") !== "closed",
+  );
   const openRightTool = useCallback((tool: RightTool) => {
     setRightToolTabs((current) => current.includes(tool) ? current : [...current, tool]);
     setRightTool(tool);
@@ -1876,6 +1879,14 @@ export default function App() {
             return !current;
           });
         }}
+        pinnedSummaryExpanded={pinnedSummaryExpanded}
+        showPinnedSummaryToggle={activeView === "CHAT"}
+        onTogglePinnedSummary={() => {
+          setPinnedSummaryExpanded((current) => {
+            window.localStorage.setItem("aris.chat.pinned-summary", current ? "closed" : "open");
+            return !current;
+          });
+        }}
         leftSidebar={
           <>
           <LeftChatSidebar
@@ -1916,6 +1927,11 @@ export default function App() {
                   models={models}
                   selectedModel={selectedModel}
                   composerResetVersion={composerResetVersion}
+                  pinnedSummaryOpen={pinnedSummaryExpanded}
+                  onClosePinnedSummary={() => {
+                    setPinnedSummaryExpanded(false);
+                    window.localStorage.setItem("aris.chat.pinned-summary", "closed");
+                  }}
                   currentSessionName={activeChatSession?.title ?? null}
                   isLoading={isChatBusy}
                   activeTurnId={activeTurnId}

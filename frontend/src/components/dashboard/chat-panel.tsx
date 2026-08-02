@@ -1,7 +1,9 @@
 import { aiidaClient } from "@/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Bot, ChevronDown, Code2, Copy, Cpu, Paperclip, Pin, PlugZap, RotateCcw, SlidersHorizontal, Square, X } from "lucide-react";
-import { type DragEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, Bot, ChevronDown, Code2, Copy, Cpu, FileOutput, Paperclip, Pin, PlugZap, RotateCcw, Square, X } from "lucide-react";
+import { Children, cloneElement, isValidElement, type DragEvent, type ReactElement, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import axios from "axios";
 
 import { ActionToolbar } from "@/components/dashboard/action-toolbar";
@@ -13,7 +15,6 @@ import {
   resolveSubmitDraftFromPreviewPayload,
 } from "@/components/dashboard/submission-modal";
 import { ThinkingIndicator, type ProcessLogEntry } from "@/components/dashboard/thinking-indicator";
-import { ScientificPlan } from "@/components/dashboard/scientific-plan";
 import { RunReview } from "@/components/dashboard/run-review";
 import { Button } from "@/components/ui/button";
 import { CommandPaletteSelect } from "@/components/ui/command-palette-select";
@@ -1153,6 +1154,95 @@ function renderTextWithSmartCitations(
   return nodes;
 }
 
+function renderMarkdownChildrenWithSmartCitations(
+  children: ReactNode,
+  handleOpenDetail: (pk: number) => void,
+  hoverMetadataByPk: Record<number, NodeHoverMetadataState>,
+  ensureHoverMetadata: (pk: number) => void,
+): ReactNode {
+  return Children.map(children, (child) => {
+    if (typeof child === "string") {
+      return renderTextWithSmartCitations(
+        child,
+        handleOpenDetail,
+        hoverMetadataByPk,
+        ensureHoverMetadata,
+      );
+    }
+    if (!isValidElement(child) || child.type === "code") {
+      return child;
+    }
+    const element = child as ReactElement<{ children?: ReactNode }>;
+    if (element.props.children === undefined) {
+      return child;
+    }
+    return cloneElement(element, {
+      children: renderMarkdownChildrenWithSmartCitations(
+        element.props.children,
+        handleOpenDetail,
+        hoverMetadataByPk,
+        ensureHoverMetadata,
+      ),
+    });
+  });
+}
+
+function buildAssistantMarkdownComponents(
+  handleOpenDetail: (pk: number) => void,
+  hoverMetadataByPk: Record<number, NodeHoverMetadataState>,
+  ensureHoverMetadata: (pk: number) => void,
+): Components {
+  const renderChildren = (children: ReactNode) =>
+    renderMarkdownChildrenWithSmartCitations(
+      children,
+      handleOpenDetail,
+      hoverMetadataByPk,
+      ensureHoverMetadata,
+    );
+
+  return {
+    h1: ({ children }) => <h1 className="mt-5 text-xl font-semibold tracking-tight first:mt-0">{renderChildren(children)}</h1>,
+    h2: ({ children }) => <h2 className="mt-5 text-lg font-semibold tracking-tight first:mt-0">{renderChildren(children)}</h2>,
+    h3: ({ children }) => <h3 className="mt-4 text-base font-semibold first:mt-0">{renderChildren(children)}</h3>,
+    h4: ({ children }) => <h4 className="mt-4 text-sm font-semibold first:mt-0">{renderChildren(children)}</h4>,
+    p: ({ children }) => <p className="my-2 whitespace-pre-wrap first:mt-0 last:mb-0">{renderChildren(children)}</p>,
+    ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
+    ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
+    li: ({ children }) => <li className="pl-1">{renderChildren(children)}</li>,
+    strong: ({ children }) => <strong className="font-semibold text-zinc-950 dark:text-white">{renderChildren(children)}</strong>,
+    em: ({ children }) => <em className="italic">{renderChildren(children)}</em>,
+    blockquote: ({ children }) => (
+      <blockquote className="my-3 border-l-2 border-zinc-300 pl-4 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
+        {renderChildren(children)}
+      </blockquote>
+    ),
+    code: ({ children }) => (
+      <code className="rounded-md bg-zinc-100 px-1.5 py-0.5 font-mono text-[0.9em] text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100">
+        {children}
+      </code>
+    ),
+    a: ({ children, href }) => (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+        className="text-sky-600 underline decoration-sky-400/60 underline-offset-2 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
+      >
+        {renderChildren(children)}
+      </a>
+    ),
+    hr: () => <hr className="my-4 border-zinc-200 dark:border-zinc-800" />,
+    table: ({ children }) => (
+      <div className="my-3 overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
+        <table className="w-full border-collapse text-left text-xs">{children}</table>
+      </div>
+    ),
+    thead: ({ children }) => <thead className="bg-zinc-100 dark:bg-zinc-800/80">{children}</thead>,
+    th: ({ children }) => <th className="border-b border-zinc-200 px-3 py-2 font-semibold dark:border-zinc-700">{renderChildren(children)}</th>,
+    td: ({ children }) => <td className="border-b border-zinc-100 px-3 py-2 align-top last:border-b-0 dark:border-zinc-800">{renderChildren(children)}</td>,
+  };
+}
+
 function parseAssistantContentBlocks(text: string): AssistantContentBlock[] {
   const normalizedText = normalizeAssistantScriptCodeFences(text);
   const blocks: AssistantContentBlock[] = [];
@@ -1199,6 +1289,11 @@ function renderAssistantMessageContent(
   ensureHoverMetadata: (pk: number) => void,
 ): ReactNode {
   const blocks = parseAssistantContentBlocks(text);
+  const markdownComponents = buildAssistantMarkdownComponents(
+    handleOpenDetail,
+    hoverMetadataByPk,
+    ensureHoverMetadata,
+  );
   return (
     <div className="space-y-3">
       {blocks.map((block, index) => {
@@ -1233,13 +1328,10 @@ function renderAssistantMessageContent(
         }
 
         return (
-          <div key={`assistant-block-${index}`} className="whitespace-pre-wrap">
-            {renderTextWithSmartCitations(
-              block.content,
-              handleOpenDetail,
-              hoverMetadataByPk,
-              ensureHoverMetadata,
-            )}
+          <div key={`assistant-block-${index}`} className="min-w-0">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+              {block.content}
+            </ReactMarkdown>
           </div>
         );
       })}
@@ -1290,6 +1382,8 @@ type ChatPanelProps = {
   models: string[];
   selectedModel: string;
   composerResetVersion: number;
+  pinnedSummaryOpen: boolean;
+  onClosePinnedSummary: () => void;
   currentSessionName: string | null;
   contextNodes: FocusNode[];
   pinnedNodes: FocusNode[];
@@ -1515,6 +1609,8 @@ export function ChatPanel({
   models,
   selectedModel,
   composerResetVersion,
+  pinnedSummaryOpen,
+  onClosePinnedSummary,
   currentSessionName,
   contextNodes,
   pinnedNodes,
@@ -1549,14 +1645,12 @@ export function ChatPanel({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
-  const capabilityMenuRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollRafRef = useRef<number | null>(null);
   const [draft, setDraft] = useState("");
   const [resourceAttachments, setResourceAttachments] = useState<ResourceAttachment[]>([]);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
-  const [isCapabilityMenuOpen, setIsCapabilityMenuOpen] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(true);
   const [dragOverZone, setDragOverZone] = useState<"textarea" | "attachment" | null>(null);
@@ -1750,9 +1844,6 @@ export function ChatPanel({
     const handleOutside = (event: MouseEvent) => {
       if (modelMenuRef.current && !modelMenuRef.current.contains(event.target as Node)) {
         setIsModelMenuOpen(false);
-      }
-      if (capabilityMenuRef.current && !capabilityMenuRef.current.contains(event.target as Node)) {
-        setIsCapabilityMenuOpen(false);
       }
     };
 
@@ -2357,7 +2448,6 @@ export function ChatPanel({
     setResourceAttachments([]);
     setDragOverZone(null);
     setSlashSelectionIndex(0);
-    setIsCapabilityMenuOpen(false);
     setIsModelMenuOpen(false);
     if (textareaRef.current) {
       textareaRef.current.style.height = "56px";
@@ -2365,20 +2455,102 @@ export function ChatPanel({
   }, [composerResetVersion]);
 
   return (
-    <Panel className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-x-hidden p-0">
+    <Panel className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-x-hidden p-0">
+      {pinnedSummaryOpen ? (
+        <aside className="absolute right-5 top-4 z-40 w-[min(380px,calc(100%-2.5rem))] overflow-hidden rounded-[24px] border border-zinc-200/90 bg-white/96 shadow-[0_18px_55px_rgba(0,0,0,0.14)] backdrop-blur-xl dark:border-zinc-700/90 dark:bg-zinc-900/96 dark:shadow-[0_22px_60px_rgba(0,0,0,0.48)]">
+          <div className="flex items-start justify-between gap-3 px-5 pb-3 pt-4">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                {pinnedResearchPlan?.title || currentSessionName || activeProject?.name || "Current research"}
+              </p>
+              <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">
+                {pinnedResearchPlan?.objective || "Sources, outputs, and available capabilities"}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+              onClick={onClosePinnedSummary}
+              aria-label="Close pinned summary"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="max-h-[min(70vh,620px)] space-y-4 overflow-y-auto border-t border-zinc-100 px-5 py-4 dark:border-zinc-800">
+            <section>
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 dark:text-zinc-400">
+                <FileOutput className="h-3.5 w-3.5" /> Outputs
+              </div>
+              {pinnedResearchPlan?.outputs.length ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {pinnedResearchPlan.outputs.map((output) => (
+                    <span key={output} className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                      {output}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-zinc-400">Outputs will appear as the research develops.</p>
+              )}
+            </section>
+
+            <section className="border-t border-zinc-100 pt-4 dark:border-zinc-800">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 dark:text-zinc-400">
+                <Pin className="h-3.5 w-3.5" /> Sources
+              </div>
+              {effectiveContextNodes.length > 0 || resourceAttachments.length > 0 ? (
+                <div className="mt-2 space-y-1">
+                  {effectiveContextNodes.map((node) => (
+                    <button
+                      key={`summary-node-${node.pk}`}
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                      onClick={() => onOpenDetail(node.pk)}
+                    >
+                      <span className="font-mono text-xs text-zinc-400">#{node.pk}</span>
+                      <span className="truncate">{node.formula || node.label}</span>
+                    </button>
+                  ))}
+                  {resourceAttachments.map((attachment) => (
+                    <div key={`summary-resource-${resourceAttachmentKey(attachment)}`} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-700 dark:text-zinc-200">
+                      <span aria-hidden>{resourceAttachmentIcon(attachment.kind)}</span>
+                      <span className="truncate">{attachment.label || attachment.value}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-zinc-400">Attach files or pin nodes to keep them here.</p>
+              )}
+            </section>
+
+            <section className="border-t border-zinc-100 pt-4 dark:border-zinc-800">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 dark:text-zinc-400">Capabilities</p>
+              <div className="mt-2">
+                <ActionToolbar
+                  actions={toolbarActions}
+                  activeSpecializations={activeSpecializations}
+                  isBusy={isLoading}
+                  onTriggerAction={handleToolbarAction}
+                />
+              </div>
+            </section>
+          </div>
+        </aside>
+      ) : null}
       <div className="min-h-0 flex flex-1 flex-col xl:flex-row">
         <div className="min-h-0 flex flex-1 flex-col">
-          {pinnedResearchPlan ? <ScientificPlan plan={pinnedResearchPlan} /> : null}
           <div
             ref={messagesContainerRef}
-            className="minimal-scrollbar min-h-0 flex-1 space-y-5 overflow-x-hidden overflow-y-auto px-5 pb-6 pt-5 md:px-8"
+            className="minimal-scrollbar min-h-0 flex-1 space-y-5 overflow-x-hidden overflow-y-auto px-4 pb-6 pt-5 md:px-6"
             onScroll={() => {
               const nearBottom = isNearBottom();
               setIsAutoScrollEnabled((current) => (current === nearBottom ? current : nearBottom));
             }}
           >
+            <div className="mx-auto min-h-full w-full max-w-4xl">
             {turns.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center text-center">
+              <div className="flex min-h-full flex-col items-center justify-center text-center">
                 <p className="text-3xl font-medium tracking-tight text-zinc-900 dark:text-zinc-100">
                   Ask ARIS about your AiiDA workflow
                 </p>
@@ -2513,7 +2685,7 @@ export function ChatPanel({
                       />
                     )}
 
-                    <div className="min-w-0 max-w-[86%] space-y-2">
+                    <div className="min-w-0 flex-1 space-y-2">
                       {showThinking ? (
                         <ThinkingIndicator
                           currentStep={turnCurrentStep || null}
@@ -2600,7 +2772,7 @@ export function ChatPanel({
                   </div>
                 ) : null}
                 {submittedPreview ? (
-                  <div className="ml-10 max-w-[86%] border-t border-emerald-200/80 px-0 py-2 text-sm text-emerald-800 dark:border-emerald-900/50 dark:text-emerald-200">
+                  <div className="ml-10 border-t border-emerald-200/80 px-0 py-2 text-sm text-emerald-800 dark:border-emerald-900/50 dark:text-emerald-200">
                     <p className="font-medium">
                       {"🚀"} Job Submitted: {submittedPreview.processLabel}{" "}
                       {submittedPreview.processPks.length > 0 ? `(${submittedPreview.processPks.length} jobs)` : "(PK pending)"}
@@ -2629,6 +2801,7 @@ export function ChatPanel({
               })
             )}
             <div ref={messagesEndRef} className="h-2" aria-hidden />
+            </div>
           </div>
 
           <div className="bg-gradient-to-t from-white via-white/95 to-transparent px-4 pb-5 pt-5 dark:from-zinc-950 dark:via-zinc-950/95 md:px-6">
@@ -2812,34 +2985,6 @@ export function ChatPanel({
                         event.target.value = "";
                       }}
                     />
-                    <div ref={capabilityMenuRef} className="relative">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className={cn(
-                          "h-9 w-9 rounded-full border-0 bg-transparent text-zinc-600 shadow-none hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800",
-                          isCapabilityMenuOpen && "bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-white",
-                        )}
-                        onClick={() => setIsCapabilityMenuOpen((open) => !open)}
-                        aria-label="Open capabilities"
-                        title="Capabilities"
-                      >
-                        <SlidersHorizontal className="h-4 w-4" />
-                      </Button>
-                      {isCapabilityMenuOpen ? (
-                        <div className="absolute bottom-full left-0 z-30 mb-3 w-[min(430px,calc(100vw-3rem))] rounded-2xl border border-zinc-200/90 bg-white p-4 shadow-[0_18px_50px_rgba(0,0,0,0.16)] dark:border-zinc-700 dark:bg-zinc-900 dark:shadow-[0_20px_55px_rgba(0,0,0,0.5)]">
-                          <ActionToolbar
-                            actions={toolbarActions}
-                            activeSpecializations={activeSpecializations}
-                            isBusy={isLoading}
-                            onTriggerAction={(action) => {
-                              handleToolbarAction(action);
-                              setIsCapabilityMenuOpen(false);
-                            }}
-                          />
-                        </div>
-                      ) : null}
-                    </div>
               </div>
 
               <div

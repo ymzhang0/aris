@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { PanelBottom, PanelLeft, PanelRight } from "lucide-react";
+import { ListFilter, PanelBottom, PanelLeft, PanelRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -15,6 +15,9 @@ type AppShellProps = {
   onToggleLeft: () => void;
   onToggleRight: () => void;
   onToggleBottom: () => void;
+  pinnedSummaryExpanded: boolean;
+  showPinnedSummaryToggle: boolean;
+  onTogglePinnedSummary: () => void;
 };
 
 const toolbarButton =
@@ -41,6 +44,17 @@ export function AppShell(props: AppShellProps) {
           </button>
         </div>
         <div className="window-right-controls absolute flex items-center justify-end gap-1">
+          {props.showPinnedSummaryToggle ? (
+            <button
+              className={cn(toolbarButton, props.pinnedSummaryExpanded && "bg-zinc-100 text-zinc-950 dark:bg-zinc-900 dark:text-white")}
+              onClick={props.onTogglePinnedSummary}
+              title="Toggle pinned summary"
+              aria-label="Toggle pinned summary"
+              aria-pressed={props.pinnedSummaryExpanded}
+            >
+              <ListFilter className="h-[18px] w-[18px]" />
+            </button>
+          ) : null}
           <button className={cn(toolbarButton, props.bottomExpanded && "bg-zinc-100 dark:bg-zinc-900")} onClick={props.onToggleBottom} title="Toggle bottom panel" aria-label="Toggle bottom panel">
             <PanelBottom className="h-[18px] w-[18px]" />
           </button>
