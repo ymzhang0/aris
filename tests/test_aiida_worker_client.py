@@ -10,6 +10,8 @@ from src.aris_apps.aiida.client import (
     aiida_worker_client,
     build_worker_context,
     get_aiida_worker_client,
+    import_worker_data,
+    optional_worker_call,
 )
 from src.aris_core.runtime import WorkerProcessError
 
@@ -97,6 +99,48 @@ async def test_worker_domain_error_preserves_status_and_payload(monkeypatch: pyt
 
 
 @pytest.mark.anyio
+async def test_optional_worker_call_only_suppresses_optional_rpc_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def missing(*_args, **_kwargs):
+        raise WorkerRPCError(404, "Node not found", {"pk": 99})
+
+    monkeypatch.setattr("src.aris_apps.aiida.client.worker_call", missing)
+
+    assert await optional_worker_call("node.summary", {"pk": 99}) is None
+
+
+@pytest.mark.anyio
+async def test_import_worker_data_encodes_file_for_json_rpc(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def capture(method, params=None, **kwargs):
+        captured.update({"method": method, "params": params, **kwargs})
+        return {"pk": 42}
+
+    monkeypatch.setattr("src.aris_apps.aiida.client.worker_call", capture)
+
+    result = await import_worker_data(
+        data_type="structure",
+        source_type="file",
+        label="Silicon",
+        filename="si.cif",
+        file_content=b"data_Si",
+    )
+
+    assert result == {"pk": 42}
+    assert captured == {
+        "method": "data.import",
+        "params": {
+            "data_type": "structure",
+            "source_type": "file",
+            "label": "Silicon",
+            "filename": "si.cif",
+            "content_base64": base64.b64encode(b"data_Si").decode("ascii"),
+        },
+        "timeout": 30.0,
+    }
+
+
+@pytest.mark.anyio
 async def test_status_refresh_uses_managed_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     worker = _ManagedWorker(
         {
@@ -118,4 +162,3 @@ async def test_status_refresh_uses_managed_runtime(monkeypatch: pytest.MonkeyPat
     assert snapshot.profile == "dev"
     assert snapshot.resources.codes == 2
     assert worker.calls[0][0] == "runtime.status"
-

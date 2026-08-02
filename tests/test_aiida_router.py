@@ -1322,21 +1322,21 @@ async def test_build_process_diagnostics_prefers_repository_stdout(monkeypatch: 
             },
         }
 
-    async def _fake_request_optional_json(method: str, path: str, **_: object) -> dict[str, object] | None:
-        if path == "/process/77/logs":
+    async def _fake_optional_worker_call(method: str, params: dict[str, object], **_: object) -> dict[str, object] | None:
+        if method == "process.logs" and params == {"identifier": 77}:
             return {
                 "lines": ["report line 1", "report line 2"],
                 "stderr_excerpt": "scheduler stderr tail",
                 "text": "report line 1\nreport line 2",
             }
-        if path == "/data/repository/900/files":
+        if method == "data.repository_files" and params == {"pk": 900, "source": "folder"}:
             return {"files": ["aiida.out", "scheduler.stderr"]}
-        if path == "/data/repository/900/files/aiida.out":
+        if method == "data.repository_file" and params == {"pk": 900, "filename": "aiida.out", "source": "folder"}:
             return {"content": "line 1\nline 2\nline 3"}
-        raise AssertionError(f"Unexpected path: {path}")
+        raise AssertionError(f"Unexpected worker call: {method} {params}")
 
     monkeypatch.setattr(frontend_router, "_fetch_process_detail_payload", _fake_fetch_process_detail_payload)
-    monkeypatch.setattr(frontend_router, "_request_optional_json", _fake_request_optional_json)
+    monkeypatch.setattr(frontend_router, "optional_worker_call", _fake_optional_worker_call)
 
     response = await frontend_router._build_process_diagnostics(77)
 

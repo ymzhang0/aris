@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import quote
-
 from src.aris_apps.aiida.client import (
     WorkerBinaryResponse,
     WorkerRPCError,
@@ -134,9 +132,8 @@ def inspect_group(group_label: str, *, limit: int = 500) -> dict[str, Any] | Non
 
     try:
         payload = worker_call_sync(
-            "GET",
-            f"/management/groups/{quote(cleaned_label, safe='')}",
-            params={"limit": max(1, int(limit))},
+            "group.inspect",
+            {"group_name": cleaned_label, "limit": max(1, int(limit))},
             timeout=8.0,
         )
     except (WorkerOfflineError, WorkerRPCError):
@@ -162,21 +159,19 @@ def rename_group(pk: int, label: str) -> dict[str, Any]:
 def add_nodes_to_group(pk: int, node_pks: list[int]) -> dict[str, Any]:
     ids = [int(raw_pk) for raw_pk in node_pks if isinstance(raw_pk, int) or str(raw_pk).isdigit()]
     return worker_call_sync(
-        "POST",
-        f"/management/groups/{int(pk)}/nodes",
-        json={"node_pks": ids[:200]},
+        "group.add_nodes",
+        {"pk": int(pk), "node_pks": ids[:200]},
         timeout=10.0,
     )
 
 
 def export_group_archive(pk: int) -> WorkerBinaryResponse:
-    return request_content_sync("GET", f"/management/groups/{int(pk)}/export", timeout=120.0)
+    return request_content_sync("group.export_archive", {"pk": int(pk)}, timeout=120.0)
 
 
 def soft_delete_node(pk: int, *, deleted: bool = True) -> dict[str, Any]:
     return worker_call_sync(
-        "POST",
-        f"/management/nodes/{int(pk)}/soft-delete",
-        json={"deleted": bool(deleted)},
+        "node.soft_delete",
+        {"pk": int(pk), "deleted": bool(deleted)},
         timeout=8.0,
     )

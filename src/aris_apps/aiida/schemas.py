@@ -159,7 +159,7 @@ class WorkerResourcesResponse(BaseModel):
     codes: list[CodeResourceResponse] = Field(default_factory=list)
 
 
-class BridgeProfileResponse(BaseModel):
+class WorkerProfileResponse(BaseModel):
     name: str
     is_default: bool = False
     is_active: bool = False
@@ -168,10 +168,10 @@ class BridgeProfileResponse(BaseModel):
 class WorkerProfilesResponse(BaseModel):
     current_profile: str | None = None
     default_profile: str | None = None
-    profiles: list[BridgeProfileResponse] = Field(default_factory=list)
+    profiles: list[WorkerProfileResponse] = Field(default_factory=list)
 
 
-class BridgeSwitchProfileRequest(BaseModel):
+class WorkerSwitchProfileRequest(BaseModel):
     profile: str = Field(..., min_length=1)
 
 

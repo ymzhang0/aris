@@ -202,8 +202,8 @@ class AiiDAWorkerClient:
         self._logged_first_handshake = False
 
     @property
-    def bridge_url(self) -> str:
-        return self._bridge_url
+    def transport_endpoint(self) -> str:
+        return "stdio://managed-aiida-worker"
 
     @property
     def is_connected(self) -> bool:
@@ -262,7 +262,15 @@ class AiiDAWorkerClient:
             payload=exc.payload,
         )
 
-
+    def request_content_sync(
+        self,
+        method: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        context: Mapping[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> WorkerBinaryResponse:
+        payload = self.call_sync(method, params=params, context=context, timeout=timeout)
         if not isinstance(payload, dict):
             raise WorkerRPCError(500, "Invalid binary response", {"error": "Worker result must be an object"})
         encoded = payload.get("content_base64")
@@ -343,7 +351,7 @@ class AiiDAWorkerClient:
             if not isinstance(system_payload, dict) or not isinstance(resources_payload, dict):
                 raise WorkerRPCError(
                     status_code=0,
-                    message="Bridge returned invalid infrastructure payload",
+                    message="Worker returned invalid infrastructure payload",
                     payload={"system": system_payload, "resources": resources_payload},
                 )
 
@@ -725,8 +733,8 @@ def get_aiida_worker_client() -> AiiDAWorkerClient:
 aiida_worker_client = get_aiida_worker_client()
 
 
-def bridge_url() -> str:
-    return aiida_worker_client.bridge_url
+def transport_endpoint() -> str:
+    return aiida_worker_client.transport_endpoint
 
 
 def set_worker_call_listener(
@@ -752,64 +760,91 @@ def reset_worker_request_context(token: contextvars.Token[dict[str, str] | None]
 
 async def worker_call(
     method: str,
-    path: str,
-    *,
     params: Mapping[str, Any] | None = None,
-    json: Mapping[str, Any] | None = None,
+    *,
     context: Mapping[str, Any] | None = None,
     timeout: float = 10.0,
-    retries: int | None = None,
 ) -> Any:
-    return await aiida_worker_client.worker_call(
+    return await aiida_worker_client.call(
         method,
-        path,
         params=params,
-        json=json,
         context=context,
         timeout=timeout,
-        retries=retries,
     )
+
+
+async def optional_worker_call(
+    method: str,
+    params: Mapping[str, Any] | None = None,
+    *,
+    context: Mapping[str, Any] | None = None,
+    timeout: float = 10.0,
+) -> Any | None:
+    """Return ``None`` when an optional worker resource is unavailable."""
+    try:
+        return await worker_call(method, params, context=context, timeout=timeout)
+    except WorkerRPCError as error:
+        if int(error.status_code or 0) in {400, 404, 422, 501}:
+            return None
+        raise
+
+
+async def import_worker_data(
+    *,
+    data_type: str,
+    source_type: str,
+    label: str | None = None,
+    description: str | None = None,
+    raw_text: str | None = None,
+    filename: str | None = None,
+    file_content: bytes | None = None,
+    timeout: float = 30.0,
+) -> Any:
+    """Import data through the managed worker's JSON-RPC protocol."""
+    params: dict[str, Any] = {
+        "data_type": data_type,
+        "source_type": source_type,
+    }
+    for key, value in {
+        "label": label,
+        "description": description,
+        "raw_text": raw_text,
+        "filename": filename,
+    }.items():
+        if value is not None:
+            params[key] = value
+    if file_content is not None:
+        params["content_base64"] = base64.b64encode(file_content).decode("ascii")
+    return await worker_call("data.import", params, timeout=timeout)
 
 
 def worker_call_sync(
     method: str,
-    path: str,
-    *,
     params: Mapping[str, Any] | None = None,
-    json: Mapping[str, Any] | None = None,
+    *,
     context: Mapping[str, Any] | None = None,
     timeout: float = 10.0,
-    retries: int | None = None,
 ) -> Any:
-    return aiida_worker_client.worker_call_sync(
+    return aiida_worker_client.call_sync(
         method,
-        path,
         params=params,
-        json=json,
         context=context,
         timeout=timeout,
-        retries=retries,
     )
 
 
 def request_content_sync(
     method: str,
-    path: str,
-    *,
     params: Mapping[str, Any] | None = None,
-    json: Mapping[str, Any] | None = None,
+    *,
     context: Mapping[str, Any] | None = None,
     timeout: float = 10.0,
-    retries: int | None = None,
 ) -> WorkerBinaryResponse:
     return aiida_worker_client.request_content_sync(
         method,
-        path,
         params=params,
-        json=json,
         context=context,
         timeout=timeout,
-        retries=retries,
     )
 
 
@@ -826,7 +861,6 @@ def format_bridge_error(exc: Exception) -> dict[str, Any]:
 
 
 __all__ = [
-    "DEFAULT_BRIDGE_URL",
     "OFFLINE_WORKER_MESSAGE",
     "WorkerRPCError",
     "WorkerCallListener",
@@ -837,10 +871,15 @@ __all__ = [
     "AiiDAWorkerClient",
     "get_aiida_worker_client",
     "aiida_worker_client",
-    "bridge_url",
+    "transport_endpoint",
     "set_worker_call_listener",
     "reset_worker_call_listener",
-    "request_json",
-    "request_json_sync",
+    "worker_call",
+    "optional_worker_call",
+    "import_worker_data",
+    "worker_call_sync",
+    "set_worker_request_context",
+    "reset_worker_request_context",
+    "request_content_sync",
     "format_bridge_error",
 ]

@@ -163,7 +163,7 @@ async def test_managed_aiida_capability_delegates_to_worker_client() -> None:
     snapshot = SimpleNamespace(status="online")
 
     class FakeClient:
-        bridge_url = "http://worker.test"
+        transport_endpoint = "stdio://worker.test"
 
         def __init__(self) -> None:
             self.requests = []
@@ -186,10 +186,6 @@ async def test_managed_aiida_capability_delegates_to_worker_client() -> None:
         async def get_system_info(self):
             return {"version": "2.7"}
 
-        async def worker_call(self, method, path, **kwargs):
-            self.requests.append((method, path, kwargs))
-            return {"method": method, "path": path, **kwargs}
-
         async def call(self, method, params=None, **kwargs):
             self.requests.append((method, params, kwargs))
             return {"method": method, "params": params, **kwargs}
@@ -197,7 +193,7 @@ async def test_managed_aiida_capability_delegates_to_worker_client() -> None:
     client = FakeClient()
     capability = ManagedAiiDACapability(client)  # type: ignore[arg-type]
 
-    assert capability.bridge_url == "http://worker.test"
+    assert capability.transport_endpoint == "stdio://worker.test"
     assert await capability.get_status() is snapshot
     assert await capability.get_plugins() == ["plugin"]
     assert await capability.get_resources() == {"computers": []}
@@ -205,8 +201,8 @@ async def test_managed_aiida_capability_delegates_to_worker_client() -> None:
     assert await capability.switch_profile("research") == {"current_profile": "research"}
     assert await capability.get_system_info() == {"version": "2.7"}
     assert await capability.inspect_process("12") == {
-        "method": "GET",
-        "path": "/process/12",
+        "method": "process.detail",
+        "params": {"identifier": "12"},
     }
     assert await capability.get_submission_spec("quantumespresso.pw.base") == {
         "method": "submission.spec",

@@ -32,7 +32,6 @@ from src.aris_core.schema.ui_event import (
     build_ag_ui_state_snapshot,
 )
 from .management import _fetch_scheduler_snapshot
-from .process import _request_optional_json
 from .process import _fetch_process_detail_payload
 
 from ..chat import (
@@ -69,7 +68,9 @@ from ..client import (
     WorkerOfflineError,
     aiida_worker_client,
     build_worker_context,
+    import_worker_data,
     reset_worker_request_context,
+    optional_worker_call,
     worker_call,
     set_worker_request_context,
 )
@@ -125,7 +126,7 @@ from ..schemas import (
     WorkerSystemInfoResponse,
     WorkerResourcesResponse,
     WorkerProfilesResponse,
-    BridgeSwitchProfileRequest,
+    WorkerSwitchProfileRequest,
     WorkerSwitchProfileResponse,
     FrontendGroupCreateRequest,
     FrontendGroupRenameRequest,
@@ -314,7 +315,7 @@ async def _get_frontend_nodes_async(
         params["group_label"] = group_label
     if node_type:
         params["node_type"] = node_type
-    payload = await aiida_worker_client.worker_call("node.recent", params)
+    payload = await aiida_worker_client.call("node.recent", params)
     return payload.get("items", []) if isinstance(payload, dict) else []
 
 
@@ -650,7 +651,7 @@ async def _run_worker_json_script(script: str, *, timeout: float = 90.0) -> dict
         raise RuntimeError("Worker default environment did not expose a python interpreter path")
 
     payload = await asyncio.wait_for(
-        worker_call("process.run_python", {
+        worker_call("execution.run_python", {
                 "script_content": script,
                 "python_interpreter_path": python_interpreter_path,
             },
@@ -664,9 +665,8 @@ async def _run_worker_json_script(script: str, *, timeout: float = 90.0) -> dict
 async def _run_contextual_worker_json_script(script: str, *, timeout: float = 90.0) -> dict[str, Any] | None:
     payload = await asyncio.wait_for(
         worker_call(
-            "POST",
-            "/management/run-python",
-            json={"script_content": script},
+            "execution.run_python",
+            {"script_content": script},
             timeout=timeout,
         ),
         timeout=max(timeout + 0.5, 1.0),
@@ -859,7 +859,7 @@ def _pick_candidate_filename(files: list[str], *, stderr: bool = False) -> str |
 
 
 async def _fetch_repository_excerpt(node_pk: int) -> ProcessDiagnosticsExcerpt:
-    listing = await _request_optional_json("GET", f"/data/repository/{node_pk}/files", params={"source": "folder"})
+    listing = await optional_worker_call("data.repository_files", {"pk": node_pk, "source": "folder"})
     files = []
     if isinstance(listing, dict):
         raw_files = listing.get("files")
@@ -868,10 +868,9 @@ async def _fetch_repository_excerpt(node_pk: int) -> ProcessDiagnosticsExcerpt:
     filename = _pick_candidate_filename(files)
     if not filename:
         return ProcessDiagnosticsExcerpt(source="repository")
-    content = await _request_optional_json(
-        "GET",
-        f"/data/repository/{node_pk}/files/{filename}",
-        params={"source": "folder"},
+    content = await optional_worker_call(
+        "data.repository_file",
+        {"pk": node_pk, "filename": filename, "source": "folder"},
         timeout=20.0,
     )
     text = None
@@ -886,7 +885,7 @@ async def _fetch_repository_excerpt(node_pk: int) -> ProcessDiagnosticsExcerpt:
 
 
 async def _fetch_remote_excerpt(node_pk: int) -> ProcessDiagnosticsExcerpt:
-    listing = await _request_optional_json("GET", f"/data/remote/{node_pk}/files")
+    listing = await optional_worker_call("data.remote_files", {"pk": node_pk})
     files = []
     if isinstance(listing, dict):
         raw_files = listing.get("files")
@@ -895,9 +894,9 @@ async def _fetch_remote_excerpt(node_pk: int) -> ProcessDiagnosticsExcerpt:
     filename = _pick_candidate_filename(files)
     if not filename:
         return ProcessDiagnosticsExcerpt(source="remote")
-    content = await _request_optional_json(
-        "GET",
-        f"/data/remote/{node_pk}/files/{filename}",
+    content = await optional_worker_call(
+        "data.remote_file",
+        {"pk": node_pk, "filename": filename},
         timeout=20.0,
     )
     text = None
@@ -952,7 +951,7 @@ async def _build_process_diagnostics(identifier: str | int) -> ProcessDiagnostic
     computer_label = _extract_computer_label(detail)
     is_calcjob = "calcjob" in _normalize_process_state_value(node_type or process_label)
 
-    logs_payload = await _request_optional_json("GET", f"/process/{identifier}/logs")
+    logs_payload = await optional_worker_call("process.logs", {"identifier": identifier})
     stdout_excerpt = ProcessDiagnosticsExcerpt()
     retrieved_link = _select_process_output_link(detail, preferred_labels=("retrieved",), node_types=("FolderData",))
     remote_link = _select_process_output_link(detail, preferred_labels=("remote_folder",), node_types=("RemoteData",))
@@ -1144,7 +1143,7 @@ async def get_worker_status() -> WorkerStatusResponse:
         snapshot = await aiida_capability.get_status()
         return WorkerStatusResponse(
             status=snapshot.status,
-            url=snapshot.url,
+            url=aiida_capability.transport_endpoint,
             environment=snapshot.environment,
             transport="stdio",
             worker_mode=snapshot.mode,
@@ -1162,7 +1161,7 @@ async def get_worker_status() -> WorkerStatusResponse:
         logger.warning(log_event("aiida.worker.status.failed", error=error_message))
         return WorkerStatusResponse(
             status="offline",
-            url=aiida_capability.bridge_url,
+            url=aiida_capability.transport_endpoint,
             environment="Managed AiiDA runtime",
             transport="stdio",
             worker_mode=None,
@@ -1226,7 +1225,7 @@ async def get_bridge_profiles() -> WorkerProfilesResponse:
 
 @router.post("/profiles/switch", response_model=WorkerSwitchProfileResponse, tags=[WORKER_PROXY_TAG])
 async def switch_bridge_profile(
-    payload: BridgeSwitchProfileRequest,
+    payload: WorkerSwitchProfileRequest,
     _authorization: AuthorizationDecision = Depends(
         require_permission("/aris/profiles/current", "switch")
     ),
@@ -1324,9 +1323,8 @@ async def frontend_environment_inspect(payload: EnvironmentInspectRequest):
 
     try:
         raw = await worker_call(
-            "POST",
-            "/management/environments/inspect",
-            json={
+            "environment.inspect",
+            {
                 "python_interpreter_path": python_path,
                 "force_refresh": False,
             },
@@ -1367,9 +1365,8 @@ async def worker_repository_file_content(
 ):
     try:
         return await worker_call(
-            "GET",
-            f"/data/repository/{int(pk)}/files/{filename}",
-            params={"source": source},
+            "data.repository_file",
+            {"pk": int(pk), "filename": filename, "source": source},
         )
     except Exception as exc:  # noqa: BLE001
         _raise_worker_http_error(exc)
@@ -1423,26 +1420,21 @@ async def proxy_import_data(
     file: UploadFile | None = File(None),
 ):
     """Proxy data import to aiida-worker."""
-    files = {}
+    file_content = None
+    filename = None
     if file:
         file_content = await file.read()
-        files = {"file": (file.filename, file_content, file.content_type)}
-
-    data = {
-        "source_type": source_type,
-        "label": label,
-        "description": description,
-        "raw_text": raw_text,
-    }
-    # Filter out None values
-    data = {k: v for k, v in data.items() if v is not None}
+        filename = file.filename
 
     try:
-        return await aiida_worker_client.request_multipart(
-            "POST",
-            f"/data/import/{data_type}",
-            files=files,
-            data=data,
+        return await import_worker_data(
+            data_type=data_type,
+            source_type=source_type,
+            label=label,
+            description=description,
+            raw_text=raw_text,
+            filename=filename,
+            file_content=file_content,
         )
     except Exception as exc:
         _raise_worker_http_error(exc)

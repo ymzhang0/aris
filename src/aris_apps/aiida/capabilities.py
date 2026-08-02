@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
-from urllib.parse import quote
 
 from src.aris_apps.aiida.client import AiiDAWorkerClient, WorkerSnapshot, aiida_worker_client
 
@@ -13,7 +12,7 @@ class AiiDACapability(Protocol):
     """Deterministic AiiDA operations consumed by the ARIS application."""
 
     @property
-    def bridge_url(self) -> str: ...
+    def transport_endpoint(self) -> str: ...
 
     async def get_status(self) -> WorkerSnapshot: ...
 
@@ -88,8 +87,8 @@ class ManagedAiiDACapability:
         self._client = client
 
     @property
-    def bridge_url(self) -> str:
-        return self._client.bridge_url
+    def transport_endpoint(self) -> str:
+        return self._client.transport_endpoint
 
     async def get_status(self) -> WorkerSnapshot:
         return await self._client.get_status()
@@ -114,28 +113,18 @@ class ManagedAiiDACapability:
         *,
         limit: int = 20,
     ) -> dict[str, Any]:
-        payload = await self._client.worker_call(
-            "GET",
-            "/management/recent-processes",
-            params={"limit": int(limit)},
-        )
+        payload = await self._client.call("process.recent", {"limit": int(limit)})
         return payload if isinstance(payload, dict) else {"processes": []}
 
     async def inspect_process(self, identifier: str) -> dict[str, Any]:
         cleaned = str(identifier or "").strip()
         if not cleaned:
             raise ValueError("Process identifier is required")
-        payload = await self._client.worker_call(
-            "GET",
-            f"/process/{quote(cleaned, safe='')}",
-        )
+        payload = await self._client.call("process.detail", {"identifier": cleaned})
         return payload if isinstance(payload, dict) else {}
 
     async def get_process_logs(self, pk: int) -> dict[str, Any]:
-        payload = await self._client.worker_call(
-            "GET",
-            f"/process/{int(pk)}/logs",
-        )
+        payload = await self._client.call("process.logs", {"identifier": int(pk)})
         return payload if isinstance(payload, dict) else {"logs": []}
 
     async def list_recent_nodes(
@@ -148,11 +137,7 @@ class ManagedAiiDACapability:
         cleaned_node_type = str(node_type or "").strip()
         if cleaned_node_type:
             params["node_type"] = cleaned_node_type
-        payload = await self._client.worker_call(
-            "GET",
-            "/management/recent-nodes",
-            params=params,
-        )
+        payload = await self._client.call("node.recent", params)
         return payload if isinstance(payload, dict) else {"nodes": []}
 
     async def list_submission_plugins(self) -> dict[str, Any]:

@@ -94,9 +94,8 @@ class AiiDAHub:
 
         try:
             payload = worker_call_sync(
-                "POST",
-                "/management/profiles/switch",
-                json={"profile": cleaned},
+                "profile.switch",
+                {"profile": cleaned},
                 timeout=8.0,
             )
         except (WorkerOfflineError, WorkerRPCError) as exc:
@@ -123,9 +122,8 @@ class AiiDAHub:
 
         try:
             payload = worker_call_sync(
-                "POST",
-                "/management/profiles/load-archive",
-                json={"path": str(archive_path)},
+                "profile.load_archive",
+                {"path": str(archive_path)},
                 timeout=15.0,
             )
         except Exception as exc:  # noqa: BLE001

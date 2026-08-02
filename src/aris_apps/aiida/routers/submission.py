@@ -67,7 +67,9 @@ from ..client import (
     WorkerOfflineError,
     aiida_worker_client,
     build_worker_context,
+    import_worker_data,
     reset_worker_request_context,
+    optional_worker_call,
     worker_call,
     set_worker_request_context,
 )
@@ -124,7 +126,7 @@ from ..schemas import (
     WorkerSystemInfoResponse,
     WorkerResourcesResponse,
     WorkerProfilesResponse,
-    BridgeSwitchProfileRequest,
+    WorkerSwitchProfileRequest,
     WorkerSwitchProfileResponse,
     FrontendGroupCreateRequest,
     FrontendGroupRenameRequest,
@@ -796,7 +798,7 @@ def _pick_candidate_filename(files: list[str], *, stderr: bool = False) -> str |
 
 
 async def _fetch_repository_excerpt(node_pk: int) -> ProcessDiagnosticsExcerpt:
-    listing = await _request_optional_json("GET", f"/data/repository/{node_pk}/files", params={"source": "folder"})
+    listing = await optional_worker_call("data.repository_files", {"pk": node_pk, "source": "folder"})
     files = []
     if isinstance(listing, dict):
         raw_files = listing.get("files")
@@ -805,10 +807,9 @@ async def _fetch_repository_excerpt(node_pk: int) -> ProcessDiagnosticsExcerpt:
     filename = _pick_candidate_filename(files)
     if not filename:
         return ProcessDiagnosticsExcerpt(source="repository")
-    content = await _request_optional_json(
-        "GET",
-        f"/data/repository/{node_pk}/files/{filename}",
-        params={"source": "folder"},
+    content = await optional_worker_call(
+        "data.repository_file",
+        {"pk": node_pk, "filename": filename, "source": "folder"},
         timeout=20.0,
     )
     text = None
@@ -823,7 +824,7 @@ async def _fetch_repository_excerpt(node_pk: int) -> ProcessDiagnosticsExcerpt:
 
 
 async def _fetch_remote_excerpt(node_pk: int) -> ProcessDiagnosticsExcerpt:
-    listing = await _request_optional_json("GET", f"/data/remote/{node_pk}/files")
+    listing = await optional_worker_call("data.remote_files", {"pk": node_pk})
     files = []
     if isinstance(listing, dict):
         raw_files = listing.get("files")
@@ -832,9 +833,9 @@ async def _fetch_remote_excerpt(node_pk: int) -> ProcessDiagnosticsExcerpt:
     filename = _pick_candidate_filename(files)
     if not filename:
         return ProcessDiagnosticsExcerpt(source="remote")
-    content = await _request_optional_json(
-        "GET",
-        f"/data/remote/{node_pk}/files/{filename}",
+    content = await optional_worker_call(
+        "data.remote_file",
+        {"pk": node_pk, "filename": filename},
         timeout=20.0,
     )
     text = None
@@ -1008,7 +1009,7 @@ async def get_worker_status() -> WorkerStatusResponse:
         snapshot = await aiida_capability.get_status()
         return WorkerStatusResponse(
             status=snapshot.status,
-            url=snapshot.url,
+            url=aiida_capability.transport_endpoint,
             environment=snapshot.environment,
             transport="stdio",
             worker_mode=snapshot.mode,
@@ -1026,7 +1027,7 @@ async def get_worker_status() -> WorkerStatusResponse:
         logger.warning(log_event("aiida.worker.status.failed", error=error_message))
         return WorkerStatusResponse(
             status="offline",
-            url=aiida_capability.bridge_url,
+            url=aiida_capability.transport_endpoint,
             environment="Managed AiiDA runtime",
             transport="stdio",
             worker_mode=None,
@@ -1090,7 +1091,7 @@ async def get_bridge_profiles() -> WorkerProfilesResponse:
 
 @router.post("/profiles/switch", response_model=WorkerSwitchProfileResponse, tags=[WORKER_PROXY_TAG])
 async def switch_bridge_profile(
-    payload: BridgeSwitchProfileRequest,
+    payload: WorkerSwitchProfileRequest,
     _authorization: AuthorizationDecision = Depends(
         require_permission("/aris/profiles/current", "switch")
     ),
@@ -1316,9 +1317,8 @@ async def frontend_environment_inspect(payload: EnvironmentInspectRequest):
 
     try:
         raw = await worker_call(
-            "POST",
-            "/management/environments/inspect",
-            json={
+            "environment.inspect",
+            {
                 "python_interpreter_path": python_path,
                 "force_refresh": False,
             },
@@ -1359,9 +1359,8 @@ async def worker_repository_file_content(
 ):
     try:
         return await worker_call(
-            "GET",
-            f"/data/repository/{int(pk)}/files/{filename}",
-            params={"source": source},
+            "data.repository_file",
+            {"pk": int(pk), "filename": filename, "source": source},
         )
     except Exception as exc:  # noqa: BLE001
         _raise_worker_http_error(exc)
@@ -1415,26 +1414,21 @@ async def proxy_import_data(
     file: UploadFile | None = File(None),
 ):
     """Proxy data import to aiida-worker."""
-    files = {}
+    file_content = None
+    filename = None
     if file:
         file_content = await file.read()
-        files = {"file": (file.filename, file_content, file.content_type)}
-
-    data = {
-        "source_type": source_type,
-        "label": label,
-        "description": description,
-        "raw_text": raw_text,
-    }
-    # Filter out None values
-    data = {k: v for k, v in data.items() if v is not None}
+        filename = file.filename
 
     try:
-        return await aiida_worker_client.request_multipart(
-            "POST",
-            f"/data/import/{data_type}",
-            files=files,
-            data=data,
+        return await import_worker_data(
+            data_type=data_type,
+            source_type=source_type,
+            label=label,
+            description=description,
+            raw_text=raw_text,
+            filename=filename,
+            file_content=file_content,
         )
     except Exception as exc:
         _raise_worker_http_error(exc)
@@ -2032,12 +2026,6 @@ async def frontend_chat_session_workspace(
     if payload is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
     return payload
-
-
-
-
-
-
 
 
 

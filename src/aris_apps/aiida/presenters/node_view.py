@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Literal
 
-from src.aris_apps.aiida.client import WorkerRPCError, WorkerOfflineError, worker_call
+from src.aris_apps.aiida.client import WorkerRPCError, WorkerOfflineError, optional_worker_call
 from ..schemas import NodeHoverMetadataResponse
 
 
@@ -498,14 +498,12 @@ def _extract_preview_for_node_type(node_type: str, payload: dict[str, Any]) -> d
     return None
 
 
-async def _request_optional_json(
+async def _request_optional_worker_result(
     method: str,
-    path: str,
-    *,
     params: dict[str, Any] | None = None,
 ) -> Any | None:
     try:
-        return await worker_call(method, path, params=params)
+        return await optional_worker_call(method, params)
     except (WorkerOfflineError, WorkerRPCError):
         return None
     except Exception:
@@ -515,7 +513,7 @@ async def _request_optional_json(
 async def _fetch_node_payload(pk: int, cache: dict[int, dict[str, Any] | None]) -> dict[str, Any] | None:
     if pk in cache:
         return cache[pk]
-    payload = await _request_optional_json("GET", f"/management/nodes/{pk}")
+    payload = await _request_optional_worker_result("node.summary", {"pk": pk})
     cache[pk] = payload if isinstance(payload, dict) else None
     return cache[pk]
 
@@ -523,7 +521,7 @@ async def _fetch_node_payload(pk: int, cache: dict[int, dict[str, Any] | None]) 
 async def _fetch_data_node_payload(pk: int, cache: dict[int, dict[str, Any] | None]) -> dict[str, Any] | None:
     if pk in cache:
         return cache[pk]
-    payload = await _request_optional_json("GET", f"/data/node/{pk}")
+    payload = await _request_optional_worker_result("node.summary", {"pk": pk})
     cache[pk] = payload if isinstance(payload, dict) else None
     return cache[pk]
 
@@ -531,9 +529,9 @@ async def _fetch_data_node_payload(pk: int, cache: dict[int, dict[str, Any] | No
 async def _fetch_repository_filenames(pk: int, cache: dict[int, list[str]]) -> list[str]:
     if pk in cache:
         return cache[pk]
-    payload = await _request_optional_json("GET", f"/data/repository/{pk}/files", params={"source": "folder"})
+    payload = await _request_optional_worker_result("data.repository_files", {"pk": pk, "source": "folder"})
     if payload is None:
-        payload = await _request_optional_json("GET", f"/data/repository/{pk}/files")
+        payload = await _request_optional_worker_result("data.repository_files", {"pk": pk})
     filenames = _extract_filename_list(payload, limit=5)
     cache[pk] = filenames[:5]
     return cache[pk]

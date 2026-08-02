@@ -26,7 +26,7 @@ class _Snapshot:
 
 
 class _Capability:
-    bridge_url = "http://worker.test"
+    transport_endpoint = "stdio://worker.test"
 
     def __init__(self) -> None:
         self.calls = []
@@ -87,7 +87,7 @@ class _Capability:
 @pytest.mark.anyio
 async def test_managed_capability_normalizes_canonical_plugin_list() -> None:
     class _Client:
-        bridge_url = "http://worker.test"
+        transport_endpoint = "stdio://worker.test"
 
         async def call(self, method):
             assert method == "resource.plugins"

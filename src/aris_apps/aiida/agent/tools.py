@@ -7,7 +7,6 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import quote
 
 from loguru import logger
 
@@ -327,51 +326,38 @@ def _archive_script_finalize(
 
 async def worker_call(
     method: str,
-    path: str,
-    *,
     params: Mapping[str, Any] | None = None,
-    json: Mapping[str, Any] | None = None,
+    *,
     context: Mapping[str, Any] | None = None,
     timeout: float = 10.0,
 ) -> Any:
-    """Tool-side worker JSON helper backed by unified singleton client."""
-    retry_budget = 2 if method.upper() == "GET" else 0
-    return await aiida_worker_client.worker_call(
+    """Tool-side JSON-RPC helper backed by the managed worker client."""
+    return await aiida_worker_client.call(
         method,
-        path,
         params=params,
-        json=json,
         context=context,
         timeout=timeout,
-        retries=retry_budget,
     )
 
 
 def worker_call_sync(
     method: str,
-    path: str,
-    *,
     params: Mapping[str, Any] | None = None,
-    json: Mapping[str, Any] | None = None,
+    *,
     context: Mapping[str, Any] | None = None,
     timeout: float = 10.0,
-    retries: int | None = None,
 ) -> Any:
-    """Sync JSON helper for startup-time bridge calls."""
-    retry_budget = 2 if retries is None and method.upper() == "GET" else retries
-    return aiida_worker_client.worker_call_sync(
+    """Sync JSON-RPC helper for startup-time worker calls."""
+    return aiida_worker_client.call_sync(
         method,
-        path,
         params=params,
-        json=json,
         context=context,
         timeout=timeout,
-        retries=retry_budget,
     )
 
 
 async def list_system_profiles() -> dict[str, Any] | str:
-    """List configured profiles from the worker (`GET /management/profiles`)."""
+    """List configured profiles through ``profile.list``."""
     try:
         payload = await worker_call("profile.list")
         return payload if isinstance(payload, dict) else {"profiles": payload}
@@ -382,9 +368,9 @@ async def list_system_profiles() -> dict[str, Any] | str:
 
 
 async def list_local_archives(path: str = ".") -> list[str] | dict[str, Any] | str:
-    """List local `.aiida`/`.zip` archives visible to worker (`GET /management/archives/local`)."""
+    """List local archives visible to the worker through ``archive.list``."""
     try:
-        payload = await worker_call("profile.load_archive", {"path": path})
+        payload = await worker_call("archive.list", {"path": path})
         if isinstance(payload, dict):
             archives = payload.get("archives")
             return archives if isinstance(archives, list) else payload
@@ -396,7 +382,7 @@ async def list_local_archives(path: str = ".") -> list[str] | dict[str, Any] | s
 
 
 async def switch_profile(profile: str) -> dict[str, Any] | str:
-    """Switch active profile in worker (`POST /management/profiles/switch`)."""
+    """Switch the active worker profile through ``profile.switch``."""
     try:
         payload = await worker_call("profile.switch", {"profile": profile})
         return payload if isinstance(payload, dict) else {"status": "switched", "result": payload}
@@ -407,7 +393,7 @@ async def switch_profile(profile: str) -> dict[str, Any] | str:
 
 
 async def load_archive_profile(filepath: str) -> dict[str, Any] | str:
-    """Load an archive-backed profile in worker (`POST /management/profiles/load-archive`)."""
+    """Load an archive-backed profile through ``profile.load_archive``."""
     try:
         payload = await worker_call("profile.load_archive", {"path": filepath})
         return payload if isinstance(payload, dict) else {"status": "loaded", "result": payload}
@@ -418,7 +404,7 @@ async def load_archive_profile(filepath: str) -> dict[str, Any] | str:
 
 
 async def get_unified_source_map(target: str | None = None) -> dict[str, Any] | str:
-    """Build profile/archive group map from worker (`GET /management/source-map`)."""
+    """Build the worker source map through ``source_map``."""
     params = {"target": target} if target else None
     try:
         payload = await worker_call("source_map", params)
@@ -430,7 +416,7 @@ async def get_unified_source_map(target: str | None = None) -> dict[str, Any] | 
 
 
 async def get_statistics(profile_name: str | None = None) -> dict[str, Any] | str:
-    """Get consolidated infra/db statistics from worker (`GET /management/statistics`)."""
+    """Get consolidated worker statistics through ``system.statistics``."""
     if profile_name:
         switched = await switch_profile(profile_name)
         if isinstance(switched, str):
@@ -448,7 +434,7 @@ async def get_statistics(profile_name: str | None = None) -> dict[str, Any] | st
 
 
 async def list_groups(search_string: str | None = None) -> list[dict[str, Any]] | dict[str, Any] | str:
-    """List groups from worker (`GET /management/groups`) with optional filter."""
+    """List worker groups through ``group.list`` with an optional filter."""
     params = {"search": search_string} if search_string else None
     try:
         payload = await worker_call("group.list", params)
@@ -463,7 +449,7 @@ async def list_groups(search_string: str | None = None) -> list[dict[str, Any]] 
 
 
 async def get_database_summary() -> dict[str, Any] | str:
-    """Get compact DB health summary (`GET /management/database/summary`)."""
+    """Get the compact database summary through ``system.database_summary``."""
     try:
         payload = await worker_call("system.database_summary")
         return payload if isinstance(payload, dict) else {"summary": payload}
@@ -474,7 +460,7 @@ async def get_database_summary() -> dict[str, Any] | str:
 
 
 async def get_recent_processes(limit: int = 5) -> list[dict[str, Any]] | dict[str, Any] | str:
-    """Fetch recent processes (`GET /management/recent-processes`)."""
+    """Fetch recent processes through ``process.recent``."""
     try:
         payload = await worker_call("process.recent", {"limit": int(limit)})
         if isinstance(payload, dict):
@@ -488,7 +474,7 @@ async def get_recent_processes(limit: int = 5) -> list[dict[str, Any]] | dict[st
 
 
 async def list_group_labels(search_string: str | None = None) -> list[str] | dict[str, Any] | str:
-    """List group labels for dropdowns (`GET /management/groups/labels`)."""
+    """List group labels through ``group.labels``."""
     params = {"search": search_string} if search_string else None
     try:
         payload = await worker_call("group.labels", params)
@@ -507,7 +493,7 @@ async def get_recent_nodes(
     group_label: str | None = None,
     node_type: str | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any] | str:
-    """Fetch recent nodes (`GET /management/recent-nodes`) with optional filters."""
+    """Fetch recent nodes through ``node.recent`` with optional filters."""
     params: dict[str, Any] = {"limit": int(limit)}
     if group_label:
         params["group_label"] = group_label
@@ -527,12 +513,11 @@ async def get_recent_nodes(
 
 
 async def inspect_group(group_name: str, limit: int = 20) -> dict[str, Any] | str:
-    """Inspect one group (`GET /management/groups/{group_name}`) with node attributes/extras."""
+    """Inspect one group through ``group.inspect``."""
     try:
         payload = await worker_call(
-            "GET",
-            f"/management/groups/{group_name}",
-            params={"limit": int(limit)},
+            "group.inspect",
+            {"group_name": group_name, "limit": int(limit)},
         )
         return payload if isinstance(payload, dict) else {"group": group_name, "result": payload}
     except WorkerOfflineError:
@@ -557,12 +542,11 @@ async def fetch_group_processes(
     limit: int = 20,
     exclude_import: bool = True,  # noqa: ARG001
 ) -> list[dict[str, Any]] | dict[str, Any] | str:
-    """Fetch recent process-like nodes constrained to a group (`GET /management/recent-nodes`)."""
+    """Fetch recent process-like nodes constrained to a group."""
     try:
         payload = await worker_call(
-            "GET",
-            "/management/recent-nodes",
-            params={"limit": int(limit), "group_label": group_label, "node_type": "WorkChainNode"},
+            "node.recent",
+            {"limit": int(limit), "group_label": group_label, "node_type": "WorkChainNode"},
         )
         if isinstance(payload, dict):
             items = payload.get("items")
@@ -583,7 +567,7 @@ async def create_group(group_label: str) -> dict[str, Any] | str:
 
 
 async def inspect_process(identifier: str) -> dict[str, Any] | str:
-    """Inspect any ProcessNode by PK/UUID (`GET /process/{identifier}`)."""
+    """Inspect a ProcessNode through ``process.detail``."""
     try:
         payload = await worker_call("process.detail", {"identifier": identifier})
         return payload if isinstance(payload, dict) else {"result": payload}
@@ -594,7 +578,7 @@ async def inspect_process(identifier: str) -> dict[str, Any] | str:
 
 
 async def get_process_log(pk: int) -> dict[str, Any] | str:
-    """Fetch merged reports/stderr for one process (`GET /process/{pk}/logs`)."""
+    """Fetch merged reports and stderr through ``process.logs``."""
     try:
         payload = await worker_call("process.logs", {"identifier": int(pk)})
         return payload if isinstance(payload, dict) else {"logs": payload}
@@ -643,7 +627,7 @@ def _normalize_plugins_payload(payload: Any) -> list[str]:
 
 
 async def list_remote_plugins() -> list[str] | str:
-    """Source of truth for available WorkChains (`GET /plugins`)."""
+    """Return the worker's available WorkChain plugins."""
     try:
         payload = await worker_call("resource.plugins")
         return _normalize_plugins_payload(payload)
@@ -682,13 +666,13 @@ async def resolve_workchain_input_candidates(
 
 
 async def get_remote_workchain_spec(entry_point: str) -> dict[str, Any] | str:
-    """Fetch WorkChain input spec (`GET /submission/spec/{entry_point}`)."""
+    """Fetch a WorkChain input spec through ``submission.spec``."""
     cleaned = (entry_point or "").strip()
     if not cleaned:
         return "Please provide a valid WorkChain entry point name."
 
     try:
-        payload = await worker_call("submission.spec", {"entry_point": quote(cleaned, safe='')})
+        payload = await worker_call("submission.spec", {"entry_point": cleaned})
         return payload if isinstance(payload, dict) else {"spec": payload}
     except WorkerOfflineError:
         return OFFLINE_WORKER_MESSAGE
@@ -707,7 +691,7 @@ async def inspect_lab_infrastructure() -> dict[str, Any] | str:
 
 
 async def inspect_workchain_spec(entry_point_name: str):
-    """Inspect WorkChain spec via bridge (`GET /submission/spec/{entry_point}`)."""
+    """Inspect a WorkChain spec through the managed worker."""
     return await get_remote_workchain_spec(entry_point_name)
 
 
@@ -719,7 +703,7 @@ async def draft_workchain_builder(
     overrides: dict[str, Any] | None = None,
     protocol_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any] | str:
-    """Request builder draft creation (`POST /submission/draft-builder`)."""
+    """Request builder draft creation through ``submission.builder_draft``."""
     intent_data: dict[str, Any] = {
         "structure_pk": int(structure_pk),
         "code": code_label,
@@ -762,7 +746,7 @@ async def draft_workchain_from_inputs(
 async def submit_workchain_builder(
     draft_data: dict[str, Any] | list[dict[str, Any]],
 ) -> dict[str, Any] | str:
-    """Submit one or many previously drafted builders (`POST /submission/submit`)."""
+    """Submit one or many previously drafted builders through ``submission.submit``."""
     try:
         payload = await worker_call("submission.submit", {"draft": draft_data})
         return payload if isinstance(payload, dict) else {"result": payload}
@@ -773,7 +757,7 @@ async def submit_workchain_builder(
 
 
 async def validate_workchain_builder(draft_data: dict[str, Any]) -> dict[str, Any] | str:
-    """Validate a previously drafted builder (`POST /submission/validate`)."""
+    """Validate a previously drafted builder through ``submission.validate``."""
     try:
         payload = await worker_call("submission.validate", {"draft": draft_data})
         return payload if isinstance(payload, dict) else {"result": payload}
@@ -809,13 +793,13 @@ async def run_python_code(
     nodes_involved: list[int] | None = None,
     turn_id: int | None = None,
 ) -> str | dict[str, Any]:
-    """Execute ad-hoc Python/AiiDA logic on worker (`POST /management/run-python`)."""
+    """Execute ad-hoc Python/AiiDA logic through ``execution.run_python``."""
     _ = intent
     _ = nodes_involved
     _ = turn_id
     try:
         # Custom worker scripts can be substantially slower than regular bridge calls.
-        payload = await worker_call("process.run_python", {"script_content": script},
+        payload = await worker_call("execution.run_python", {"script_content": script},
             timeout=180.0,
         )
         if isinstance(payload, dict):
@@ -891,7 +875,7 @@ def _normalize_skill_registry_payload(payload: Any) -> dict[str, Any]:
 
 
 async def list_registered_skills() -> dict[str, Any] | str:
-    """List persistent worker-side specialized scripts (`GET /registry/list`)."""
+    """List persistent worker-side scripts through ``registry.list``."""
     try:
         payload = await worker_call("registry.list")
         return _normalize_skill_registry_payload(payload)
@@ -923,7 +907,7 @@ async def register_specialized_skill(
     description: str | None = None,
     overwrite: bool = True,
 ) -> dict[str, Any] | str:
-    """Persist a specialized skill script on worker (`POST /registry/register`)."""
+    """Persist a specialized script through ``registry.register``."""
     body = {
         "script_name": str(skill_name or "").strip(),
         "script": script,
@@ -940,7 +924,7 @@ async def register_specialized_skill(
 
 
 async def execute_specialized_skill(skill_name: str, args: Mapping[str, Any] | None = None) -> dict[str, Any] | str:
-    """Execute one registered worker-side skill (`POST /execute/{skill_name}`)."""
+    """Execute one registered worker-side script through ``registry.execute``."""
     cleaned = str(skill_name or "").strip()
     if not cleaned:
         return {"error": "Skill name is required."}
@@ -954,7 +938,7 @@ async def execute_specialized_skill(skill_name: str, args: Mapping[str, Any] | N
 
 
 async def get_bands_plot_data(pk: int) -> dict[str, Any] | str:
-    """Retrieve plot-ready bands payload from worker (`GET /data/bands/{pk}`)."""
+    """Retrieve plot-ready bands through ``data.bands``."""
     try:
         payload = await worker_call("data.bands", {"pk": int(pk)})
         return payload if isinstance(payload, dict) else {"data": payload}
@@ -965,7 +949,7 @@ async def get_bands_plot_data(pk: int) -> dict[str, Any] | str:
 
 
 async def list_remote_files(pk: int | str) -> list[str] | dict[str, Any] | str:
-    """List files in a RemoteData node (`GET /data/remote/{pk}/files`)."""
+    """List files in a RemoteData node through ``data.remote_files``."""
     try:
         payload = await worker_call("data.remote_files", {"pk": pk})
         if isinstance(payload, dict):
@@ -979,7 +963,7 @@ async def list_remote_files(pk: int | str) -> list[str] | dict[str, Any] | str:
 
 
 async def get_remote_file_content(pk: int | str, filename: str) -> str | dict[str, Any]:
-    """Read one file from RemoteData (`GET /data/remote/{pk}/files/{filename}`)."""
+    """Read a RemoteData file through ``data.remote_file``."""
     try:
         payload = await worker_call("data.remote_file", {"pk": pk, "filename": filename})
         if isinstance(payload, dict):
@@ -993,12 +977,12 @@ async def get_remote_file_content(pk: int | str, filename: str) -> str | dict[st
 
 
 async def get_node_file_content(pk: int | str, filename: str, source: str = "folder") -> str | dict[str, Any]:
-    """Read text content from node storage (`GET /data/repository/{pk}/files/{filename}`)."""
+    """Read node repository text through ``data.repository_file``."""
     try:
         payload = await worker_call(
-            "GET",
-            f"/data/repository/{pk}/files/{filename}",
-            params={"source": source})
+            "data.repository_file",
+            {"pk": int(pk), "filename": filename, "source": source},
+        )
         if isinstance(payload, dict):
             content = payload.get("content")
             return str(content) if isinstance(content, str) else payload
