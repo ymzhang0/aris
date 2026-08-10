@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from src.aris_apps.aiida.capabilities import ManagedAiiDACapability
+from src.aris_apps.aiida.client import _worker_request_context
 from src.aris_apps.aiida.mcp_facade import (
     AiiDAMCPFacade,
     build_aiida_mcp_server,
@@ -84,6 +85,32 @@ class _Capability:
         return {"is_valid": True, "draft": draft}
 
 
+class _ProjectCatalog:
+    def __init__(self) -> None:
+        self.selected = None
+
+    def list_projects(self):
+        return [{"id": "project-a", "name": "Project A", "active": self.selected == "project-a"}]
+
+    def selected_project_id(self):
+        return self.selected
+
+    def select_project(self, project_id):
+        self.selected = project_id
+        return {"id": project_id, "name": "Project A", "active": True}
+
+    def context_for(self, project_id=None):
+        target = project_id or self.selected
+        if target != "project-a":
+            raise ValueError("unknown project")
+        return {
+            "project_id": target,
+            "workspace_path": "/tmp/project-a",
+            "python_interpreter_path": "/usr/bin/python3",
+            "profile_name": "dev",
+        }
+
+
 @pytest.mark.anyio
 async def test_managed_capability_normalizes_canonical_plugin_list() -> None:
     class _Client:
@@ -118,6 +145,29 @@ async def test_aiida_mcp_facade_normalizes_limits_and_status() -> None:
 
 
 @pytest.mark.anyio
+async def test_project_aware_mcp_lists_selects_and_scopes_tools() -> None:
+    capability = _Capability()
+    catalog = _ProjectCatalog()
+    server = build_aiida_mcp_server(capability, project_catalog=catalog)
+
+    projects = await server.call_tool("aiida_list_projects", {})
+    assert projects.structured_content["projects"][0]["id"] == "project-a"
+
+    selected = await server.call_tool(
+        "aiida_select_project",
+        {"project_id": "project-a"},
+    )
+    assert selected.structured_content["id"] == "project-a"
+
+    result = await server.call_tool(
+        "aiida_inspect_process",
+        {"identifier": "42", "project_id": "project-a"},
+    )
+    assert result.structured_content == {"pk": 42}
+    assert _worker_request_context.get() is None
+
+
+@pytest.mark.anyio
 async def test_aiida_mcp_server_exposes_safe_tools_resources_and_prompt() -> None:
     capability = _Capability()
     server = build_aiida_mcp_server(capability)
@@ -136,6 +186,13 @@ async def test_aiida_mcp_server_exposes_safe_tools_resources_and_prompt() -> Non
     assert "aiida_workflow_catalog" in tools
     assert "aiida_input_candidates" in tools
     assert "aiida_build_submission_preview" in tools
+    assert "render_aiida_explorer" in tools
+    assert tools["render_aiida_explorer"].meta == {
+        "ui": {
+            "resourceUri": "ui://aiida/explorer/v1.html",
+            "visibility": ["model", "app"],
+        }
+    }
     assert "aiida_submit" not in tools
     assert tools["aiida_inspect_process"].annotations.readOnlyHint is True
     assert tools[
@@ -152,6 +209,7 @@ async def test_aiida_mcp_server_exposes_safe_tools_resources_and_prompt() -> Non
     assert "builder_strategy" in preview_schema["properties"]
     assert "inputs" in preview_schema["properties"]
     assert resources == {
+        "ui://aiida/explorer/v1.html",
         "aiida://profiles",
         "aiida://resources",
         "aiida://status",
@@ -163,6 +221,18 @@ async def test_aiida_mcp_server_exposes_safe_tools_resources_and_prompt() -> Non
         {"identifier": "42"},
     )
     assert result.structured_content == {"pk": 42}
+
+    widget = await server.call_tool(
+        "render_aiida_explorer",
+        {"processes": [{"pk": 42, "process_state": "finished"}]},
+    )
+    assert widget.structured_content == {
+        "processes": [{"pk": 42, "process_state": "finished"}],
+    }
+
+    ui_resource = await server.read_resource("ui://aiida/explorer/v1.html")
+    assert "AiiDA Explorer" in str(ui_resource)
+    assert "aiida_inspect_process" in str(ui_resource)
 
 
 @pytest.mark.anyio

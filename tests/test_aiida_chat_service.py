@@ -1025,6 +1025,60 @@ def test_activate_chat_session_unarchives_history_session() -> None:
     assert chat_service.get_active_chat_session_id(state) == archived["id"]
 
 
+def test_activate_chat_session_does_not_reorder_conversation_history() -> None:
+    state = _make_chat_state()
+    older = chat_service.create_chat_session(state, title="Older", activate=True)
+    newer = chat_service.create_chat_session(state, title="Newer", activate=True)
+    older_session, _store = chat_service._find_chat_session(state, older["id"])
+    newer_session, _store = chat_service._find_chat_session(state, newer["id"])
+    assert older_session is not None
+    assert newer_session is not None
+    older_session["updated_at"] = "2026-01-01T00:00:00+00:00"
+    newer_session["updated_at"] = "2026-01-02T00:00:00+00:00"
+
+    before = [item["id"] for item in chat_service.list_chat_sessions(state)]
+    updated_at = older_session["updated_at"]
+    chat_service.activate_chat_session(state, older["id"])
+    after = [item["id"] for item in chat_service.list_chat_sessions(state)]
+
+    assert before == [newer["id"], older["id"]]
+    assert after == before
+    assert older_session["updated_at"] == updated_at
+
+
+def test_start_chat_turn_targets_explicit_session_during_navigation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _make_chat_state()
+    target = chat_service.create_chat_session(state, title="Target", activate=True)
+    current = chat_service.create_chat_session(state, title="Current", activate=True)
+
+    class FakeTask:
+        def add_done_callback(self, _callback) -> None:
+            return None
+
+    def fake_create_task(coroutine):
+        coroutine.close()
+        return FakeTask()
+
+    monkeypatch.setattr(chat_service.asyncio, "create_task", fake_create_task)
+
+    chat_service.start_chat_turn(
+        state,
+        user_intent="calculate silicon EOS",
+        selected_model="test-model",
+        fetch_context_nodes=lambda _pks: [],
+        session_id=target["id"],
+    )
+
+    assert chat_service.get_active_chat_session_id(state) == current["id"]
+    assert [message["text"] for message in chat_service.get_chat_history(state, target["id"])] == [
+        "calculate silicon EOS",
+        "Thinking: request queued.",
+    ]
+    assert chat_service.get_chat_history(state, current["id"]) == []
+
+
 def test_normalize_chat_session_store_skips_archived_active_session() -> None:
     normalized = chat_service._normalize_chat_session_store(
         {
@@ -1086,21 +1140,22 @@ def test_create_chat_project_assigns_new_sessions_to_requested_project(tmp_path)
     assert (Path(project["root_path"]) / "data").is_dir()
 
 
-def test_create_chat_project_requires_and_persists_explicit_runtime(tmp_path) -> None:
+def test_create_chat_project_allows_deferred_runtime_and_persists_explicit_runtime(tmp_path) -> None:
     state = _make_chat_state()
     root = tmp_path / "explicit-runtime"
 
-    with pytest.raises(ValueError, match="python_interpreter_path is required"):
-        chat_service.create_chat_project(state, name="Explicit", root_path=str(root))
+    unconfigured = chat_service.create_chat_project(state, name="Deferred", root_path=str(root))
+    assert unconfigured["python_interpreter_path"] is None
 
+    second_root = tmp_path / "configured-runtime"
     project = chat_service.create_chat_project(
         state,
         name="Explicit",
-        root_path=str(root),
+        root_path=str(second_root),
         python_interpreter_path=sys.executable,
         aiida_profile="dev",
     )
-    config = json.loads((root / ".aris" / "config.json").read_text(encoding="utf-8"))
+    config = json.loads((second_root / ".aris" / "config.json").read_text(encoding="utf-8"))
 
     assert project["python_interpreter_path"] == sys.executable
     assert project["aiida_profile"] == "dev"

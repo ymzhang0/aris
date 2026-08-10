@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { Database, Files, X } from "lucide-react";
+import { Database, Files, Package, X } from "lucide-react";
 
-export type RightTool = "files" | "aiida";
+export type RightTool = "files" | "aiida" | "packages";
 
 type RightToolSidebarProps = {
   expanded: boolean;
@@ -9,6 +9,7 @@ type RightToolSidebarProps = {
   activeTool: RightTool | null;
   filesContent: ReactNode;
   aiidaContent: ReactNode;
+  packagesContent: ReactNode;
   onToolOpen: (tool: RightTool) => void;
   onToolClose: (tool: RightTool) => void;
 };
@@ -16,6 +17,7 @@ type RightToolSidebarProps = {
 const tools = [
   { id: "files" as const, label: "Files", shortcut: "⌘P", icon: Files },
   { id: "aiida" as const, label: "Database", shortcut: "⌘D", icon: Database },
+  { id: "packages" as const, label: "Packages", shortcut: "", icon: Package },
 ];
 
 export function RightToolSidebar(props: RightToolSidebarProps) {
@@ -89,7 +91,7 @@ export function RightToolSidebar(props: RightToolSidebarProps) {
                 >
                   <Icon className="h-5 w-5 shrink-0 text-zinc-500" />
                   <span className="min-w-0 flex-1">{tool.label}</span>
-                  <kbd className="rounded-full bg-zinc-100 px-2.5 py-1 font-sans text-xs font-normal text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">{tool.shortcut}</kbd>
+                  {tool.shortcut ? <kbd className="rounded-full bg-zinc-100 px-2.5 py-1 font-sans text-xs font-normal text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">{tool.shortcut}</kbd> : null}
                 </button>
               );
             })}
@@ -97,7 +99,11 @@ export function RightToolSidebar(props: RightToolSidebarProps) {
         </div>
       ) : (
         <div className="minimal-scrollbar min-h-0 flex-1 overflow-auto">
-          {props.activeTool === "files" ? props.filesContent : props.aiidaContent}
+          {props.activeTool === "files"
+            ? props.filesContent
+            : props.activeTool === "aiida"
+              ? props.aiidaContent
+              : props.packagesContent}
         </div>
       )}
     </aside>

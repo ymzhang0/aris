@@ -71,6 +71,31 @@ def test_repository_removes_orphaned_session_files(tmp_path: Path) -> None:
     assert (tmp_path / "sessions" / "new-session.json").is_file()
 
 
+def test_repository_partial_save_retains_unmodified_session_files(tmp_path: Path) -> None:
+    memory = MemoryStub()
+    repository = JsonChatSessionRepository(lambda: tmp_path)
+    repository.save(
+        memory,
+        index_payload={"sessions": [{"id": "one"}, {"id": "two"}]},
+        session_payloads={
+            "one": {"id": "one", "messages": []},
+            "two": {"id": "two", "messages": []},
+        },
+    )
+
+    repository.save(
+        memory,
+        index_payload={"sessions": [{"id": "one"}, {"id": "two"}]},
+        session_payloads={"two": {"id": "two", "messages": [{"text": "changed"}]}},
+        active_session_ids={"one", "two"},
+    )
+
+    assert (tmp_path / "sessions" / "one.json").is_file()
+    assert json.loads((tmp_path / "sessions" / "two.json").read_text(encoding="utf-8"))["messages"] == [
+        {"text": "changed"}
+    ]
+
+
 def test_repository_returns_none_for_corrupt_session_file(tmp_path: Path) -> None:
     sessions_root = tmp_path / "sessions"
     sessions_root.mkdir(parents=True)
@@ -100,8 +125,9 @@ def test_chat_service_accepts_an_injected_repository(tmp_path: Path) -> None:
         def load_session(self, _session_id: str):
             return None
 
-        def save(self, _memory, *, index_payload, session_payloads):
+        def save(self, _memory, *, index_payload, session_payloads, active_session_ids=None):
             assert session_payloads == {}
+            assert active_session_ids == set()
             self.saved_indexes.append(index_payload)
 
     repository = RepositoryStub()

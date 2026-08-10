@@ -266,19 +266,26 @@ def _save_chat_session_store(
     repository: ChatSessionRepository,
     memory: Any,
     store: dict[str, Any],
+    *,
+    session_ids: set[str] | None = None,
 ) -> None:
     session_payloads: dict[str, dict[str, Any]] = {}
+    active_session_ids: set[str] = set()
     for session in store.get("sessions", []):
         if not isinstance(session, dict):
             continue
         session_id = str(session.get("id") or "").strip()
         if not session_id:
             continue
+        active_session_ids.add(session_id)
+        if session_ids is not None and session_id not in session_ids:
+            continue
         session_payloads[session_id] = _build_chat_session_storage_payload(session)
     repository.save(
         memory,
         index_payload=_build_chat_session_store_index(store),
         session_payloads=session_payloads,
+        active_session_ids=active_session_ids,
     )
 
 
@@ -572,7 +579,11 @@ def _get_chat_session_store(state: Any) -> dict[str, Any]:
     return store
 
 
-def _persist_chat_session_store(state: Any) -> None:
+def _persist_chat_session_store(
+    state: Any,
+    *,
+    session_ids: set[str] | None = None,
+) -> None:
     store = _get_chat_session_store(state)
     _ensure_store_workspace_dirs(store)
     state.chat_sessions_version = int(store["version"])
@@ -581,7 +592,7 @@ def _persist_chat_session_store(state: Any) -> None:
     state.active_chat_project_id = store["active_project_id"]
     memory = getattr(state, "memory", None)
     repository = getattr(state, "chat_session_repository", _CHAT_SESSION_REPOSITORY)
-    _save_chat_session_store(repository, memory, store)
+    _save_chat_session_store(repository, memory, store, session_ids=session_ids)
 
 
 def _touch_chat_sessions(state: Any) -> None:
@@ -1006,7 +1017,7 @@ def write_chat_project_file(
     updated_at = _now_iso()
     project["updated_at"] = updated_at
     _touch_chat_sessions(state)
-    _persist_chat_session_store(state)
+    _persist_chat_session_store(state, session_ids=set())
 
     directory_path = "" if target.parent == workspace_root else str(target.parent.relative_to(workspace_root))
     return {
@@ -1085,16 +1096,12 @@ def create_chat_project(
         or config.get("python_env")
         or ""
     ).strip()
-    if not configured_python:
-        raise ValueError(
-            "Project python_interpreter_path is required; select the Python environment that owns AiiDA and this project's plugins"
-        )
 
     project = _get_session_application_service().create_project(
         state,
         name=project_name,
         root_path=root_path,
-        python_interpreter_path=configured_python,
+        python_interpreter_path=configured_python or None,
         aiida_profile=aiida_profile or config.get("aiida_profile") or settings.ARIS_WORKER_DEFAULT_PROFILE,
         activate=activate,
     )
@@ -2134,7 +2141,7 @@ def _finalize_auto_title_update(
     _ensure_session_workspace_dir(store, session)
     _rename_session_group_label_if_needed(state, store, session, old_slug)
     _touch_chat_sessions(state)
-    _persist_chat_session_store(state)
+    _persist_chat_session_store(state, session_ids={str(session["id"])})
 
 
 async def _run_session_title_generation(
@@ -2222,7 +2229,7 @@ def _schedule_session_title_generation(
     session["title_state"] = _TITLE_STATE_PENDING
     session["updated_at"] = _now_iso()
     _touch_chat_sessions(state)
-    _persist_chat_session_store(state)
+    _persist_chat_session_store(state, session_ids={str(session["id"])})
 
     task = asyncio.create_task(
         _run_session_title_generation(
@@ -2404,6 +2411,7 @@ def start_chat_turn(
     user_intent: str,
     selected_model: str,
     fetch_context_nodes: Callable[[list[int]], list[dict[str, Any]]],
+    session_id: str | None = None,
     context_archive: str | None = None,
     context_node_ids: list[int] | None = None,
     metadata: dict[str, Any] | None = None,
@@ -2413,7 +2421,9 @@ def start_chat_turn(
     normalized_node_ids = _merge_context_node_ids(context_node_ids, normalized_metadata)
     normalized_metadata["context_pks"] = normalized_node_ids
     normalized_metadata["context_node_pks"] = normalized_node_ids
-    session, store = _find_chat_session(state, None)
+    session, store = _find_chat_session(state, session_id)
+    if session_id and session is None:
+        raise ValueError("Chat session not found")
     if session is None:
         session_detail = create_chat_session(
             state,
@@ -2433,7 +2443,7 @@ def start_chat_turn(
     store["turn_seq"] = turn_id
     state.chat_turn_seq = turn_id
     turn_execution = _build_chat_turn_state_machine(state, turn_id)
-    session_id = str(session["id"])
+    resolved_session_id = str(session["id"])
     chat_history = session["messages"]
 
     user_message: dict[str, Any] = {"role": "user", "text": user_intent, "turn_id": turn_id}
@@ -2461,13 +2471,13 @@ def start_chat_turn(
     session["messages"] = chat_history[-_MAX_CHAT_SESSION_MESSAGES:]
     touch_chat(state)
     _touch_chat_sessions(state)
-    _persist_chat_session_store(state)
+    _persist_chat_session_store(state, session_ids={str(session["id"])})
 
     logger.info(
         log_event(
             "aiida.chat_turn.queued",
             turn_id=turn_id,
-            session_id=session_id,
+            session_id=resolved_session_id,
             source=source,
             model=selected_model,
             intent=user_intent[:120],
@@ -2481,7 +2491,7 @@ def start_chat_turn(
         _execute_chat_turn(
             state=state,
             turn_id=turn_id,
-            session_id=session_id,
+            session_id=resolved_session_id,
             user_intent=user_intent,
             selected_model=selected_model,
             fetch_context_nodes=fetch_context_nodes,
@@ -2491,7 +2501,7 @@ def start_chat_turn(
             turn_execution=turn_execution,
         )
     )
-    setattr(task, "session_id", session_id)
+    setattr(task, "session_id", resolved_session_id)
     setattr(task, "turn_execution", turn_execution)
     _ensure_chat_task_registry(state)[turn_id] = task
     task.add_done_callback(
@@ -2752,7 +2762,7 @@ async def _execute_chat_turn(
                 session["updated_at"] = _now_iso()
             touch_chat(state)
             _touch_chat_sessions(state)
-            _persist_chat_session_store(state)
+            _persist_chat_session_store(state, session_ids={str(session_id)})
             logger.info(
                 log_event(
                     "aiida.chat_turn.done",
@@ -2817,7 +2827,7 @@ async def _execute_chat_turn(
                 session["updated_at"] = _now_iso()
             touch_chat(state)
             _touch_chat_sessions(state)
-            _persist_chat_session_store(state)
+            _persist_chat_session_store(state, session_ids={str(session_id)})
             logger.info(
                 log_event(
                     "aiida.chat_turn.cancelled",
@@ -2881,7 +2891,7 @@ async def _execute_chat_turn(
                 session["updated_at"] = _now_iso()
             touch_chat(state)
             _touch_chat_sessions(state)
-            _persist_chat_session_store(state)
+            _persist_chat_session_store(state, session_ids={str(session_id)})
         finally:
             spinner_stop.set()
             if spinner_task:

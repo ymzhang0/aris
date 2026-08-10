@@ -24,6 +24,7 @@ import {
   getLogs,
   renameGroup,
   sendChat,
+  setupProjectEnvironment,
   softDeleteNode,
   stopChat,
   updateChatSession,
@@ -66,6 +67,7 @@ import { LeftChatSidebar } from "@/components/shell/LeftChatSidebar";
 import { RightToolSidebar, type RightTool } from "@/components/shell/RightToolSidebar";
 import { BottomStatusBar } from "@/components/shell/BottomStatusBar";
 import { ProjectDatabaseSidebar } from "@/components/shell/ProjectDatabaseSidebar";
+import { ProjectPackagesSidebar } from "@/components/shell/ProjectPackagesSidebar";
 
 const THEME_STORAGE_KEY = "aris.dashboard.theme";
 const CURRENT_SESSION_STORAGE_KEY = "current_session_id";
@@ -99,6 +101,15 @@ function isTurnFinalized(messages: ChatMessage[], turnId: number): boolean {
       message.role !== "user" &&
       message.status !== "thinking",
   );
+}
+
+function findLatestThinkingTurnId(messages: ChatMessage[]): number | null {
+  return messages.reduce<number | null>((latest, message, index) => {
+    if (message.role !== "assistant" || message.status !== "thinking") {
+      return latest;
+    }
+    return normalizeTurnId(message, index);
+  }, null);
 }
 
 function scoreChatMessages(messages: ChatMessage[]): number {
@@ -686,6 +697,7 @@ export default function App() {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [activeTurnId, setActiveTurnId] = useState<number | null>(null);
   const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(null);
+  const [draftConversationProjectId, setDraftConversationProjectId] = useState<string | null>(null);
   const [composerResetVersion, setComposerResetVersion] = useState(0);
   const [streamedLogs, setStreamedLogs] = useState<{ version: number; lines: string[] } | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -702,6 +714,8 @@ export default function App() {
   const requestInFlightRef = useRef(false);
   const chatVersionRef = useRef(-1);
   const activeChatSessionRef = useRef<string | null>(null);
+  const draftConversationProjectIdRef = useRef<string | null>(null);
+  const sessionActivationTargetRef = useRef<string | null>(null);
   const lastPersistedSnapshotRef = useRef<string>("");
   const hasAttemptedSessionRestoreRef = useRef(false);
   const restoringSessionIdRef = useRef<string | null>(null);
@@ -735,15 +749,19 @@ export default function App() {
   const activeProjectId = chatSessionsQuery.data?.active_project_id ?? null;
   const selectedWorkspaceProject =
     chatProjects.find((project) => project.id === (activeWorkspaceProjectId ?? activeProjectId ?? "")) ?? null;
-  const resolvedActiveChatSessionId = activeChatSessionId ?? chatSessionsQuery.data?.active_session_id ?? null;
+  const resolvedActiveChatSessionId = draftConversationProjectId
+    ? null
+    : activeChatSessionId ?? chatSessionsQuery.data?.active_session_id ?? null;
   const activeChatSession = chatSessions.find((session) => session.id === resolvedActiveChatSessionId) ?? null;
   const activeSessionProject =
     chatProjects.find((project) => project.id === (activeChatSession?.project_id ?? "")) ?? null;
-  const activeWorkspaceProject = activeSessionProject ?? selectedWorkspaceProject;
-  const currentProjectPath = activeSessionProject?.root_path ?? selectedWorkspaceProject?.root_path ?? null;
+  const draftConversationProject =
+    chatProjects.find((project) => project.id === (draftConversationProjectId ?? "")) ?? null;
+  const activeWorkspaceProject = draftConversationProject ?? activeSessionProject ?? selectedWorkspaceProject;
+  const currentProjectPath = activeWorkspaceProject?.root_path ?? null;
   const currentContextGroupLabel = resolveCurrentContextGroupLabel(activeChatSession);
   const selectedGroupLabel = resolveSelectedGroupLabel(selectedGroup, currentContextGroupLabel);
-  useProjectEnvironmentSync(activeSessionProject ?? selectedWorkspaceProject ?? null);
+  useProjectEnvironmentSync(activeWorkspaceProject ?? null);
 
   const processesQuery = useQuery({
     queryKey: ["processes", selectedGroup, selectedGroupLabel, processLimit, nodeTypeFilter],
@@ -779,12 +797,17 @@ export default function App() {
     queryKey: ["logs"],
     queryFn: () => getLogs(260),
     enabled: bootstrapQuery.isSuccess,
-    refetchInterval: 1_500,
   });
 
   const defaultSelectedModel = bootstrapQuery.data?.selected_model ?? bootstrapQuery.data?.models?.[0] ?? "";
-  const applyChatSessionsSnapshot = useCallback((snapshot: ChatSessionsResponse | null | undefined) => {
+  const applyChatSessionsSnapshot = useCallback((
+    snapshot: ChatSessionsResponse | null | undefined,
+    options?: { preserveActiveSession?: boolean },
+  ) => {
     if (!snapshot || !Array.isArray(snapshot.items) || !Array.isArray(snapshot.projects)) {
+      return;
+    }
+    if (draftConversationProjectIdRef.current) {
       return;
     }
 
@@ -797,19 +820,35 @@ export default function App() {
       return snapshot;
     });
 
+    if (options?.preserveActiveSession) {
+      return;
+    }
     const incomingActiveSessionId = normalizeSessionId(snapshot.active_session_id);
-    setActiveChatSessionId((current) => incomingActiveSessionId ?? current);
+    const activationTarget = sessionActivationTargetRef.current;
+    if (!activationTarget || incomingActiveSessionId === activationTarget) {
+      setActiveChatSessionId((current) => incomingActiveSessionId ?? current);
+    }
   }, [queryClient]);
 
   const applyChatSnapshot = useCallback((snapshot: ChatSnapshot | null | undefined) => {
     if (!snapshot || !Array.isArray(snapshot.messages)) {
       return;
     }
+    if (draftConversationProjectIdRef.current) {
+      return;
+    }
 
     const normalizedMessages = normalizeChatMessages(snapshot.messages);
     const incomingSessionId = normalizeSessionId(snapshot.session_id);
-    const isSessionChanged = incomingSessionId !== activeChatSessionRef.current;
     const incomingVersion = Number.isFinite(snapshot.version) ? snapshot.version : -1;
+    const activationTarget = sessionActivationTargetRef.current;
+    if (activationTarget && incomingSessionId !== activationTarget) {
+      return;
+    }
+    if (incomingVersion >= 0 && incomingVersion < chatVersionRef.current) {
+      return;
+    }
+    const isSessionChanged = incomingSessionId !== activeChatSessionRef.current;
     const normalizedSnapshot = normalizeChatSessionSnapshot(snapshot.snapshot);
 
     setActiveChatSessionId(incomingSessionId);
@@ -1319,7 +1358,7 @@ export default function App() {
     setPinnedNodes((current) => current.filter((node) => node.pk !== pk));
   }, []);
 
-  const stopActiveChatTurn = useCallback(async () => {
+  const stopActiveChatTurn = useCallback(async (options?: { refresh?: boolean }) => {
     if (!isChatBusy) {
       return;
     }
@@ -1338,49 +1377,81 @@ export default function App() {
         console.error("Failed to stop chat request", error);
       }
     } finally {
+      if (options?.refresh === false) {
+        return;
+      }
       await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
     }
   }, [activeTurnId, isChatBusy, queryClient]);
 
-  const handleCreateChatSession = useCallback(async (projectId?: string) => {
-    if (hasPendingAgentStep) {
-      const confirmed = window.confirm(
-        "An AiiDA agent step is still running. Starting a new conversation will stop it, archive the current session, and open a fresh one. Continue?",
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
-
-    if (isChatBusy) {
-      await stopActiveChatTurn();
-    }
-
+  const handleCreateChatSession = useCallback((projectId?: string) => {
     window.localStorage.removeItem(CURRENT_SESSION_STORAGE_KEY);
-    const targetProjectId = projectId ?? activeWorkspaceProjectId ?? activeProjectId ?? undefined;
-    const response = await createChatSession({
-      archive_session_id: activeChatSessionId ?? undefined,
-      project_id: targetProjectId,
-    });
-    applyChatSnapshot(response.chat);
-    setActiveWorkspaceProjectId(response.session?.project_id ?? response.active_project_id ?? null);
+    const targetProjectId = projectId ?? activeWorkspaceProjectId ?? activeProjectId ?? null;
+    if (!targetProjectId) {
+      return;
+    }
+
+    draftConversationProjectIdRef.current = targetProjectId;
+    setDraftConversationProjectId(targetProjectId);
+    sessionActivationTargetRef.current = null;
+    activeChatSessionRef.current = null;
+    chatVersionRef.current = -1;
+    lastPersistedSnapshotRef.current = "";
+    setActiveChatSessionId(null);
+    setActiveWorkspaceProjectId(targetProjectId);
+    setMessages([]);
+    setContextNodes([]);
+    setPinnedNodes([]);
+    setSelectedGroup("");
+    setSelectedModel(defaultSelectedModel);
+    setSessionEnvironment(null);
+    setSessionEnvironmentAuto(true);
+    setPromptOverride("");
+    setSessionParameters([]);
+    setIsChatLoading(false);
+    setActiveTurnId(null);
     setComposerResetVersion((current) => current + 1);
     setRightSidebarExpanded(false);
-    await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-  }, [activeChatSessionId, activeProjectId, activeWorkspaceProjectId, applyChatSnapshot, hasPendingAgentStep, isChatBusy, queryClient, stopActiveChatTurn]);
+    setPinnedSummaryExpanded(false);
+    window.localStorage.setItem("aris.chat.pinned-summary", "closed");
+  }, [activeProjectId, activeWorkspaceProjectId, defaultSelectedModel]);
 
   const handleActivateChatSession = useCallback(
     async (sessionId: string) => {
-      if (isChatBusy || !sessionId || sessionId === activeChatSessionId) {
+      if (!sessionId || sessionId === resolvedActiveChatSessionId) {
         return;
       }
-      const response = await activateChatSession(sessionId);
-      applyChatSnapshot(response.chat);
-      setActiveWorkspaceProjectId(response.session?.project_id ?? response.active_project_id ?? null);
-      setComposerResetVersion((current) => current + 1);
-      await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
+      const previousSessionId = resolvedActiveChatSessionId;
+      const previousActiveSessionId = activeChatSessionRef.current;
+      const previousDraftProjectId = draftConversationProjectIdRef.current;
+      draftConversationProjectIdRef.current = null;
+      setDraftConversationProjectId(null);
+      sessionActivationTargetRef.current = sessionId;
+      activeChatSessionRef.current = sessionId;
+      chatVersionRef.current = -1;
+      setActiveChatSessionId(sessionId);
+      setIsChatLoading(false);
+      setActiveTurnId(null);
+      try {
+        const response = await activateChatSession(sessionId);
+        applyChatSessionsSnapshot(response);
+        applyChatSnapshot(response.chat);
+        const pendingTurnId = findLatestThinkingTurnId(normalizeChatMessages(response.chat.messages));
+        setActiveTurnId(pendingTurnId);
+        setIsChatLoading(pendingTurnId !== null);
+        setActiveWorkspaceProjectId(response.session?.project_id ?? response.active_project_id ?? null);
+        setComposerResetVersion((current) => current + 1);
+      } catch (error) {
+        draftConversationProjectIdRef.current = previousDraftProjectId;
+        setDraftConversationProjectId(previousDraftProjectId);
+        activeChatSessionRef.current = previousActiveSessionId;
+        setActiveChatSessionId(previousSessionId);
+        console.error("Failed to activate chat session", error);
+      } finally {
+        sessionActivationTargetRef.current = null;
+      }
     },
-    [activeChatSessionId, applyChatSnapshot, isChatBusy, queryClient],
+    [applyChatSessionsSnapshot, applyChatSnapshot, resolvedActiveChatSessionId],
   );
 
   const handleRenameChatSession = useCallback(
@@ -1398,13 +1469,32 @@ export default function App() {
   const handleCreateProject = useCallback(
     async ({ name, rootPath, pythonInterpreterPath, aiidaProfile }: { name: string; rootPath: string; pythonInterpreterPath?: string; aiidaProfile?: string }) => {
       const response = await createProjectMutation.mutateAsync({ name, rootPath, pythonInterpreterPath, aiidaProfile });
+      let environmentReady = Boolean(response.project.python_interpreter_path);
+      if (!environmentReady) {
+        try {
+          await setupProjectEnvironment(response.project.id, {
+            mode: "managed",
+            aiida_profile: aiidaProfile?.trim() || undefined,
+          });
+          environmentReady = true;
+          await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
+        } catch (error) {
+          console.error("Failed to initialize the project environment", error);
+        }
+      }
       await handleCreateChatSession(response.project.id);
+      if (!environmentReady) {
+        openRightTool("packages");
+      }
     },
-    [createProjectMutation, handleCreateChatSession],
+    [createProjectMutation, handleCreateChatSession, openRightTool, queryClient],
   );
 
   const handleDeleteChatItems = useCallback(
-    async ({ projectIds, sessionIds }: { projectIds?: string[]; sessionIds?: string[] }) => {
+    async (
+      { projectIds, sessionIds }: { projectIds?: string[]; sessionIds?: string[] },
+      options?: { confirmationHandled?: boolean },
+    ) => {
       const normalizedProjectIds = [...new Set((projectIds ?? []).map((value) => value.trim()).filter(Boolean))];
       const normalizedSessionIds = [...new Set((sessionIds ?? []).map((value) => value.trim()).filter(Boolean))];
       if (normalizedProjectIds.length === 0 && normalizedSessionIds.length === 0) {
@@ -1434,7 +1524,7 @@ export default function App() {
       }
 
       if (deletingActiveSession && isChatBusy) {
-        await stopActiveChatTurn();
+        await stopActiveChatTurn({ refresh: false });
       }
 
       const summaryParts: string[] = [];
@@ -1448,7 +1538,7 @@ export default function App() {
         normalizedProjectIds.length > 0
           ? `Delete ${summaryParts.join(" and ")}? This will also delete all sessions inside the selected projects.`
           : `Delete ${summaryParts.join(" and ")}?`;
-      if (!window.confirm(confirmMessage)) {
+      if (!options?.confirmationHandled && !window.confirm(confirmMessage)) {
         return;
       }
 
@@ -1468,10 +1558,19 @@ export default function App() {
         response = await deleteChatItems({ session_ids: normalizedSessionIds });
       }
 
+      if (draftConversationProjectIdRef.current && projectSet.has(draftConversationProjectIdRef.current)) {
+        draftConversationProjectIdRef.current = null;
+        setDraftConversationProjectId(null);
+        activeChatSessionRef.current = null;
+        setActiveChatSessionId(null);
+        setMessages([]);
+        setActiveTurnId(null);
+        setIsChatLoading(false);
+        setComposerResetVersion((current) => current + 1);
+      }
       applyChatSessionsSnapshot(response);
       applyChatSnapshot(response.chat);
       setActiveWorkspaceProjectId((current) => (current && !projectSet.has(current) ? current : null));
-      await queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
     },
     [
       activeChatSessionId,
@@ -1481,7 +1580,6 @@ export default function App() {
       chatSessions,
       hasPendingAgentStep,
       isChatBusy,
-      queryClient,
       stopActiveChatTurn,
     ],
   );
@@ -1632,14 +1730,52 @@ export default function App() {
       const mergedContextPks = mergeUniquePks(contextPks, textReferencedPks);
 
       const controller = new AbortController();
+      const draftProjectId = draftConversationProjectIdRef.current;
+      const isDraftFirstSend = Boolean(draftProjectId);
+      let originSessionId = activeChatSessionRef.current ?? resolvedActiveChatSessionId;
+      let createdSessionResponse: Awaited<ReturnType<typeof createChatSession>> | null = null;
+      const optimisticTurnId = Date.now();
       sendAbortControllerRef.current = controller;
       requestInFlightRef.current = true;
       setIsChatLoading(true);
       setActiveTurnId(null);
 
       try {
+        if (draftProjectId) {
+          createdSessionResponse = await createChatSession({ project_id: draftProjectId });
+          originSessionId = normalizeSessionId(createdSessionResponse.session?.id);
+          if (!originSessionId) {
+            throw new Error("The new conversation did not return a session id.");
+          }
+        }
+
+        setMessages((current) => [
+          ...current,
+          {
+            role: "user",
+            text: intent,
+            status: "done",
+            turn_id: optimisticTurnId,
+          },
+          {
+            role: "assistant",
+            text: "Thinking: request queued.",
+            status: "thinking",
+            turn_id: optimisticTurnId,
+            payload: {
+              type: "status",
+              status: { current_step: "Queued request", steps: [] },
+              tool_calls: [],
+            },
+          },
+        ]);
+        if (!isDraftFirstSend) {
+          setComposerResetVersion((current) => current + 1);
+        }
+
         const payload: SendChatRequest = {
           intent,
+          session_id: originSessionId ?? undefined,
           model_name: selectedModel || undefined,
           context_node_ids: mergedContextPks,
           context_pks: mergedContextPks,
@@ -1674,13 +1810,46 @@ export default function App() {
           },
         };
         const { turn_id: turnId } = await sendChat(payload, controller.signal);
-        setActiveTurnId(turnId);
-        setContextNodes([]);
-        setComposerResetVersion((current) => current + 1);
+        const isStillViewingDraft = Boolean(
+          draftProjectId && draftConversationProjectIdRef.current === draftProjectId,
+        );
+        if (createdSessionResponse) {
+          if (isStillViewingDraft) {
+            draftConversationProjectIdRef.current = null;
+            setDraftConversationProjectId(null);
+            activeChatSessionRef.current = originSessionId;
+            chatVersionRef.current = -1;
+            setActiveChatSessionId(originSessionId);
+            setActiveWorkspaceProjectId(
+              createdSessionResponse.session?.project_id ?? createdSessionResponse.active_project_id ?? draftProjectId,
+            );
+            applyChatSessionsSnapshot(createdSessionResponse);
+            setComposerResetVersion((current) => current + 1);
+          } else {
+            applyChatSessionsSnapshot(createdSessionResponse, { preserveActiveSession: true });
+          }
+        }
+        if (isStillViewingDraft || activeChatSessionRef.current === originSessionId) {
+          setActiveTurnId(turnId);
+          setContextNodes([]);
+        }
         void queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
       } catch (error) {
-        setIsChatLoading(false);
-        setActiveTurnId(null);
+        const isStillViewingDraft = Boolean(
+          draftProjectId && draftConversationProjectIdRef.current === draftProjectId,
+        );
+        if (isStillViewingDraft || activeChatSessionRef.current === originSessionId) {
+          setMessages((current) => current.filter((message) => message.turn_id !== optimisticTurnId));
+          setIsChatLoading(false);
+          setActiveTurnId(null);
+        }
+        if (createdSessionResponse && originSessionId && !isAbortError(error)) {
+          try {
+            await deleteChatSession(originSessionId);
+          } catch (cleanupError) {
+            console.error("Failed to remove an empty conversation after send failure", cleanupError);
+          }
+        }
         if (!isAbortError(error)) {
           console.error("Chat request failed", error);
         }
@@ -1691,6 +1860,7 @@ export default function App() {
     },
     [
       activeTurnId,
+      applyChatSessionsSnapshot,
       contextNodes,
       isChatBusy,
       pinnedNodes,
@@ -1701,6 +1871,7 @@ export default function App() {
       sessionEnvironment,
       sessionEnvironmentAuto,
       sessionParameters,
+      resolvedActiveChatSessionId,
     ],
   );
 
@@ -1900,13 +2071,16 @@ export default function App() {
             theme={theme}
             onToggleTheme={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
             onActivateSession={(sessionId) => { void handleActivateChatSession(sessionId); }}
-            onCreateProject={(payload) => { void handleCreateProject(payload); }}
+            onCreateProject={(payload) => handleCreateProject(payload)}
             onBrowseProjectFolder={async () => {
               const result = await browseChatProjectDirectory();
               return result.success ? result.path : null;
             }}
             onOpenProjectWorkspace={handleOpenProjectWorkspace}
             onNewConversation={(projectId) => { void handleCreateChatSession(projectId); }}
+            canDeleteItems={canDeleteChatItems}
+            onDeleteSession={(sessionId) => { void handleDeleteChatItems({ sessionIds: [sessionId] }, { confirmationHandled: true }); }}
+            onDeleteProject={(projectId) => { void handleDeleteChatItems({ projectIds: [projectId] }, { confirmationHandled: true }); }}
             expanded={leftSidebarExpanded}
             onExpandedChange={(expanded) => {
               setLeftSidebarExpanded(expanded);
@@ -1924,7 +2098,7 @@ export default function App() {
             chatContent={
               isReady ? (
                 <ChatPanel
-                  activeProject={activeSessionProject ?? null}
+                  activeProject={activeWorkspaceProject ?? null}
                   messages={chatMessages}
                   models={models}
                   selectedModel={selectedModel}
@@ -1988,6 +2162,15 @@ export default function App() {
                 loading={projectDatabaseQuery.isPending || projectDatabaseQuery.isFetching}
                 onOpenProcess={setActiveProcess}
                 onAddContext={handleAddContextNode}
+              />
+            }
+            packagesContent={
+              <ProjectPackagesSidebar
+                project={activeWorkspaceProject}
+                onBrowseDirectory={async () => {
+                  const result = await browseChatProjectDirectory();
+                  return result.success ? result.path : null;
+                }}
               />
             }
           />

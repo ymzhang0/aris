@@ -12,7 +12,7 @@ from src.aris_core.logging import log_event
 
 from .client import aiida_worker_client
 from .frontend_bridge import get_context_nodes
-from aris_apps.aiida.config import aiida_engine_settings
+from src.aris_apps.aiida.config import aiida_engine_settings
 
 SPECIALIZATIONS_ROOT = Path(aiida_engine_settings.specializations_root)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -197,13 +198,8 @@ def test_project_worker_manager_routes_each_runtime_to_one_verified_process(
                 "python_interpreter_path": sys.executable,
                 "profile_name": "dev",
             },
-            auto_install_worker=False,
+            worker_package_source="../aiida-worker",
         )
-
-        async def module_available(_key):
-            return True
-
-        manager._worker_module_is_available = module_available  # type: ignore[method-assign]
         first = await manager.request("echo", {"value": 1})
         second = await manager.request("echo", {"value": 2})
         other = await manager.request(
@@ -217,10 +213,43 @@ def test_project_worker_manager_routes_each_runtime_to_one_verified_process(
         )
 
         assert len(created) == 2
+        assert created[0].command[2].endswith("worker_bootstrap.py")
+        assert created[0].command[3].endswith("aiida-worker")
         assert first["profile"] == "dev"
         assert second["profile"] == "dev"
         assert other["profile"] == "test"
         await manager.stop()
         assert all(item.stopped for item in created)
+
+    asyncio.run(run())
+
+
+def test_central_worker_source_runs_with_project_python() -> None:
+    worker_root = Path(__file__).resolve().parents[2] / "aiida-worker"
+    project_python = worker_root / ".venv" / "bin" / "python"
+    if not project_python.is_file():
+        pytest.skip("aiida-worker development environment is unavailable")
+
+    async def run() -> None:
+        manager = ProjectWorkerProcessManager(
+            runtime_context_provider=lambda: None,
+            worker_package_source=worker_root,
+        )
+        status = await manager.start(
+            context={
+                "project_id": "integration-project",
+                "python_interpreter_path": str(project_python),
+                "workspace_path": str(worker_root),
+            }
+        )
+        snapshot = manager.snapshot()
+
+        assert status["status"] == "online"
+        assert Path(status["python_interpreter_path"]).samefile(project_python)
+        assert snapshot.command[0] == str(project_python)
+        assert snapshot.command[2].endswith("worker_bootstrap.py")
+        assert snapshot.command[3] == str(worker_root)
+        assert "-m" not in snapshot.command
+        await manager.stop()
 
     asyncio.run(run())

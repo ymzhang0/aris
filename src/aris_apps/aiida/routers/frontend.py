@@ -103,6 +103,15 @@ from ..service import (
     parse_infrastructure_via_ai as _parse_infrastructure_via_ai,
 )
 from ..specializations import build_active_specializations_payload
+from ..project_packages import (
+    ProjectPackageError,
+    create_managed_project_environment,
+    inspect_project_packages,
+    install_editable_package,
+    install_registry_requirement,
+    uninstall_project_package,
+    validate_existing_project_environment,
+)
 from ..infrastructure_manager import infrastructure_manager
 from ..schemas import (
     EnvironmentInspectRequest,
@@ -116,6 +125,8 @@ from ..schemas import (
     FrontendChatProjectFileWriteResponse,
     FrontendChatProjectCreateRequest,
     FrontendChatProjectUpdateRequest,
+    FrontendProjectEnvironmentSetupRequest,
+    FrontendProjectPackageInstallRequest,
     FrontendChatSessionCreateRequest,
     FrontendChatSessionTitleUpdateRequest,
     FrontendChatSessionUpdateRequest,
@@ -1024,6 +1035,132 @@ async def _ensure_named_groups(labels: list[str]) -> dict[str, str]:
     return ensured
 
 
+async def _ensure_named_groups_in_background(
+    labels: list[str],
+    worker_context: dict[str, str] | None = None,
+) -> None:
+    worker_context_token = set_worker_request_context(worker_context) if worker_context else None
+    try:
+        await _ensure_named_groups(labels)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            log_event(
+                "aiida.frontend.session_groups.ensure_failed",
+                error=str(exc),
+                labels=labels,
+            )
+        )
+    finally:
+        if worker_context_token is not None:
+            reset_worker_request_context(worker_context_token)
+
+
+def _schedule_named_groups(
+    state: Any,
+    labels: list[str],
+    *,
+    worker_context: dict[str, str] | None = None,
+) -> None:
+    _schedule_chat_group_task(state, _ensure_named_groups_in_background(labels, worker_context))
+
+
+async def _ensure_project_group_in_background(
+    state: Any,
+    project_id: str,
+    project_name: str,
+    worker_context: dict[str, str] | None = None,
+) -> None:
+    worker_context_token = set_worker_request_context(worker_context) if worker_context else None
+    try:
+        group = await aiida_worker_client.call(
+            "group.ensure_project",
+            {"project_id": project_id, "project_name": project_name},
+            context=worker_context,
+            timeout=30.0,
+        )
+        if not isinstance(group, dict) or not group.get("group_uuid") or not group.get("group_label"):
+            raise ValueError("Worker returned incomplete project group metadata")
+        update_chat_project(
+            state,
+            project_id,
+            group_uuid=str(group["group_uuid"]),
+            group_label=str(group["group_label"]),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            log_event(
+                "aiida.frontend.project_group.ensure_failed",
+                error=str(exc),
+                project_id=project_id,
+            )
+        )
+    finally:
+        if worker_context_token is not None:
+            reset_worker_request_context(worker_context_token)
+
+
+def _schedule_project_group_ensure(state: Any, project: dict[str, Any]) -> None:
+    project_id = str(project.get("id") or "").strip()
+    if not project_id or not str(project.get("python_interpreter_path") or "").strip():
+        return
+    _schedule_chat_group_task(
+        state,
+        _ensure_project_group_in_background(
+            state,
+            project_id,
+            str(project.get("name") or "Project"),
+            build_chat_project_worker_context(state, project_id),
+        ),
+    )
+
+
+async def _delete_named_groups_in_background(
+    labels: list[str],
+    worker_context: dict[str, str] | None = None,
+) -> None:
+    cleaned_labels = {str(label or "").strip() for label in labels if str(label or "").strip()}
+    if not cleaned_labels:
+        return
+    worker_context_token = set_worker_request_context(worker_context) if worker_context else None
+    try:
+        groups = await asyncio.to_thread(list_groups)
+        for group in groups:
+            label = str(group.get("label") or "")
+            if not any(label == target or label.startswith(f"{target}/") for target in cleaned_labels):
+                continue
+            await asyncio.to_thread(delete_group, int(group["pk"]))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            log_event(
+                "aiida.frontend.session_groups.delete_failed",
+                error=str(exc),
+                labels=sorted(cleaned_labels),
+            )
+        )
+    finally:
+        if worker_context_token is not None:
+            reset_worker_request_context(worker_context_token)
+
+
+def _schedule_delete_named_groups(
+    state: Any,
+    labels: list[str],
+    *,
+    worker_context: dict[str, str] | None = None,
+) -> None:
+    _schedule_chat_group_task(state, _delete_named_groups_in_background(labels, worker_context))
+
+
+def _schedule_chat_group_task(state: Any, coroutine: Any) -> None:
+    tasks = getattr(state, "chat_session_group_tasks", None)
+    if not isinstance(tasks, set):
+        tasks = set()
+        state.chat_session_group_tasks = tasks
+    task = asyncio.create_task(coroutine)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
 
 
 
@@ -1038,6 +1175,23 @@ def _chat_delete_response(state: Any, deleted: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def _build_project_delete_worker_context(project: dict[str, Any] | None) -> dict[str, str] | None:
+    """Build cleanup context without normalizing the chat store or creating folders.
+
+    Project deletion must not wait on workspace initialization. Group cleanup is
+    already scheduled in the background, so the request only needs the metadata
+    required to select the project's worker runtime.
+    """
+    if not isinstance(project, dict):
+        return None
+    return build_worker_context(
+        workspace_path=project.get("root_path"),
+        project_id=project.get("id"),
+        python_path=project.get("python_interpreter_path"),
+        profile_name=project.get("aiida_profile"),
+    )
+
+
 
 
 async def _ensure_submission_group(label: str) -> dict[str, Any] | None:
@@ -1045,22 +1199,25 @@ async def _ensure_submission_group(label: str) -> dict[str, Any] | None:
     if not cleaned_label:
         return None
 
-    existing = next((group for group in list_groups() if str(group.get("label") or "").strip() == cleaned_label), None)
+    groups = await asyncio.to_thread(list_groups)
+    existing = next((group for group in groups if str(group.get("label") or "").strip() == cleaned_label), None)
     if existing:
         return existing
 
     try:
-        response = create_group(cleaned_label)
+        response = await asyncio.to_thread(create_group, cleaned_label)
     except WorkerRPCError as exc:
         if int(exc.status_code or 0) != 409:
             raise
-        response = {"item": next((group for group in list_groups() if str(group.get("label") or "").strip() == cleaned_label), None)}
+        groups = await asyncio.to_thread(list_groups)
+        response = {"item": next((group for group in groups if str(group.get("label") or "").strip() == cleaned_label), None)}
 
     group_payload = response.get("item") if isinstance(response, dict) else None
     if isinstance(group_payload, dict):
         return group_payload
 
-    return next((group for group in list_groups() if str(group.get("label") or "").strip() == cleaned_label), None)
+    groups = await asyncio.to_thread(list_groups)
+    return next((group for group in groups if str(group.get("label") or "").strip() == cleaned_label), None)
 
 
 
@@ -2148,27 +2305,7 @@ async def frontend_create_chat_project(request: Request, payload: FrontendChatPr
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
-    try:
-        group = await aiida_worker_client.call(
-            "group.ensure_project",
-            {"project_id": project["id"], "project_name": str(project.get("name") or payload.name)},
-            context=build_chat_project_worker_context(state, project["id"]),
-            timeout=15.0,
-        )
-        if not isinstance(group, dict) or not group.get("group_uuid") or not group.get("group_label"):
-            raise ValueError("Worker returned incomplete project group metadata")
-        project = update_chat_project(
-            state,
-            project["id"],
-            group_uuid=str(group["group_uuid"]),
-            group_label=str(group["group_label"]),
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(log_event("aiida.frontend.project_group.ensure_failed", error=str(exc), project_id=project["id"]))
-        raise HTTPException(
-            status_code=503,
-            detail={"error": "Project folder was initialized, but its AiiDA Group could not be created."},
-        ) from exc
+    _schedule_project_group_ensure(state, project)
     return {
         "project": project,
         "active_project_id": get_active_chat_project_id(state),
@@ -2198,8 +2335,84 @@ async def frontend_update_chat_project(
     }
 
 
+def _get_frontend_chat_project(state: Any, project_id: str) -> dict[str, Any]:
+    project = next((item for item in list_chat_projects(state) if item.get("id") == project_id), None)
+    if not isinstance(project, dict):
+        raise HTTPException(status_code=404, detail={"error": "Project not found"})
+    return project
+
+
+def _raise_project_package_http_error(exc: ProjectPackageError) -> None:
+    detail: dict[str, Any] = {"error": exc.message}
+    if exc.detail:
+        detail["reason"] = exc.detail
+    raise HTTPException(status_code=exc.status_code, detail=detail) from exc
+
+
+@router.get("/frontend/chat/projects/{project_id}/packages", tags=[FRONTEND_TAG])
+async def frontend_list_project_packages(request: Request, project_id: str):
+    project = _get_frontend_chat_project(request.app.state, project_id)
+    try:
+        return await inspect_project_packages(project)
+    except ProjectPackageError as exc:
+        _raise_project_package_http_error(exc)
+
+
+@router.post("/frontend/chat/projects/{project_id}/environment", tags=[FRONTEND_TAG])
+async def frontend_setup_project_environment(
+    request: Request,
+    project_id: str,
+    payload: FrontendProjectEnvironmentSetupRequest,
+):
+    state = request.app.state
+    project = _get_frontend_chat_project(state, project_id)
+    try:
+        if payload.mode == "managed":
+            python_path = await create_managed_project_environment(project)
+        else:
+            python_path = validate_existing_project_environment(payload.python_interpreter_path or "")
+        project = update_chat_project(
+            state,
+            project_id,
+            python_interpreter_path=python_path,
+            aiida_profile=payload.aiida_profile,
+        )
+        response = await inspect_project_packages(project)
+        _schedule_project_group_ensure(state, project)
+        return response
+    except ProjectPackageError as exc:
+        _raise_project_package_http_error(exc)
+
+
+@router.post("/frontend/chat/projects/{project_id}/packages", tags=[FRONTEND_TAG])
+async def frontend_install_project_package(
+    request: Request,
+    project_id: str,
+    payload: FrontendProjectPackageInstallRequest,
+):
+    project = _get_frontend_chat_project(request.app.state, project_id)
+    try:
+        if payload.kind == "editable":
+            return await install_editable_package(project, payload.source_path or "")
+        return await install_registry_requirement(project, payload.requirement or "")
+    except ProjectPackageError as exc:
+        _raise_project_package_http_error(exc)
+
+
+@router.delete("/frontend/chat/projects/{project_id}/packages/{package_name}", tags=[FRONTEND_TAG])
+async def frontend_uninstall_project_package(request: Request, project_id: str, package_name: str):
+    project = _get_frontend_chat_project(request.app.state, project_id)
+    try:
+        return await uninstall_project_package(project, package_name)
+    except ProjectPackageError as exc:
+        _raise_project_package_http_error(exc)
+
+
 @router.post("/frontend/chat/sessions", tags=[FRONTEND_TAG])
-async def frontend_create_chat_session(request: Request, payload: FrontendChatSessionCreateRequest):
+async def frontend_create_chat_session(
+    request: Request,
+    payload: FrontendChatSessionCreateRequest,
+):
     state = request.app.state
     session = create_chat_session(
         state,
@@ -2213,16 +2426,18 @@ async def frontend_create_chat_session(request: Request, payload: FrontendChatSe
         str(session.get("project_group_label") or "").strip(),
         str(session.get("session_group_label") or "").strip(),
     ]
-    try:
-        await _ensure_named_groups(labels)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(log_event("aiida.frontend.session_groups.ensure_failed", error=str(exc), labels=labels))
+    _schedule_named_groups(
+        state,
+        labels,
+        worker_context=build_chat_project_worker_context(state, str(session.get("project_id") or "")),
+    )
     return {
         "session": session,
         "chat": get_chat_snapshot(state),
         "active_session_id": get_active_chat_session_id(state),
         "active_project_id": get_active_chat_project_id(state),
         "projects": list_chat_projects(state),
+        "items": list_chat_sessions(state),
         "version": int(getattr(state, "chat_sessions_version", 0)),
     }
 
@@ -2236,25 +2451,19 @@ async def frontend_delete_chat_project(
     ),
 ):
     state = request.app.state
-    
     # Collect group labels before deleting the chat project
     target_labels = []
-    for p in list_chat_projects(state):
+    project = next((p for p in list_chat_projects(state) if p.get("id") == project_id), None)
+    for p in [project] if project else []:
         if p.get("id") == project_id and p.get("group_label"):
             target_labels.append(p["group_label"])
+    worker_context = _build_project_delete_worker_context(project)
             
     deleted = delete_chat_items(state, project_ids=[project_id])
     if project_id not in set(deleted.get("deleted_project_ids") or []):
         raise HTTPException(status_code=404, detail="Chat project not found")
         
-    for target in target_labels:
-        for group in list_groups():
-            gl = str(group.get("label") or "")
-            if gl == target or gl.startswith(f"{target}/"):
-                try:
-                    delete_group(int(group["pk"]))
-                except Exception:
-                    pass
+    _schedule_delete_named_groups(state, target_labels, worker_context=worker_context)
                     
     return _chat_delete_response(state, deleted)
 
@@ -2271,22 +2480,20 @@ async def frontend_delete_chat_session(
     
     # Collect group labels before deleting the chat session
     target_labels = []
+    session_project_id = ""
     for s in list_chat_sessions(state):
-        if s.get("id") == session_id and s.get("session_group_label"):
-            target_labels.append(s["session_group_label"])
+        if s.get("id") == session_id:
+            session_project_id = str(s.get("project_id") or "")
+            if s.get("session_group_label"):
+                target_labels.append(s["session_group_label"])
+    project = next((p for p in list_chat_projects(state) if p.get("id") == session_project_id), None)
+    worker_context = _build_project_delete_worker_context(project)
             
     deleted = delete_chat_items(state, session_ids=[session_id])
     if session_id not in set(deleted.get("deleted_session_ids") or []):
         raise HTTPException(status_code=404, detail="Chat session not found")
         
-    for target in target_labels:
-        for group in list_groups():
-            gl = str(group.get("label") or "")
-            if gl == target or gl.startswith(f"{target}/"):
-                try:
-                    delete_group(int(group["pk"]))
-                except Exception:
-                    pass
+    _schedule_delete_named_groups(state, target_labels, worker_context=worker_context)
                     
     return _chat_delete_response(state, deleted)
 
@@ -2305,9 +2512,27 @@ async def frontend_delete_chat_items(
     if not project_ids and not session_ids:
         raise HTTPException(status_code=400, detail={"error": "No project_ids or session_ids provided"})
 
+    project_id_set = set(project_ids)
+    session_id_set = set(session_ids)
+    labels_by_project: dict[str, list[str]] = {}
+    projects_by_id = {str(project.get("id") or ""): project for project in list_chat_projects(state)}
+    for project in projects_by_id.values():
+        project_id = str(project.get("id") or "")
+        if project_id in project_id_set:
+            labels_by_project.setdefault(project_id, []).append(str(project.get("group_label") or "").strip())
+    for session in list_chat_sessions(state):
+        project_id = str(session.get("project_id") or "")
+        if str(session.get("id") or "") in session_id_set or project_id in project_id_set:
+            labels_by_project.setdefault(project_id, []).append(str(session.get("session_group_label") or "").strip())
+    cleanup_targets = [
+        (labels, _build_project_delete_worker_context(projects_by_id.get(project_id)))
+        for project_id, labels in labels_by_project.items()
+    ]
     deleted = delete_chat_items(state, project_ids=project_ids, session_ids=session_ids)
     if not (deleted.get("deleted_project_ids") or deleted.get("deleted_session_ids")):
         raise HTTPException(status_code=404, detail="No items found to delete")
+    for labels, worker_context in cleanup_targets:
+        _schedule_delete_named_groups(state, labels, worker_context=worker_context)
     return _chat_delete_response(state, deleted)
 
 
@@ -2323,6 +2548,7 @@ async def frontend_activate_chat_session(request: Request, session_id: str):
         "active_session_id": get_active_chat_session_id(state),
         "active_project_id": get_active_chat_project_id(state),
         "projects": list_chat_projects(state),
+        "items": list_chat_sessions(state),
         "version": int(getattr(state, "chat_sessions_version", 0)),
     }
 
@@ -2350,6 +2576,7 @@ async def frontend_update_chat_session(
         "active_session_id": get_active_chat_session_id(state),
         "active_project_id": get_active_chat_project_id(state),
         "projects": list_chat_projects(state),
+        "items": list_chat_sessions(state),
         "version": int(getattr(state, "chat_sessions_version", 0)),
     }
 
@@ -2370,6 +2597,7 @@ async def frontend_update_chat_session_title(
         "active_session_id": get_active_chat_session_id(state),
         "active_project_id": get_active_chat_project_id(state),
         "projects": list_chat_projects(state),
+        "items": list_chat_sessions(state),
         "version": int(getattr(state, "chat_sessions_version", 0)),
     }
 
@@ -2565,14 +2793,14 @@ async def frontend_chat_stream(
             try:
                 chat_version = int(getattr(state, "chat_version", 0))
                 sessions_version = int(getattr(state, "chat_sessions_version", 0))
-                chat_snapshot = get_chat_snapshot(state)
-                sessions_snapshot = _chat_sessions_payload(state)
                 now = time.monotonic()
                 should_push_heartbeat = (now - heartbeat_ts) >= 10
                 chat_changed = chat_version != last_chat_version
                 sessions_changed = sessions_version != last_sessions_version
                 pushed = chat_changed or sessions_changed or should_push_heartbeat
                 if pushed:
+                    chat_snapshot = get_chat_snapshot(state)
+                    sessions_snapshot = _chat_sessions_payload(state)
                     yield build_ag_ui_sse_event(
                         build_ag_ui_state_snapshot(
                             chat=chat_snapshot,
@@ -2635,16 +2863,20 @@ async def frontend_chat_submit(request: Request, payload: FrontendChatRequest):
         metadata["context_pks"] = context_node_ids
         metadata["context_node_pks"] = context_node_ids
 
-    turn_id = start_chat_turn(
-        state,
-        user_intent=user_intent,
-        selected_model=selected_model,
-        fetch_context_nodes=_fetch_context_nodes,
-        context_archive=payload.context_archive,
-        context_node_ids=context_node_ids,
-        metadata=metadata,
-        source="frontend",
-    )
+    try:
+        turn_id = start_chat_turn(
+            state,
+            user_intent=user_intent,
+            selected_model=selected_model,
+            fetch_context_nodes=_fetch_context_nodes,
+            session_id=payload.session_id,
+            context_archive=payload.context_archive,
+            context_node_ids=context_node_ids,
+            metadata=metadata,
+            source="frontend",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {
         "status": "queued",
         "turn_id": turn_id,

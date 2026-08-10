@@ -1,5 +1,6 @@
 """Tests for AiiDA frontend process serialization and process-detail enrichment."""
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -514,14 +515,18 @@ async def test_submit_bridge_workchain_unwraps_direct_entry_point_payload(monkey
 
 
 @pytest.mark.anyio
-async def test_frontend_create_chat_project_ensures_project_group(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_frontend_create_chat_project_defers_project_group_ensure(monkeypatch: pytest.MonkeyPatch) -> None:
     state = SimpleNamespace()
     request = SimpleNamespace(app=SimpleNamespace(state=state))
     ensured: list[tuple[str, dict[str, str]]] = []
 
     monkeypatch.setattr(frontend_router,
         "create_chat_project",
-        lambda *_args, **_kwargs: {"id": "project-1", "name": "Test_multitask_Si_Thermal_Expansion"},
+        lambda *_args, **_kwargs: {
+            "id": "project-1",
+            "name": "Test_multitask_Si_Thermal_Expansion",
+            "python_interpreter_path": "/tmp/project/.venv/bin/python",
+        },
     )
     monkeypatch.setattr(
         frontend_router,
@@ -539,17 +544,123 @@ async def test_frontend_create_chat_project_ensures_project_group(monkeypatch: p
 
     response = await frontend_router.frontend_create_chat_project(
         request,
-        frontend_router.FrontendChatProjectCreateRequest(name="Test_multitask_Si_Thermal_Expansion"),
+        frontend_router.FrontendChatProjectCreateRequest(
+            name="Test_multitask_Si_Thermal_Expansion",
+            python_interpreter_path="/tmp/project/.venv/bin/python",
+        ),
     )
 
     assert response["project"]["id"] == "project-1"
+    assert ensured == []
+    await asyncio.gather(*state.chat_session_group_tasks)
     assert ensured == [
         (
             "group.ensure_project",
             {"project_id": "project-1", "project_name": "Test_multitask_Si_Thermal_Expansion"},
         )
     ]
-    assert response["project"]["group_uuid"] == "group-uuid-1"
+
+
+@pytest.mark.anyio
+async def test_frontend_create_chat_project_defers_group_until_environment_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = SimpleNamespace()
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    called = False
+
+    monkeypatch.setattr(
+        frontend_router,
+        "create_chat_project",
+        lambda *_args, **_kwargs: {"id": "project-1", "name": "Deferred", "python_interpreter_path": None},
+    )
+    monkeypatch.setattr(frontend_router, "get_active_chat_project_id", lambda _state: "project-1")
+    monkeypatch.setattr(frontend_router, "list_chat_projects", lambda _state: [{"id": "project-1"}])
+
+    async def fake_call(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(frontend_router.aiida_worker_client, "call", fake_call)
+
+    response = await frontend_router.frontend_create_chat_project(
+        request,
+        frontend_router.FrontendChatProjectCreateRequest(name="Deferred"),
+    )
+
+    assert response["project"]["python_interpreter_path"] is None
+    assert called is False
+
+
+@pytest.mark.anyio
+async def test_frontend_project_packages_are_scoped_to_requested_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = SimpleNamespace()
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    project = {
+        "id": "project-1",
+        "root_path": "/tmp/project-1",
+        "python_interpreter_path": "/tmp/project-1/.venv/bin/python",
+    }
+    monkeypatch.setattr(frontend_router, "list_chat_projects", lambda _state: [project])
+
+    async def fake_inspect(selected_project):
+        assert selected_project is project
+        return {"project_id": "project-1", "configured": True, "packages": []}
+
+    monkeypatch.setattr(frontend_router, "inspect_project_packages", fake_inspect)
+
+    response = await frontend_router.frontend_list_project_packages(request, "project-1")
+
+    assert response == {"project_id": "project-1", "configured": True, "packages": []}
+
+
+@pytest.mark.anyio
+async def test_frontend_attach_environment_persists_interpreter_before_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = SimpleNamespace()
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    project = {"id": "project-1", "root_path": "/tmp/project-1", "python_interpreter_path": None}
+    monkeypatch.setattr(frontend_router, "list_chat_projects", lambda _state: [project])
+    monkeypatch.setattr(
+        frontend_router,
+        "validate_existing_project_environment",
+        lambda value: f"{value}-validated",
+    )
+
+    def fake_update(_state, project_id, **kwargs):
+        assert project_id == "project-1"
+        return {**project, **kwargs}
+
+    async def fake_inspect(updated_project):
+        return {
+            "project_id": updated_project["id"],
+            "python_interpreter_path": updated_project["python_interpreter_path"],
+        }
+
+    monkeypatch.setattr(frontend_router, "update_chat_project", fake_update)
+    monkeypatch.setattr(frontend_router, "inspect_project_packages", fake_inspect)
+
+    async def fake_group_call(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(frontend_router.aiida_worker_client, "call", fake_group_call)
+
+    response = await frontend_router.frontend_setup_project_environment(
+        request,
+        "project-1",
+        frontend_router.FrontendProjectEnvironmentSetupRequest(
+            mode="existing",
+            python_interpreter_path="/tmp/custom/bin/python",
+            aiida_profile="dev",
+        ),
+    )
+
+    assert response["python_interpreter_path"] == "/tmp/custom/bin/python-validated"
+    await asyncio.gather(*state.chat_session_group_tasks)
 
 
 @pytest.mark.anyio
@@ -588,7 +699,7 @@ async def test_frontend_write_chat_project_file_proxies_service_result(monkeypat
 
 
 @pytest.mark.anyio
-async def test_frontend_create_chat_session_ensures_project_and_session_groups(
+async def test_frontend_create_chat_session_returns_before_ensuring_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = SimpleNamespace(chat_sessions_version=1)
@@ -607,6 +718,7 @@ async def test_frontend_create_chat_session_ensures_project_and_session_groups(
     monkeypatch.setattr(frontend_router, "get_active_chat_session_id", lambda _state: "chat-0307")
     monkeypatch.setattr(frontend_router, "get_active_chat_project_id", lambda _state: "project-1")
     monkeypatch.setattr(frontend_router, "list_chat_projects", lambda _state: [{"id": "project-1"}])
+    monkeypatch.setattr(frontend_router, "list_chat_sessions", lambda _state: [{"id": "chat-0307"}])
 
     async def _fake_ensure_named_groups(labels: list[str]) -> dict[str, str]:
         ensured.extend(labels)
@@ -620,10 +732,41 @@ async def test_frontend_create_chat_session_ensures_project_and_session_groups(
     )
 
     assert response["session"]["id"] == "chat-0307"
+    assert response["items"] == [{"id": "chat-0307"}]
+    assert ensured == []
+
+    await asyncio.gather(*state.chat_session_group_tasks)
     assert ensured == [
         "Test_multitask_Si_Thermal_Expansion",
         "Test_multitask_Si_Thermal_Expansion/chat-0307",
     ]
+
+
+@pytest.mark.anyio
+async def test_frontend_activate_chat_session_returns_atomic_session_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = SimpleNamespace(chat_sessions_version=7)
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    session = {"id": "chat-2", "project_id": "project-1"}
+    sessions = [
+        {"id": "chat-2", "project_id": "project-1"},
+        {"id": "chat-1", "project_id": "project-1"},
+    ]
+
+    monkeypatch.setattr(frontend_router, "activate_chat_session", lambda _state, _session_id: session)
+    monkeypatch.setattr(frontend_router, "get_chat_snapshot", lambda _state: {"session_id": "chat-2", "messages": []})
+    monkeypatch.setattr(frontend_router, "get_active_chat_session_id", lambda _state: "chat-2")
+    monkeypatch.setattr(frontend_router, "get_active_chat_project_id", lambda _state: "project-1")
+    monkeypatch.setattr(frontend_router, "list_chat_projects", lambda _state: [{"id": "project-1"}])
+    monkeypatch.setattr(frontend_router, "list_chat_sessions", lambda _state: sessions)
+
+    response = await frontend_router.frontend_activate_chat_session(request, "chat-2")
+
+    assert response["session"] == session
+    assert response["active_session_id"] == "chat-2"
+    assert response["chat"]["session_id"] == "chat-2"
+    assert response["items"] == sessions
 
 
 @pytest.mark.anyio
@@ -658,6 +801,7 @@ async def test_frontend_delete_chat_project_deletes_project_and_session_groups(
     monkeypatch.setattr(frontend_router, "delete_group", lambda pk: deleted_group_pks.append(pk))
 
     response = await frontend_router.frontend_delete_chat_project(request, "project-1")
+    await asyncio.gather(*state.chat_session_group_tasks)
 
     assert response["deleted_project_ids"] == ["project-1"]
     assert response["deleted_session_ids"] == ["session-1"]
@@ -682,13 +826,13 @@ async def test_frontend_delete_chat_items_supports_mixed_bulk_delete(
     )
     monkeypatch.setattr(frontend_router, "get_chat_snapshot", lambda _state: {"session_id": None, "messages": [], "snapshot": {}})
     monkeypatch.setattr(frontend_router, "_chat_sessions_payload", lambda _state: {"version": 5, "active_session_id": None, "active_project_id": None, "projects": [], "items": []})
-
-
+    monkeypatch.setattr(frontend_router, "list_groups", lambda: [])
 
     response = await frontend_router.frontend_delete_chat_items(
         request,
         frontend_router.FrontendChatDeleteRequest(project_ids=["project-2"], session_ids=["session-2"]),
     )
+    await asyncio.gather(*state.chat_session_group_tasks)
 
     assert response["deleted_project_ids"] == ["project-2"]
     assert response["deleted_session_ids"] == ["session-2"]

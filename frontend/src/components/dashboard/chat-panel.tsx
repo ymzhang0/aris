@@ -1,6 +1,6 @@
 import { aiidaClient } from "@/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Bot, ChevronDown, Code2, Copy, Cpu, FileOutput, Paperclip, Pin, PlugZap, RotateCcw, Square, X } from "lucide-react";
+import { ArrowUp, Bot, ChevronDown, Code2, Copy, Cpu, FileOutput, Folder, Paperclip, Pin, PlugZap, RotateCcw, Square, X } from "lucide-react";
 import { Children, cloneElement, isValidElement, type DragEvent, type ReactElement, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -1786,6 +1786,24 @@ export function ChatPanel({
 
   const toolbarActions = specializationActionsQuery.data?.chips ?? [];
   const activeSpecializations = specializationActionsQuery.data?.active_specializations ?? [];
+  const isEmptyConversation = turns.length === 0;
+  const starterSuggestions = [
+    {
+      label: "Find a structure for a calculation",
+      prompt: "Help me find and import a suitable crystal structure for my next calculation.",
+      icon: FileOutput,
+    },
+    {
+      label: "Plan a research workflow",
+      prompt: "Help me plan the next AiiDA workflow for this project.",
+      icon: Bot,
+    },
+    {
+      label: "Inspect the project environment",
+      prompt: "Inspect this project's AiiDA profile, installed plugins, computers, and codes.",
+      icon: Cpu,
+    },
+  ];
   const environmentOptions = useMemo(
     () => buildEnvironmentOptions(specializationActionsQuery.data),
     [specializationActionsQuery.data],
@@ -2452,6 +2470,7 @@ export function ChatPanel({
     if (textareaRef.current) {
       textareaRef.current.style.height = "56px";
     }
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
   }, [composerResetVersion]);
 
   return (
@@ -2542,7 +2561,12 @@ export function ChatPanel({
         <div className="min-h-0 flex flex-1 flex-col">
           <div
             ref={messagesContainerRef}
-            className="minimal-scrollbar min-h-0 flex-1 space-y-5 overflow-x-hidden overflow-y-auto px-4 pb-6 pt-5 md:px-6"
+            className={cn(
+              "minimal-scrollbar space-y-5 overflow-x-hidden px-4 md:px-6",
+              isEmptyConversation
+                ? "min-h-0 flex-none overflow-y-visible pb-4 pt-[clamp(5rem,14vh,10rem)]"
+                : "min-h-0 flex-1 overflow-y-auto pb-6 pt-5",
+            )}
             onScroll={() => {
               const nearBottom = isNearBottom();
               setIsAutoScrollEnabled((current) => (current === nearBottom ? current : nearBottom));
@@ -2550,12 +2574,12 @@ export function ChatPanel({
           >
             <div className="mx-auto min-h-full w-full max-w-4xl">
             {turns.length === 0 ? (
-              <div className="flex min-h-full flex-col items-center justify-center text-center">
-                <p className="text-3xl font-medium tracking-tight text-zinc-900 dark:text-zinc-100">
-                  Ask ARIS about your AiiDA workflow
+              <div className="flex flex-col items-center text-center">
+                <p className="text-[clamp(2rem,3.4vw,3.25rem)] font-medium tracking-[-0.035em] text-zinc-900 dark:text-zinc-100">
+                  What should we work on?
                 </p>
-                <p className="mt-2 max-w-xl text-sm text-zinc-500 dark:text-zinc-400">
-                  Profile-aware assistant with live process telemetry and runtime logs.
+                <p className="mt-3 max-w-xl text-sm text-zinc-500 dark:text-zinc-400">
+                  Start a calculation, find materials data, or explore this project with ARIS.
                 </p>
               </div>
             ) : (
@@ -2804,9 +2828,19 @@ export function ChatPanel({
             </div>
           </div>
 
-          <div className="bg-gradient-to-t from-white via-white/95 to-transparent px-4 pb-5 pt-5 dark:from-zinc-950 dark:via-zinc-950/95 md:px-6">
+          <div
+            className={cn(
+              "px-4 md:px-6",
+              isEmptyConversation
+                ? "bg-transparent pb-0 pt-1"
+                : "bg-gradient-to-t from-white via-white/95 to-transparent pb-5 pt-5 dark:from-zinc-950 dark:via-zinc-950/95",
+            )}
+          >
             <div className="mx-auto max-w-4xl">
-              <div className="rounded-[26px] border border-zinc-200/90 bg-white px-3 pb-2.5 pt-3 shadow-[0_8px_30px_rgba(0,0,0,0.08)] dark:border-zinc-700/80 dark:bg-zinc-900 dark:shadow-[0_10px_35px_rgba(0,0,0,0.35)]">
+              <div className={cn(
+                "rounded-[26px] border border-zinc-200/90 bg-white px-3 pb-2.5 pt-3 shadow-[0_8px_30px_rgba(0,0,0,0.08)] dark:border-zinc-700/80 dark:bg-zinc-900 dark:shadow-[0_10px_35px_rgba(0,0,0,0.35)]",
+                isEmptyConversation && "relative z-10 rounded-[30px] px-4 pb-3 pt-4 shadow-[0_14px_42px_rgba(0,0,0,0.09)]",
+              )}>
                 <div className="relative">
                   {showSlashMenu ? (
                     <div className="absolute inset-x-0 bottom-full z-20 mb-2 overflow-hidden rounded-2xl border border-zinc-200/85 bg-white/96 shadow-xl backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/96">
@@ -2863,9 +2897,10 @@ export function ChatPanel({
                 ref={textareaRef}
                 rows={2}
                 value={draft}
-                placeholder="Message ARIS... (type / for commands)"
+                placeholder={isEmptyConversation ? "Work with ARIS" : "Message ARIS... (type / for commands)"}
                 className={cn(
                   "max-h-[220px] min-h-[56px] w-full resize-none rounded-lg border border-transparent bg-transparent text-sm text-zinc-900 outline-none placeholder:text-zinc-400 transition-colors dark:text-zinc-100",
+                  isEmptyConversation && "min-h-[72px] text-base",
                   dragOverZone === "textarea" &&
                   "border-dashed border-sky-400/80 bg-sky-50/45 dark:border-sky-700/80 dark:bg-sky-950/30",
                 )}
@@ -3146,6 +3181,39 @@ export function ChatPanel({
                   </div>
                 </div>
               </div>
+              {isEmptyConversation ? (
+                <>
+                  <div className="mx-6 -mt-1 flex min-h-16 items-center gap-5 rounded-b-[28px] border border-t-0 border-zinc-200/80 bg-zinc-50/90 px-5 pt-1 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-300">
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <Folder className="h-4 w-4 shrink-0" />
+                      <span className="truncate font-medium">{activeProject?.name || "Current project"}</span>
+                    </span>
+                    <span className="inline-flex items-center gap-2">
+                      <PlugZap className="h-4 w-4" />
+                      <span>{toolbarActions.length || activeSpecializations.length || 3} capabilities</span>
+                    </span>
+                  </div>
+                  <div className="mx-auto mt-8 w-full max-w-3xl space-y-1 pb-8">
+                    {starterSuggestions.map((suggestion) => {
+                      const SuggestionIcon = suggestion.icon;
+                      return (
+                        <button
+                          key={suggestion.label}
+                          type="button"
+                          className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                          onClick={() => {
+                            setDraft(suggestion.prompt);
+                            window.requestAnimationFrame(() => textareaRef.current?.focus());
+                          }}
+                        >
+                          <SuggestionIcon className="h-5 w-5 shrink-0" />
+                          <span>{suggestion.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : null}
             </div>
           </div>
         </div>

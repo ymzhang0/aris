@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Protocol
@@ -29,6 +29,7 @@ class ChatSessionRepository(Protocol):
         *,
         index_payload: dict[str, Any],
         session_payloads: Mapping[str, dict[str, Any]],
+        active_session_ids: Collection[str] | None = None,
     ) -> None: ...
 
 
@@ -95,10 +96,16 @@ class JsonChatSessionRepository:
         *,
         index_payload: dict[str, Any],
         session_payloads: Mapping[str, dict[str, Any]],
+        active_session_ids: Collection[str] | None = None,
     ) -> None:
+        for session_id, payload in session_payloads.items():
+            if str(session_id).strip():
+                self._write_session(session_id, payload)
+
+        retained_ids = active_session_ids if active_session_ids is not None else session_payloads
         active_names = {
-            self._write_session(session_id, payload)
-            for session_id, payload in session_payloads.items()
+            self._safe_storage_name(session_id)
+            for session_id in retained_ids
             if str(session_id).strip()
         }
         for child in self._storage_root().glob("*.json"):

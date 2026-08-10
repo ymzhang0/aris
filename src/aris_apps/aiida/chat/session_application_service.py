@@ -45,7 +45,7 @@ class ChatSessionApplicationDependencies:
         dict[str, Any],
     ]
     reconcile_active_targets: Callable[[Any, dict[str, Any]], None]
-    persist_store: Callable[[Any], None]
+    persist_store: Callable[..., None]
     touch_sessions: Callable[[Any], None]
     touch_chat: Callable[[Any], None]
     get_active_session_id: Callable[[Any], str | None]
@@ -94,7 +94,7 @@ class ChatSessionApplicationService:
 
         session["updated_at"] = self._deps.now_iso()
         self._deps.touch_sessions(state)
-        self._deps.persist_store(state)
+        self._deps.persist_store(state, session_ids={str(session["id"])})
         return self._deps.serialize_session_detail(session, store, state)
 
     def create_project(
@@ -139,7 +139,7 @@ class ChatSessionApplicationService:
             store["active_project_id"] = project_id
             state.active_chat_project_id = project_id
         self._deps.touch_sessions(state)
-        self._deps.persist_store(state)
+        self._deps.persist_store(state, session_ids=set())
         return self._deps.serialize_project(project, store)
 
     def update_project(
@@ -168,7 +168,7 @@ class ChatSessionApplicationService:
 
         project["updated_at"] = self._deps.now_iso()
         self._deps.touch_sessions(state)
-        self._deps.persist_store(state)
+        self._deps.persist_store(state, session_ids=set())
         return self._deps.serialize_project(project, store)
 
     def create_session(
@@ -235,7 +235,7 @@ class ChatSessionApplicationService:
             state.active_chat_project_id = resolved_project_id
             self._deps.touch_chat(state)
         self._deps.touch_sessions(state)
-        self._deps.persist_store(state)
+        self._deps.persist_store(state, session_ids={str(session["id"])})
         return self._deps.serialize_session_detail(session, store, state)
 
     def activate_session(
@@ -246,10 +246,11 @@ class ChatSessionApplicationService:
         session, store = self._deps.find_session(state, session_id)
         if session is None:
             return None
-        changed = False
+        session_changed = False
+        selection_changed = False
         if bool(session.get("is_archived", False)):
             session["is_archived"] = False
-            changed = True
+            session_changed = True
         if store.get("active_session_id") != session["id"]:
             store["active_session_id"] = session["id"]
             store["active_project_id"] = str(
@@ -260,11 +261,13 @@ class ChatSessionApplicationService:
             state.active_chat_session_id = session["id"]
             state.active_chat_project_id = store["active_project_id"]
             self._deps.touch_chat(state)
-            changed = True
-        if changed:
-            session["updated_at"] = self._deps.now_iso()
+            selection_changed = True
+        if session_changed or selection_changed:
             self._deps.touch_sessions(state)
-            self._deps.persist_store(state)
+            self._deps.persist_store(
+                state,
+                session_ids={str(session["id"])} if session_changed else set(),
+            )
         return self._deps.serialize_session_detail(session, store, state)
 
     def update_session(
@@ -329,7 +332,7 @@ class ChatSessionApplicationService:
         self._deps.touch_sessions(state)
         if self._deps.get_active_session_id(state) == session["id"]:
             self._deps.touch_chat(state)
-        self._deps.persist_store(state)
+        self._deps.persist_store(state, session_ids={str(session["id"])})
         return self._deps.serialize_session_detail(session, store, state)
 
     def delete_items(
@@ -403,7 +406,7 @@ class ChatSessionApplicationService:
         self._deps.reconcile_active_targets(state, store)
         self._deps.touch_sessions(state)
         self._deps.touch_chat(state)
-        self._deps.persist_store(state)
+        self._deps.persist_store(state, session_ids=set())
         return {
             "deleted_project_ids": deleted_project_ids,
             "deleted_session_ids": deleted_session_ids,

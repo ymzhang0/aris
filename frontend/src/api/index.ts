@@ -40,6 +40,7 @@ import type {
   ProcessLogsResponse,
   ProcessWorkgraphResponse,
   ProcessesResponse,
+  ProjectPackagesResponse,
   SendChatRequest,
   SoftDeleteNodeResponse,
   SubmissionResponse,
@@ -458,6 +459,44 @@ export async function createChatProject(payload: {
   aiida_profile?: string;
 }): Promise<ChatProjectMutationResponse> {
   const { data } = await frontendApi.post<ChatProjectMutationResponse>("/chat/projects", payload);
+  return data;
+}
+
+export async function getProjectPackages(projectId: string): Promise<ProjectPackagesResponse> {
+  const { data } = await frontendApi.get<ProjectPackagesResponse>(`/chat/projects/${projectId}/packages`);
+  return data;
+}
+
+export async function setupProjectEnvironment(
+  projectId: string,
+  payload: {
+    mode: "managed" | "existing";
+    python_interpreter_path?: string;
+    aiida_profile?: string;
+  },
+): Promise<ProjectPackagesResponse> {
+  const { data } = await frontendApi.post<ProjectPackagesResponse>(
+    `/chat/projects/${projectId}/environment`,
+    payload,
+  );
+  return data;
+}
+
+export async function installProjectPackage(
+  projectId: string,
+  payload: { kind: "registry"; requirement: string } | { kind: "editable"; source_path: string },
+): Promise<ProjectPackagesResponse> {
+  const { data } = await frontendApi.post<ProjectPackagesResponse>(`/chat/projects/${projectId}/packages`, payload);
+  return data;
+}
+
+export async function uninstallProjectPackage(
+  projectId: string,
+  packageName: string,
+): Promise<ProjectPackagesResponse> {
+  const { data } = await frontendApi.delete<ProjectPackagesResponse>(
+    `/chat/projects/${projectId}/packages/${encodeURIComponent(packageName)}`,
+  );
   return data;
 }
 

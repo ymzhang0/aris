@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from dataclasses import asdict, is_dataclass
 from typing import Any, Literal, Mapping
 
@@ -10,6 +11,15 @@ from fastmcp import FastMCP
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.aris_apps.aiida.capabilities import AiiDACapability, aiida_capability
+from src.aris_apps.aiida.client import (
+    reset_worker_request_context,
+    set_worker_request_context,
+)
+from src.aris_apps.aiida.mcp_context import AiiDAProjectCatalog
+from src.aris_apps.aiida.mcp_ui import (
+    AIIDA_EXPLORER_HTML,
+    AIIDA_EXPLORER_RESOURCE_URI,
+)
 
 _READ_ONLY_ANNOTATIONS = {
     "readOnlyHint": True,
@@ -101,62 +111,114 @@ def _json_resource(value: Any) -> str:
 class AiiDAMCPFacade:
     """Maps MCP operations to AiiDA without owning model orchestration."""
 
-    def __init__(self, capability: AiiDACapability) -> None:
+    def __init__(
+        self,
+        capability: AiiDACapability,
+        project_catalog: AiiDAProjectCatalog | None = None,
+    ) -> None:
         self._capability = capability
+        self._project_catalog = project_catalog
 
-    async def status(self) -> dict[str, Any]:
-        return _jsonable(await self._capability.get_status())
+    @asynccontextmanager
+    async def _project_scope(self, project_id: str | None):
+        if self._project_catalog is None:
+            yield
+            return
+        ensure_runtime = getattr(self._project_catalog, "ensure_runtime", None)
+        if ensure_runtime is not None:
+            await ensure_runtime(project_id)
+        context = self._project_catalog.context_for(project_id)
+        token = set_worker_request_context(context)
+        try:
+            yield
+        finally:
+            reset_worker_request_context(token)
 
-    async def resources(self) -> dict[str, Any]:
-        return await self._capability.get_resources()
+    async def projects(self) -> dict[str, Any]:
+        if self._project_catalog is None:
+            return {"projects": [], "selected_project_id": None}
+        projects = self._project_catalog.list_projects()
+        return {
+            "projects": projects,
+            "selected_project_id": self._project_catalog.selected_project_id(),
+        }
 
-    async def profiles(self) -> dict[str, Any]:
-        return await self._capability.get_profiles()
+    async def select_project(self, project_id: str) -> dict[str, Any]:
+        if self._project_catalog is None:
+            raise ValueError("Project selection is unavailable for this MCP server")
+        selected = self._project_catalog.select_project(project_id)
+        ensure_runtime = getattr(self._project_catalog, "ensure_runtime", None)
+        runtime = await ensure_runtime(project_id) if ensure_runtime is not None else None
+        if runtime is None:
+            return selected
+        return {**selected, "runtime": runtime}
 
-    async def system_info(self) -> dict[str, Any]:
-        return await self._capability.get_system_info()
+    async def status(self, project_id: str | None = None) -> dict[str, Any]:
+        async with self._project_scope(project_id):
+            return _jsonable(await self._capability.get_status())
+
+    async def resources(self, project_id: str | None = None) -> dict[str, Any]:
+        async with self._project_scope(project_id):
+            return await self._capability.get_resources()
+
+    async def profiles(self, project_id: str | None = None) -> dict[str, Any]:
+        async with self._project_scope(project_id):
+            return await self._capability.get_profiles()
+
+    async def system_info(self, project_id: str | None = None) -> dict[str, Any]:
+        async with self._project_scope(project_id):
+            return await self._capability.get_system_info()
 
     async def recent_processes(
         self,
         *,
         limit: int = 20,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
-        return await self._capability.list_recent_processes(
-            limit=max(1, min(int(limit), 200)),
-        )
+        async with self._project_scope(project_id):
+            return await self._capability.list_recent_processes(
+                limit=max(1, min(int(limit), 200)),
+            )
 
     async def inspect_process(
         self,
         *,
         identifier: str,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         cleaned = str(identifier or "").strip()
         if not cleaned:
             raise ValueError("Process identifier is required")
-        return await self._capability.inspect_process(cleaned)
+        async with self._project_scope(project_id):
+            return await self._capability.inspect_process(cleaned)
 
-    async def process_logs(self, *, pk: int) -> dict[str, Any]:
+    async def process_logs(self, *, pk: int, project_id: str | None = None) -> dict[str, Any]:
         normalized_pk = int(pk)
         if normalized_pk <= 0:
             raise ValueError("Process PK must be positive")
-        return await self._capability.get_process_logs(normalized_pk)
+        async with self._project_scope(project_id):
+            return await self._capability.get_process_logs(normalized_pk)
 
     async def recent_nodes(
         self,
         *,
         limit: int = 50,
         node_type: str | None = None,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
-        return await self._capability.list_recent_nodes(
-            limit=max(1, min(int(limit), 500)),
-            node_type=str(node_type or "").strip() or None,
-        )
+        async with self._project_scope(project_id):
+            return await self._capability.list_recent_nodes(
+                limit=max(1, min(int(limit), 500)),
+                node_type=str(node_type or "").strip() or None,
+            )
 
-    async def submission_plugins(self) -> dict[str, Any]:
-        return await self._capability.list_submission_plugins()
+    async def submission_plugins(self, project_id: str | None = None) -> dict[str, Any]:
+        async with self._project_scope(project_id):
+            return await self._capability.list_submission_plugins()
 
-    async def workflow_catalog(self) -> dict[str, Any]:
-        return await self._capability.get_workflow_catalog()
+    async def workflow_catalog(self, project_id: str | None = None) -> dict[str, Any]:
+        async with self._project_scope(project_id):
+            return await self._capability.get_workflow_catalog()
 
     async def input_candidates(
         self,
@@ -164,48 +226,57 @@ class AiiDAMCPFacade:
         workchain: str,
         port_path: str,
         limit: int = 50,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
-        return await self._capability.resolve_input_candidates(
-            workchain,
-            port_path,
-            limit=limit,
-        )
+        async with self._project_scope(project_id):
+            return await self._capability.resolve_input_candidates(
+                workchain,
+                port_path,
+                limit=limit,
+            )
 
     async def submission_spec(
         self,
         *,
         workchain: str,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         cleaned = str(workchain or "").strip()
         if not cleaned:
             raise ValueError("WorkChain entry point is required")
-        return await self._capability.get_submission_spec(cleaned)
+        async with self._project_scope(project_id):
+            return await self._capability.get_submission_spec(cleaned)
 
     async def build_submission_preview(
         self,
         *,
         request: dict[str, Any],
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         if not isinstance(request, dict) or not request:
             raise ValueError("Structured submission request is required")
-        return await self._capability.build_submission_draft(request)
+        async with self._project_scope(project_id):
+            return await self._capability.build_submission_draft(request)
 
     async def validate_submission_preview(
         self,
         *,
         draft: dict[str, Any],
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         if not isinstance(draft, dict) or not draft:
             raise ValueError("Submission draft is required")
-        return await self._capability.validate_submission_draft(draft)
+        async with self._project_scope(project_id):
+            return await self._capability.validate_submission_draft(draft)
 
 
 def build_aiida_mcp_server(
     capability: AiiDACapability = aiida_capability,
+    project_catalog: AiiDAProjectCatalog | None = None,
 ) -> FastMCP:
     """Build an MCP server exposing safe AiiDA inspection and preview tools."""
 
-    facade = AiiDAMCPFacade(capability)
+    facade = AiiDAMCPFacade(capability, project_catalog=project_catalog)
     server = FastMCP(
         "aris-aiida",
         instructions=(
@@ -216,44 +287,69 @@ def build_aiida_mcp_server(
     )
 
     @server.tool(
+        name="aiida_list_projects",
+        description="List ARIS projects and their AiiDA runtime configuration.",
+        annotations=_READ_ONLY_ANNOTATIONS,
+    )
+    async def aiida_list_projects() -> dict[str, Any]:
+        return await facade.projects()
+
+    @server.tool(
+        name="aiida_select_project",
+        description=(
+            "Select the ARIS project for subsequent AiiDA operations. "
+            "Prefer passing project_id explicitly to data tools when possible."
+        ),
+        annotations=_PREVIEW_ANNOTATIONS,
+    )
+    async def aiida_select_project(project_id: str) -> dict[str, Any]:
+        return await facade.select_project(project_id)
+
+    @server.tool(
         name="aiida_status",
         description="Read the current AiiDA worker and profile status.",
         annotations=_READ_ONLY_ANNOTATIONS,
     )
-    async def aiida_status() -> dict[str, Any]:
-        return await facade.status()
+    async def aiida_status(project_id: str | None = None) -> dict[str, Any]:
+        return await facade.status(project_id=project_id)
 
     @server.tool(
         name="aiida_system_info",
         description="Read deterministic AiiDA system information.",
         annotations=_READ_ONLY_ANNOTATIONS,
     )
-    async def aiida_system_info() -> dict[str, Any]:
-        return await facade.system_info()
+    async def aiida_system_info(project_id: str | None = None) -> dict[str, Any]:
+        return await facade.system_info(project_id=project_id)
 
     @server.tool(
         name="aiida_recent_processes",
         description="List recent AiiDA processes.",
         annotations=_READ_ONLY_ANNOTATIONS,
     )
-    async def aiida_recent_processes(limit: int = 20) -> dict[str, Any]:
-        return await facade.recent_processes(limit=limit)
+    async def aiida_recent_processes(
+        limit: int = 20,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await facade.recent_processes(limit=limit, project_id=project_id)
 
     @server.tool(
         name="aiida_inspect_process",
         description="Inspect one AiiDA process by PK or UUID.",
         annotations=_READ_ONLY_ANNOTATIONS,
     )
-    async def aiida_inspect_process(identifier: str) -> dict[str, Any]:
-        return await facade.inspect_process(identifier=identifier)
+    async def aiida_inspect_process(
+        identifier: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await facade.inspect_process(identifier=identifier, project_id=project_id)
 
     @server.tool(
         name="aiida_process_logs",
         description="Read logs for one AiiDA process PK.",
         annotations=_READ_ONLY_ANNOTATIONS,
     )
-    async def aiida_process_logs(pk: int) -> dict[str, Any]:
-        return await facade.process_logs(pk=pk)
+    async def aiida_process_logs(pk: int, project_id: str | None = None) -> dict[str, Any]:
+        return await facade.process_logs(pk=pk, project_id=project_id)
 
     @server.tool(
         name="aiida_recent_nodes",
@@ -263,10 +359,12 @@ def build_aiida_mcp_server(
     async def aiida_recent_nodes(
         limit: int = 50,
         node_type: str | None = None,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         return await facade.recent_nodes(
             limit=limit,
             node_type=node_type,
+            project_id=project_id,
         )
 
     @server.tool(
@@ -274,8 +372,8 @@ def build_aiida_mcp_server(
         description="List installed submission-capable AiiDA WorkChains.",
         annotations=_READ_ONLY_ANNOTATIONS,
     )
-    async def aiida_submission_plugins() -> dict[str, Any]:
-        return await facade.submission_plugins()
+    async def aiida_submission_plugins(project_id: str | None = None) -> dict[str, Any]:
+        return await facade.submission_plugins(project_id=project_id)
 
     @server.tool(
         name="aiida_workflow_catalog",
@@ -285,8 +383,8 @@ def build_aiida_mcp_server(
         ),
         annotations=_READ_ONLY_ANNOTATIONS,
     )
-    async def aiida_workflow_catalog() -> dict[str, Any]:
-        return await facade.workflow_catalog()
+    async def aiida_workflow_catalog(project_id: str | None = None) -> dict[str, Any]:
+        return await facade.workflow_catalog(project_id=project_id)
 
     @server.tool(
         name="aiida_input_candidates",
@@ -299,11 +397,13 @@ def build_aiida_mcp_server(
         workchain: str,
         port_path: str,
         limit: int = 50,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         return await facade.input_candidates(
             workchain=workchain,
             port_path=port_path,
             limit=limit,
+            project_id=project_id,
         )
 
     @server.tool(
@@ -311,8 +411,11 @@ def build_aiida_mcp_server(
         description="Read the structured input specification for a WorkChain.",
         annotations=_READ_ONLY_ANNOTATIONS,
     )
-    async def aiida_submission_spec(workchain: str) -> dict[str, Any]:
-        return await facade.submission_spec(workchain=workchain)
+    async def aiida_submission_spec(
+        workchain: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await facade.submission_spec(workchain=workchain, project_id=project_id)
 
     @server.tool(
         name="aiida_build_submission_preview",
@@ -323,9 +426,11 @@ def build_aiida_mcp_server(
     )
     async def aiida_build_submission_preview(
         request: SubmissionPreviewRequest,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         return await facade.build_submission_preview(
             request=request.model_dump(mode="json"),
+            project_id=project_id,
         )
 
     @server.tool(
@@ -337,8 +442,42 @@ def build_aiida_mcp_server(
     )
     async def aiida_validate_submission_preview(
         draft: dict[str, Any],
+        project_id: str | None = None,
     ) -> dict[str, Any]:
-        return await facade.validate_submission_preview(draft=draft)
+        return await facade.validate_submission_preview(draft=draft, project_id=project_id)
+
+    @server.tool(
+        name="render_aiida_explorer",
+        description=(
+            "Render the AiiDA Explorer widget for a final list of processes. "
+            "Call aiida_recent_processes first and pass its process records."
+        ),
+        annotations=_READ_ONLY_ANNOTATIONS,
+        app={
+            "resourceUri": AIIDA_EXPLORER_RESOURCE_URI,
+            "visibility": ["model", "app"],
+        },
+    )
+    async def render_aiida_explorer(
+        processes: list[dict[str, Any]],
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return model-visible data that the AiiDA Explorer widget renders."""
+
+        payload: dict[str, Any] = {"processes": processes}
+        cleaned_project_id = str(project_id or "").strip()
+        if cleaned_project_id:
+            payload["project_id"] = cleaned_project_id
+        return payload
+
+    @server.resource(
+        AIIDA_EXPLORER_RESOURCE_URI,
+        name="AiiDA Explorer UI",
+        description="Interactive AiiDA process explorer widget.",
+        mime_type="text/html;profile=mcp-app",
+    )
+    async def aiida_explorer_resource() -> str:
+        return AIIDA_EXPLORER_HTML
 
     @server.resource(
         "aiida://status",

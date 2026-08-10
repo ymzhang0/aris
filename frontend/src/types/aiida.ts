@@ -128,6 +128,7 @@ export type ChatSessionMutationResponse = {
   active_session_id: string | null;
   active_project_id: string | null;
   projects: ChatProject[];
+  items: ChatSessionSummary[];
   session: ChatSessionDetail;
   chat: ChatSnapshot;
 };
@@ -162,6 +163,23 @@ export type ChatProjectMutationResponse = {
   project: ChatProject;
   active_project_id: string | null;
   projects: ChatProject[];
+};
+
+export type ProjectPythonPackage = {
+  name: string;
+  version: string;
+  editable: boolean;
+  source?: string | null;
+};
+
+export type ProjectPackagesResponse = {
+  project_id: string;
+  configured: boolean;
+  python_interpreter_path: string | null;
+  suggested_python_interpreter_path: string | null;
+  aiida_profile: string | null;
+  runtime_ready: boolean;
+  packages: ProjectPythonPackage[];
 };
 
 export type WorkspaceEntry = {
@@ -323,6 +341,7 @@ export type ChatResponse = ChatSnapshot;
 
 export type SendChatRequest = {
   intent: string;
+  session_id?: string;
   model_name?: string;
   context_archive?: string | null;
   context_node_ids?: number[];

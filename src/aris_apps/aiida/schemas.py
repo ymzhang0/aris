@@ -8,6 +8,7 @@ from src.aris_core.schema.approval import ApprovalDecision
 
 class FrontendChatRequest(BaseModel):
     intent: str = Field(..., min_length=1, max_length=12000)
+    session_id: str | None = None
     model_name: str | None = None
     context_archive: str | None = None
     context_node_ids: list[int] | None = None
@@ -46,6 +47,18 @@ class FrontendChatProjectCreateRequest(BaseModel):
 class FrontendChatProjectUpdateRequest(BaseModel):
     python_interpreter_path: str | None = None
     aiida_profile: str | None = None
+
+
+class FrontendProjectEnvironmentSetupRequest(BaseModel):
+    mode: Literal["managed", "existing"] = "managed"
+    python_interpreter_path: str | None = None
+    aiida_profile: str | None = None
+
+
+class FrontendProjectPackageInstallRequest(BaseModel):
+    kind: Literal["registry", "editable"]
+    requirement: str | None = Field(default=None, max_length=512)
+    source_path: str | None = Field(default=None, max_length=2048)
 
 
 class FrontendChatProjectFileWriteRequest(BaseModel):
