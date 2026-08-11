@@ -19,6 +19,8 @@ from src.aris_apps.aiida.mcp_context import AiiDAProjectCatalog
 from src.aris_apps.aiida.mcp_ui import (
     AIIDA_EXPLORER_HTML,
     AIIDA_EXPLORER_RESOURCE_URI,
+    AIIDA_WORKSPACE_HTML,
+    AIIDA_WORKSPACE_RESOURCE_URI,
 )
 
 _READ_ONLY_ANNOTATIONS = {
@@ -322,6 +324,22 @@ def build_aiida_mcp_server(
         return await facade.system_info(project_id=project_id)
 
     @server.tool(
+        name="aiida_resources",
+        description="Read configured AiiDA computers, codes, and WorkChains.",
+        annotations=_READ_ONLY_ANNOTATIONS,
+    )
+    async def aiida_resources(project_id: str | None = None) -> dict[str, Any]:
+        return await facade.resources(project_id=project_id)
+
+    @server.tool(
+        name="aiida_profiles",
+        description="Read available AiiDA profiles and the current profile.",
+        annotations=_READ_ONLY_ANNOTATIONS,
+    )
+    async def aiida_profiles(project_id: str | None = None) -> dict[str, Any]:
+        return await facade.profiles(project_id=project_id)
+
+    @server.tool(
         name="aiida_recent_processes",
         description="List recent AiiDA processes.",
         annotations=_READ_ONLY_ANNOTATIONS,
@@ -470,6 +488,25 @@ def build_aiida_mcp_server(
             payload["project_id"] = cleaned_project_id
         return payload
 
+    @server.tool(
+        name="render_aiida_workspace",
+        description=(
+            "Render the interactive AiiDA Workspace for browsing projects, "
+            "resources, nodes, processes, workflows, and submission previews."
+        ),
+        annotations=_READ_ONLY_ANNOTATIONS,
+        app={
+            "resourceUri": AIIDA_WORKSPACE_RESOURCE_URI,
+            "visibility": ["model", "app"],
+        },
+    )
+    async def render_aiida_workspace(project_id: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        cleaned_project_id = str(project_id or "").strip()
+        if cleaned_project_id:
+            payload["project_id"] = cleaned_project_id
+        return payload
+
     @server.resource(
         AIIDA_EXPLORER_RESOURCE_URI,
         name="AiiDA Explorer UI",
@@ -478,6 +515,15 @@ def build_aiida_mcp_server(
     )
     async def aiida_explorer_resource() -> str:
         return AIIDA_EXPLORER_HTML
+
+    @server.resource(
+        AIIDA_WORKSPACE_RESOURCE_URI,
+        name="AiiDA Workspace UI",
+        description="Interactive project-scoped AiiDA workspace widget.",
+        mime_type="text/html;profile=mcp-app",
+    )
+    async def aiida_workspace_resource() -> str:
+        return AIIDA_WORKSPACE_HTML
 
     @server.resource(
         "aiida://status",

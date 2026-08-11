@@ -186,10 +186,19 @@ async def test_aiida_mcp_server_exposes_safe_tools_resources_and_prompt() -> Non
     assert "aiida_workflow_catalog" in tools
     assert "aiida_input_candidates" in tools
     assert "aiida_build_submission_preview" in tools
+    assert "aiida_resources" in tools
+    assert "aiida_profiles" in tools
     assert "render_aiida_explorer" in tools
+    assert "render_aiida_workspace" in tools
     assert tools["render_aiida_explorer"].meta == {
         "ui": {
             "resourceUri": "ui://aiida/explorer/v1.html",
+            "visibility": ["model", "app"],
+        }
+    }
+    assert tools["render_aiida_workspace"].meta == {
+        "ui": {
+            "resourceUri": "ui://aiida/workspace/v1.html",
             "visibility": ["model", "app"],
         }
     }
@@ -210,6 +219,7 @@ async def test_aiida_mcp_server_exposes_safe_tools_resources_and_prompt() -> Non
     assert "inputs" in preview_schema["properties"]
     assert resources == {
         "ui://aiida/explorer/v1.html",
+        "ui://aiida/workspace/v1.html",
         "aiida://profiles",
         "aiida://resources",
         "aiida://status",
@@ -222,6 +232,14 @@ async def test_aiida_mcp_server_exposes_safe_tools_resources_and_prompt() -> Non
     )
     assert result.structured_content == {"pk": 42}
 
+    resources_result = await server.call_tool("aiida_resources", {})
+    profiles_result = await server.call_tool("aiida_profiles", {})
+    assert resources_result.structured_content == {"computers": [{"label": "localhost"}]}
+    assert profiles_result.structured_content == {
+        "current_profile": "research",
+        "profiles": ["research"],
+    }
+
     widget = await server.call_tool(
         "render_aiida_explorer",
         {"processes": [{"pk": 42, "process_state": "finished"}]},
@@ -233,6 +251,16 @@ async def test_aiida_mcp_server_exposes_safe_tools_resources_and_prompt() -> Non
     ui_resource = await server.read_resource("ui://aiida/explorer/v1.html")
     assert "AiiDA Explorer" in str(ui_resource)
     assert "aiida_inspect_process" in str(ui_resource)
+
+    workspace = await server.call_tool(
+        "render_aiida_workspace",
+        {"project_id": "project-a"},
+    )
+    assert workspace.structured_content == {"project_id": "project-a"}
+
+    workspace_resource = await server.read_resource("ui://aiida/workspace/v1.html")
+    assert "AiiDA Workspace" in str(workspace_resource)
+    assert "aiida_workflow_catalog" in str(workspace_resource)
 
 
 @pytest.mark.anyio
