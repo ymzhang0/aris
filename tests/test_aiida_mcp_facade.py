@@ -224,7 +224,10 @@ async def test_aiida_mcp_server_exposes_safe_tools_resources_and_prompt() -> Non
         "aiida://resources",
         "aiida://status",
     }
-    assert prompts == {"aiida_research_workflow"}
+    assert prompts == {"aiida_research_workflow", "open_aiida_workspace"}
+
+    launcher_prompt = await server.get_prompt("open_aiida_workspace")
+    assert "Call render_aiida_workspace now" in launcher_prompt.fn()
 
     result = await server.call_tool(
         "aiida_inspect_process",

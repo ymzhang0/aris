@@ -553,6 +553,18 @@ def build_aiida_mcp_server(
         return _json_resource(await facade.profiles())
 
     @server.prompt(
+        name="open_aiida_workspace",
+        description="Open the interactive AiiDA Workspace.",
+    )
+    def open_aiida_workspace() -> str:
+        return (
+            "Call render_aiida_workspace now with no project_id. Present the "
+            "interactive AiiDA Workspace to the user and let them select a "
+            "project in its Project selector. Do not run any other AiiDA "
+            "tools before displaying the workspace."
+        )
+
+    @server.prompt(
         name="aiida_research_workflow",
         description="Protocol-first guidance for using the AiiDA tools.",
     )
